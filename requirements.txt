@@ -1,5 +1,11 @@
-fastapi
-uvicorn
-transformers
-torch
-pydantic
+fastapi==0.115.0
+uvicorn==0.30.6
+pydantic==2.9.2
+langchain==0.3.1
+langchain-community==0.3.1
+langchain-text-splitters==0.3.0
+langchain-huggingface==0.1.0
+chromadb==0.5.5
+sentence-transformers==3.1.1
+pypdf==4.3.1
+google-genai==0.1.1
