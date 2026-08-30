@@ -131,18 +131,7 @@ def serve_ui():
 def coach_dialogue(data: ChatInput):
     start_time = time.time()
     
-    # 1. Dinamik Model Seçimi (404/400 Hatalarını Önler)
-    try:
-        active_models = client.models.list()
-        # Groq'un güncel listesindeki ilk Llama modelini otomatik çek
-        valid_model = next((m.id for m in active_models.data if "llama" in m.id.lower()), "mixtral-8x7b-32768")
-    except Exception as e:
-        print(f"Model çekme hatası: {e}")
-        valid_model = "mixtral-8x7b-32768"
-        
-    print(f"--> [SİSTEM] Kullanılan Güncel Model: {valid_model}")
-
-    # 2. RAG Arama
+    # 1. RAG Arama
     context_text = ""
     try:
         results = collection.query(query_texts=[data.user_message], n_results=2)
@@ -151,7 +140,7 @@ def coach_dialogue(data: ChatInput):
     except Exception as e:
         context_text = "Hipertrofi ve progressive overload prensipleri."
 
-    # 3. Prompt Tanımı
+    # 2. Prompt Tanımı
     system_prompt = f"""
 Sen elit seviyede, doğrudan bilime ve hipertrofi prensiplerine dayalı koçluk yapan 'Looksmaxxing & Hipertrofi Koçu'sun.
 Yalnızca antrenman, progressive overload, beslenme, hipertrofi ve fiziksel gelişim konularında konuş.
@@ -167,18 +156,33 @@ KAYNAK DOKÜMAN BİLGİSİ:
         messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
     messages.append({"role": "user", "content": data.user_message})
 
-    # 4. API İsteği
-    try:
-        chat_completion = client.chat.completions.create(
-            messages=messages,
-            model=valid_model,
-            temperature=0.6,
-            max_tokens=600,
-        )
-        reply_text = chat_completion.choices[0].message.content
-    except Exception as e:
-        print(f"Groq API Hatası: {e}")
-        reply_text = "Şu anda yanıt üretilirken bir sorun oluştu kral, API bağlantısı başarısız oldu."
+    # 3. Sıralı Model Fallback Mekanizması
+    candidate_models = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-70b-versatile",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it"
+    ]
+
+    reply_text = None
+    for model_name in candidate_models:
+        try:
+            print(f"--> [DENENİYOR] Model: {model_name}")
+            chat_completion = client.chat.completions.create(
+                messages=messages,
+                model=model_name,
+                temperature=0.6,
+                max_tokens=450,
+            )
+            reply_text = chat_completion.choices[0].message.content
+            print(f"--> [BAŞARILI] Yanıt alınan model: {model_name}")
+            break
+        except Exception as err:
+            print(f"--> [HATA] {model_name} başarısız oldu: {err}")
+            continue
+
+    if not reply_text:
+        reply_text = "Şu anda koçluk motoru yanıt veremedi kral, lütfen tekrar dene."
 
     elapsed = round(time.time() - start_time, 2)
     print(f"--> [LOG] Soru: '{data.user_message}' | Süre: {elapsed}sn | Hafıza: {len(data.history)} mesaj")
