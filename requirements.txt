@@ -2,4 +2,4 @@ fastapi
 uvicorn
 chromadb
 pypdf
-google-generativeai
+requests

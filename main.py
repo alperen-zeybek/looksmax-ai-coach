@@ -1,15 +1,13 @@
 import os
 import time
+import requests
 from typing import List
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import chromadb
-import google.generativeai as genai
 
-# API Anahtarı Tanımlama
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6JD-s-20Ny6FMZNm-oU9SiGvGsuIi6HsXMYLi52lEgV3w")
-genai.configure(api_key=GEMINI_API_KEY)
 
 app = FastAPI(title="Looksmaxxing & Physique AI Coach with Memory")
 
@@ -22,11 +20,30 @@ class ChatInput(BaseModel):
     history: List[dict] = []
 
 def get_embedding(text: str):
-    res = genai.embed_content(
-        model="models/text-embedding-004",
-        content=text
-    )
-    return res['embedding']
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
+    payload = {
+        "model": "models/text-embedding-004",
+        "content": {"parts": [{"text": text}]}
+    }
+    res = requests.post(url, json=payload, timeout=10)
+    if res.status_code == 200:
+        return res.json()["embedding"]["values"]
+    else:
+        print(f"Embedding Hatası ({res.status_code}): {res.text}")
+        raise Exception("Embedding alınamadı")
+
+def generate_gemini_reply(prompt: str):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
+    res = requests.post(url, json=payload, timeout=20)
+    if res.status_code == 200:
+        data = res.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    else:
+        print(f"Generate Hatası ({res.status_code}): {res.text}")
+        raise Exception(f"Gemini API Hatası: {res.status_code}")
 
 HTML_INTERFACE = """
 <!DOCTYPE html>
@@ -149,19 +166,19 @@ def coach_dialogue(data: ChatInput):
         print(f"RAG Arama Uyarısı: {e}")
         context_text = "Hipertrofi ve progressive overload prensipleri."
 
-    # 2. Geçmiş Konuşmaları Formatla
+    # 2. Geçmiş Konuşmalar
     history_formatted = ""
     if data.history:
         for msg in data.history:
             role_label = "Kullanıcı" if msg.get("role") == "user" else "Koç"
             history_formatted += f"{role_label}: {msg.get('text', '')}\n"
 
-    # 3. Prompt Enjeksiyonu
+    # 3. Prompt
     full_prompt = f"""
 Sen elit seviyede, doğrudan bilime ve hipertrofi prensiplerine dayalı koçluk yapan 'Looksmaxxing & Hipertrofi Koçu'sun.
 Yalnızca antrenman, progressive overload, beslenme, hipertrofi ve fiziksel gelişim konularında konuş.
 
-ÖNEMLİ KURAL: Kullanıcının geçmiş konuşmadaki ağırlıklarını, tekrarlarını ve hedeflerini kesinlikle hatırla ve buna göre tavsiye ver. Bro-science yapma, net maddelerle konuş.
+ÖNEMLİ KURAL: Kullanıcının geçmiş konuşmadaki ağırlıklarını, tekrarlarını ve hedeflerini kesinlikle hatırla ve ona göre devam tavsiyesi ver. Bro-science yapma, net maddelerle konuş.
 
 KAYNAK DOKÜMAN BİLGİSİ:
 {context_text}
@@ -174,11 +191,9 @@ KULLANICININ YENİ MESAJI:
 """
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(full_prompt)
-        reply_text = response.text
+        reply_text = generate_gemini_reply(full_prompt)
     except Exception as e:
-        print(f"Gemini API Hatası: {e}")
+        print(f"Cevap Üretme Hatası: {e}")
         reply_text = "Şu anda yanıt üretilirken bir sorun oluştu kral, tekrar yazar mısın?"
 
     elapsed = round(time.time() - start_time, 2)
