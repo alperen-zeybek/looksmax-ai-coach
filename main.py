@@ -1,7 +1,7 @@
 import os
 import time
-from typing import List, Dict
-from fastapi import FastAPI, Request
+from typing import List, Any
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import chromadb
@@ -16,14 +16,9 @@ app = FastAPI(title="Looksmaxxing & Physique AI Coach with Memory")
 chroma_client = chromadb.PersistentClient(path="./looksmax_db")
 collection = chroma_client.get_or_create_collection(name="looksmax_knowledge")
 
-# Veri Modeli: Mesaj + Konuşma Geçmişi
-class ChatMessage(BaseModel):
-    role: str
-    text: str
-
 class ChatInput(BaseModel):
     user_message: str
-    history: List[ChatMessage] = []
+    history: List[dict] = []
 
 def get_embedding(text: str):
     response = client.models.embed_content(
@@ -66,7 +61,7 @@ HTML_INTERFACE = """
             <span>● Hafıza Aktif</span>
         </div>
         <div class="messages" id="chatBox">
-            <div class="msg coach">Selam kral! Antrenman, progressive overload, beslenme veya vücut optimizasyonunu takip ediyorum. Ağırlıklarını veya hedeflerini yaz, konuşmayı aklımda tutarak koçluk yapayım.</div>
+            <div class="msg coach">Selam kral! Antrenman, progressive overload ve fizik optimizasyonunu takip ediyorum. Ağırlıklarını veya hedeflerini yaz, konuşmayı hafızamda tutarak koçluk yapayım.</div>
         </div>
         <div class="input-area">
             <input type="text" id="userInput" placeholder="Mesajını yaz... (örn: Bugün benchte 90x8 attım)" onkeypress="handleKey(event)" />
@@ -75,7 +70,6 @@ HTML_INTERFACE = """
     </div>
 
     <script>
-        // Konuşma geçmişini tarayıcı tarafında tutuyoruz
         let conversationHistory = [];
 
         async function sendMessage() {
@@ -85,7 +79,6 @@ HTML_INTERFACE = """
             const text = input.value.trim();
             if (!text) return;
 
-            // Kullanıcı mesajını ekrana bas ve listeye ekle
             chatBox.innerHTML += `<div class="msg user">${text}</div>`;
             input.value = "";
             btn.disabled = true;
@@ -104,21 +97,24 @@ HTML_INTERFACE = """
                         history: conversationHistory
                     })
                 });
-                const data = await response.json();
                 
+                if (!response.ok) {
+                    throw new Error("Server error: " + response.status);
+                }
+
+                const data = await response.json();
                 let replyFormatted = data.coach_reply.replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
                 document.getElementById(loadingId).innerHTML = replyFormatted;
 
-                // Konuşma geçmişine ekle (Hem kullanıcıyı hem koçu)
                 conversationHistory.push({ role: "user", text: text });
                 conversationHistory.push({ role: "model", text: data.coach_reply });
 
-                // Çok uzarsa hafızayı son 10 mesajla sınırla
-                if (conversationHistory.length > 10) {
-                    conversationHistory = conversationHistory.slice(-10);
+                if (conversationHistory.length > 8) {
+                    conversationHistory = conversationHistory.slice(-8);
                 }
             } catch (err) {
-                document.getElementById(loadingId).innerText = "Hata oluştu, tekrar dene.";
+                console.error(err);
+                document.getElementById(loadingId).innerText = "Bir hata oluştu. Lütfen tekrar dene.";
             } finally {
                 btn.disabled = false;
                 chatBox.scrollTop = chatBox.scrollHeight;
@@ -141,47 +137,57 @@ def serve_ui():
 def coach_dialogue(data: ChatInput):
     start_time = time.time()
     
-    # 1. Vektör Tabanında Arama Yap
+    # 1. RAG Arama
     context_text = ""
     try:
         query_vector = get_embedding(data.user_message)
         results = collection.query(query_embeddings=[query_vector], n_results=2)
-        if results and results.get("documents"):
+        if results and results.get("documents") and len(results["documents"]) > 0:
             context_text = "\n".join(results["documents"][0])
-    except Exception:
+    except Exception as e:
+        print(f"RAG Hatası: {e}")
         context_text = "Hipertrofi ve progressive overload prensipleri."
 
-    # 2. Geçmiş Konuşmaları Metne Çevir
+    # 2. Geçmişi Formatla
     history_formatted = ""
-    for msg in data.history:
-        role_label = "Kullanıcı" if msg.role == "user" else "Koç"
-        history_formatted += f"{role_label}: {msg.text}\n"
+    if data.history:
+        for msg in data.history:
+            role_label = "Kullanıcı" if msg.get("role") == "user" else "Koç"
+            history_formatted += f"{role_label}: {msg.get('text', '')}\n"
 
-    # 3. Prompt Hazırla (Rol + Hafıza + PDF Kaynağı)
-    system_instruction = f"""
+    # 3. Prompt Birleştirme
+    full_prompt = f"""
 Sen elit seviyede, doğrudan bilime ve hipertrofi prensiplerine dayalı koçluk yapan 'Looksmaxxing & Hipertrofi Koçu'sun.
 Yalnızca antrenman, progressive overload, beslenme, hipertrofi ve fiziksel gelişim konularında konuş.
 
-ÖNEMLİ KURAL: Kullanıcının önceki mesajlardaki ağırlıklarını, setlerini ve hedeflerini kesinlikle hatırla. Ona göre progressive overload veya program önerisi sun. Bro-science yapma, net maddelerle konuş.
+ÖNEMLİ KURAL: Kullanıcının geçmiş konuşmadaki ağırlıklarını, tekrarlarını ve hedeflerini unutma. Ona göre devam tavsiyesi ver. Bro-science yapma, net maddelerle konuş.
 
 KAYNAK DOKÜMAN BİLGİSİ:
 {context_text}
 
-GEÇMİŞ KONUŞMA AKIŞI:
-{history_formatted if history_formatted else "Henüz önceki mesaj yok (Yeni sohbet)."}
+GEÇMİŞ KONUŞMA:
+{history_formatted if history_formatted else "Yeni sohbet başladı."}
+
+KULLANICININ YENİ MESAJI:
+{data.user_message}
 """
 
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=f"{system_instruction}\n\nKULLANICININ YENİ MESAJI: {data.user_message}"
-    )
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=full_prompt
+        )
+        reply_text = response.text
+    except Exception as e:
+        print(f"Gemini API Hatası: {e}")
+        reply_text = "Şu anda yanıt üretilirken bir sorun oluştu kral, tekrar yazar mısın?"
 
     elapsed = round(time.time() - start_time, 2)
-    print(f"--> [LOG] Soru: '{data.user_message}' | Süre: {elapsed}sn | Hafıza Boyutu: {len(data.history)} mesaj")
+    print(f"--> [LOG] Soru: '{data.user_message}' | Süre: {elapsed}sn | Hafıza: {len(data.history)} mesaj")
 
     return {
         "user_message": data.user_message,
-        "coach_reply": response.text
+        "coach_reply": reply_text
     }
 
 if __name__ == "__main__":
