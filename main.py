@@ -1,13 +1,14 @@
 import os
 import time
-from typing import List, Any
+from typing import List
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import chromadb
 from google import genai
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6KIYed6AADdAS02s2I9uTV6O_WpLz8-3A5ys5GlCkTKWw")
+# Gemini API Bağlantısı
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6JD-s-20Ny6FMZNm-oU9SiGvGsuIi6HsXMYLi52lEgV3w")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 app = FastAPI(title="Looksmaxxing & Physique AI Coach with Memory")
@@ -106,6 +107,7 @@ HTML_INTERFACE = """
                 let replyFormatted = data.coach_reply.replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
                 document.getElementById(loadingId).innerHTML = replyFormatted;
 
+                // Geçmişe ekle
                 conversationHistory.push({ role: "user", text: text });
                 conversationHistory.push({ role: "model", text: data.coach_reply });
 
@@ -137,7 +139,7 @@ def serve_ui():
 def coach_dialogue(data: ChatInput):
     start_time = time.time()
     
-    # 1. RAG Arama
+    # 1. RAG Arama (Veritabanından Alakalı Bilgi Çekme)
     context_text = ""
     try:
         query_vector = get_embedding(data.user_message)
@@ -145,22 +147,22 @@ def coach_dialogue(data: ChatInput):
         if results and results.get("documents") and len(results["documents"]) > 0:
             context_text = "\n".join(results["documents"][0])
     except Exception as e:
-        print(f"RAG Hatası: {e}")
-        context_text = "Hipertrofi ve progressive overload prensipleri."
+        print(f"RAG Arama Uyarısı: {e}")
+        context_text = "Hipertrofi, progressive overload ve biyomekanik prensipleri."
 
-    # 2. Geçmişi Formatla
+    # 2. Geçmiş Konuşmaları Formatla
     history_formatted = ""
     if data.history:
         for msg in data.history:
             role_label = "Kullanıcı" if msg.get("role") == "user" else "Koç"
             history_formatted += f"{role_label}: {msg.get('text', '')}\n"
 
-    # 3. Prompt Birleştirme
+    # 3. Prompt Enjeksiyonu
     full_prompt = f"""
 Sen elit seviyede, doğrudan bilime ve hipertrofi prensiplerine dayalı koçluk yapan 'Looksmaxxing & Hipertrofi Koçu'sun.
 Yalnızca antrenman, progressive overload, beslenme, hipertrofi ve fiziksel gelişim konularında konuş.
 
-ÖNEMLİ KURAL: Kullanıcının geçmiş konuşmadaki ağırlıklarını, tekrarlarını ve hedeflerini unutma. Ona göre devam tavsiyesi ver. Bro-science yapma, net maddelerle konuş.
+ÖNEMLİ KURAL: Kullanıcının geçmiş konuşmadaki ağırlıklarını, tekrarlarını ve hedeflerini kesinlikle hatırla ve buna göre tavsiye ver. Bro-science yapma, net maddelerle konuş.
 
 KAYNAK DOKÜMAN BİLGİSİ:
 {context_text}
