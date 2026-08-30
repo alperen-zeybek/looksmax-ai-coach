@@ -131,7 +131,18 @@ def serve_ui():
 def coach_dialogue(data: ChatInput):
     start_time = time.time()
     
-    # 1. RAG Arama
+    # 1. Dinamik Model Seçimi (404/400 Hatalarını Önler)
+    try:
+        active_models = client.models.list()
+        # Groq'un güncel listesindeki ilk Llama modelini otomatik çek
+        valid_model = next((m.id for m in active_models.data if "llama" in m.id.lower()), "mixtral-8x7b-32768")
+    except Exception as e:
+        print(f"Model çekme hatası: {e}")
+        valid_model = "mixtral-8x7b-32768"
+        
+    print(f"--> [SİSTEM] Kullanılan Güncel Model: {valid_model}")
+
+    # 2. RAG Arama
     context_text = ""
     try:
         results = collection.query(query_texts=[data.user_message], n_results=2)
@@ -140,7 +151,7 @@ def coach_dialogue(data: ChatInput):
     except Exception as e:
         context_text = "Hipertrofi ve progressive overload prensipleri."
 
-    # 2. Prompt Tanımı
+    # 3. Prompt Tanımı
     system_prompt = f"""
 Sen elit seviyede, doğrudan bilime ve hipertrofi prensiplerine dayalı koçluk yapan 'Looksmaxxing & Hipertrofi Koçu'sun.
 Yalnızca antrenman, progressive overload, beslenme, hipertrofi ve fiziksel gelişim konularında konuş.
@@ -156,17 +167,18 @@ KAYNAK DOKÜMAN BİLGİSİ:
         messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
     messages.append({"role": "user", "content": data.user_message})
 
+    # 4. API İsteği
     try:
         chat_completion = client.chat.completions.create(
             messages=messages,
-            model="mixtral-8x7b-32768",
+            model=valid_model,
             temperature=0.6,
             max_tokens=600,
         )
         reply_text = chat_completion.choices[0].message.content
     except Exception as e:
         print(f"Groq API Hatası: {e}")
-        reply_text = "Şu anda yanıt üretilirken bir sorun oluştu kral, tekrar yazar mısın?"
+        reply_text = "Şu anda yanıt üretilirken bir sorun oluştu kral, API bağlantısı başarısız oldu."
 
     elapsed = round(time.time() - start_time, 2)
     print(f"--> [LOG] Soru: '{data.user_message}' | Süre: {elapsed}sn | Hafıza: {len(data.history)} mesaj")
