@@ -5,11 +5,11 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import chromadb
-from google import genai
+import google.generativeai as genai
 
-# Gemini API Bağlantısı
+# API Anahtarı Tanımlama
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6JD-s-20Ny6FMZNm-oU9SiGvGsuIi6HsXMYLi52lEgV3w")
-client = genai.Client(api_key=GEMINI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
 app = FastAPI(title="Looksmaxxing & Physique AI Coach with Memory")
 
@@ -22,11 +22,11 @@ class ChatInput(BaseModel):
     history: List[dict] = []
 
 def get_embedding(text: str):
-    response = client.models.embed_content(
-        model="text-embedding-004",
-        contents=text
+    res = genai.embed_content(
+        model="models/text-embedding-004",
+        content=text
     )
-    return response.embeddings[0].values
+    return res['embedding']
 
 HTML_INTERFACE = """
 <!DOCTYPE html>
@@ -107,7 +107,6 @@ HTML_INTERFACE = """
                 let replyFormatted = data.coach_reply.replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
                 document.getElementById(loadingId).innerHTML = replyFormatted;
 
-                // Geçmişe ekle
                 conversationHistory.push({ role: "user", text: text });
                 conversationHistory.push({ role: "model", text: data.coach_reply });
 
@@ -139,7 +138,7 @@ def serve_ui():
 def coach_dialogue(data: ChatInput):
     start_time = time.time()
     
-    # 1. RAG Arama (Veritabanından Alakalı Bilgi Çekme)
+    # 1. RAG Arama
     context_text = ""
     try:
         query_vector = get_embedding(data.user_message)
@@ -148,7 +147,7 @@ def coach_dialogue(data: ChatInput):
             context_text = "\n".join(results["documents"][0])
     except Exception as e:
         print(f"RAG Arama Uyarısı: {e}")
-        context_text = "Hipertrofi, progressive overload ve biyomekanik prensipleri."
+        context_text = "Hipertrofi ve progressive overload prensipleri."
 
     # 2. Geçmiş Konuşmaları Formatla
     history_formatted = ""
@@ -175,10 +174,8 @@ KULLANICININ YENİ MESAJI:
 """
 
     try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=full_prompt
-        )
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(full_prompt)
         reply_text = response.text
     except Exception as e:
         print(f"Gemini API Hatası: {e}")

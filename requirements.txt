@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-pydantic
 chromadb
-google-genai
 pypdf
+google-generativeai
