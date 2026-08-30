@@ -1,18 +1,14 @@
-# 1. Temel işletim sistemi ve Python ortamı olarak hafif Linux imajı seçiyoruz
 FROM python:3.10-slim
 
-# 2. Konteyner içinde çalışacağımız klasörü belirliyoruz
 WORKDIR /app
 
-# 3. Bağımlılık listesini kopyalayıp paketleri yüklüyoruz
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Proje kodlarımızı konteyner içine kopyalıyoruz
-COPY main.py .
+COPY . .
 
-# 5. Dış dünyaya açılacak portu belirtiyoruz
-EXPOSE 8000
-
-# 6. Konteyner çalıştığında API sunucusunu ayağa kaldıran komut
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
