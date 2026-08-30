@@ -179,7 +179,7 @@ def serve_ui():
 def coach_dialogue(data: ChatInput):
     start_time = time.time()
     
-    # 1. RAG Arama (Sadece metin üzerinden)
+    # 1. RAG Arama
     context_text = ""
     try:
         results = collection.query(query_texts=[data.user_message], n_results=2)
@@ -188,7 +188,7 @@ def coach_dialogue(data: ChatInput):
     except Exception:
         context_text = "Hipertrofi, beslenme, kalori ve progressive overload kuralları."
 
-    # 2. Sistem Prompt'u (Görsel ve Metin Analizi Kılavuzu)
+    # 2. Sistem Prompt'u
     system_prompt = f"""
 Sen elit seviyede bir 'Looksmaxxing, Hipertrofi & Beslenme Koçu'sun.
 Kullanıcı sana metin veya fotoğraf gönderebilir:
@@ -200,27 +200,41 @@ Kullanıcı sana metin veya fotoğraf gönderebilir:
 
 2. FİZİK / FORM FOTOĞRAFI GELİRSE:
 - Tahmini Vücut Yağ Oranını (% aralığı) belirt.
-- Güçlü ve eksik kalan kas gruplarını (örn: üst göğüs eksikliği, omuz başları vb.) listele.
-- Vücut simetrisi ve estetiği için doğrudan 2-3 spesifik egzersiz öner.
+- Güçlü ve eksik kalan kas gruplarını (örn: üst göğüs, omuz başları vb.) listele.
+- Vücut simetrisi ve estetiği için 2-3 spesifik egzersiz öner.
 
 KAYNAK DOKÜMAN BİLGİSİ:
 {context_text}
 """
 
-    # 3. Model Tespiti: Görsel varsa Vision Modeli, yoksa Hızlı Sohbet Modeli
     is_vision = bool(data.image_base64)
-    target_model = "llama-3.2-11b-vision-preview" if is_vision else "llama-3.3-70b-versatile"
+    
+    # 3. Dinamik Model Seçimi (Vision veya Chat modellerini filtreler)
+    try:
+        all_models = client.models.list()
+        all_ids = [m.id for m in all_models.data]
+        print(f"--> [GROQ AKTİF TÜM MODELLER]: {all_ids}")
+        
+        if is_vision:
+            # İsmi 'vision' içeren ilk aktif modeli seç
+            vision_candidates = [m_id for m_id in all_ids if "vision" in m_id.lower() and "guard" not in m_id.lower()]
+            target_model = vision_candidates[0] if vision_candidates else "llama-3.2-90b-vision-preview"
+        else:
+            # Sohbet modellerini seç
+            chat_candidates = [m_id for m_id in all_ids if not any(x in m_id.lower() for x in ["guard", "whisper", "vision", "embed"])]
+            target_model = chat_candidates[0] if chat_candidates else "llama-3.3-70b-versatile"
+    except Exception as e:
+        print(f"Model listesi alınamadı: {e}")
+        target_model = "llama-3.2-90b-vision-preview" if is_vision else "llama-3.3-70b-versatile"
+
+    print(f"--> [SEÇİLEN MODEL]: {target_model} (Görsel: {is_vision})")
 
     # 4. Mesaj Paketleme
     messages = [{"role": "system", "content": system_prompt}]
-    
-    # Geçmiş mesajları ekle
     for msg in data.history:
         messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
 
-    # Son kullanıcı mesajını hazırla
     if is_vision:
-        # Multimodal Vision Payload
         user_content = [
             {"type": "text", "text": data.user_message},
             {"type": "image_url", "image_url": {"url": data.image_base64}}
@@ -229,7 +243,7 @@ KAYNAK DOKÜMAN BİLGİSİ:
     else:
         messages.append({"role": "user", "content": data.user_message})
 
-    # 5. Groq Çıkarımı
+    # 5. API İsteği
     try:
         chat_completion = client.chat.completions.create(
             messages=messages,
@@ -238,14 +252,13 @@ KAYNAK DOKÜMAN BİLGİSİ:
             max_tokens=500,
         )
         reply_text = chat_completion.choices[0].message.content
-        print(f"--> [BAŞARILI] Yanıt üretildi! Model: {target_model}")
+        print(f"--> [BAŞARILI] Yanıt üretildi!")
     except Exception as e:
-        print(f"--> [HATA] {e}")
-        # Vision hatası olursa genel fallback
-        reply_text = "Görsel veya metin analiz edilirken bir sorun oluştu kral. Görsel formatının JPEG/PNG olduğundan emin olup tekrar dene."
+        print(f"--> [HATA]: {e}")
+        reply_text = "Görsel analiz edilirken bir sorun oluştu kral, lütfen tekrar dene."
 
     elapsed = round(time.time() - start_time, 2)
-    print(f"--> [LOG] Soru: '{data.user_message[:40]}' | Görsel: {is_vision} | Süre: {elapsed}sn")
+    print(f"--> [LOG] Soru: '{data.user_message[:40]}' | Süre: {elapsed}sn")
 
     return {
         "user_message": data.user_message,
