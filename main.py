@@ -156,33 +156,31 @@ KAYNAK DOKÜMAN BİLGİSİ:
         messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
     messages.append({"role": "user", "content": data.user_message})
 
-    # 3. Sıralı Model Fallback Mekanizması
-    candidate_models = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-70b-versatile",
-        "mixtral-8x7b-32768",
-        "gemma2-9b-it"
-    ]
-
+    # 3. Canlı Model Tespiti ve İstek
     reply_text = None
-    for model_name in candidate_models:
-        try:
-            print(f"--> [DENENİYOR] Model: {model_name}")
-            chat_completion = client.chat.completions.create(
-                messages=messages,
-                model=model_name,
-                temperature=0.6,
-                max_tokens=450,
-            )
-            reply_text = chat_completion.choices[0].message.content
-            print(f"--> [BAŞARILI] Yanıt alınan model: {model_name}")
-            break
-        except Exception as err:
-            print(f"--> [HATA] {model_name} başarısız oldu: {err}")
-            continue
-
-    if not reply_text:
-        reply_text = "Şu anda koçluk motoru yanıt veremedi kral, lütfen tekrar dene."
+    try:
+        all_models = client.models.list()
+        # prompt-guard, whisper ve vision hariç sohbet edebilen ilk aktif modeli al
+        chat_models = [
+            m.id for m in all_models.data 
+            if not any(x in m.id.lower() for x in ["guard", "whisper", "vision", "embed"])
+        ]
+        print(f"--> [AKTİF MODELLER LİSTESİ]: {chat_models}")
+        
+        target_model = chat_models[0] if chat_models else "llama3-8b-8192"
+        print(f"--> [SEÇİLEN MODEL]: {target_model}")
+        
+        chat_completion = client.chat.completions.create(
+            messages=messages,
+            model=target_model,
+            temperature=0.6,
+            max_tokens=400,
+        )
+        reply_text = chat_completion.choices[0].message.content
+        print(f"--> [BAŞARILI] Yanıt üretildi!")
+    except Exception as e:
+        print(f"--> [HATA]: {e}")
+        reply_text = "Şu anda yanıt üretilirken bir sorun oluştu kral, lütfen tekrar dene."
 
     elapsed = round(time.time() - start_time, 2)
     print(f"--> [LOG] Soru: '{data.user_message}' | Süre: {elapsed}sn | Hafıza: {len(data.history)} mesaj")
