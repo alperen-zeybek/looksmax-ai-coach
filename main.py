@@ -19,13 +19,25 @@ class ChatInput(BaseModel):
     user_message: str
     history: List[dict] = []
 
+def get_headers():
+    # AQ. ile başlayan token'lar Bearer header'ı olarak iletilir
+    if GEMINI_API_KEY.startswith("AQ."):
+        return {
+            "Authorization": f"Bearer {GEMINI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+    return {
+        "x-goog-api-key": GEMINI_API_KEY,
+        "Content-Type": "application/json"
+    }
+
 def get_embedding(text: str):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent"
     payload = {
         "model": "models/text-embedding-004",
         "content": {"parts": [{"text": text}]}
     }
-    res = requests.post(url, json=payload, timeout=10)
+    res = requests.post(url, json=payload, headers=get_headers(), timeout=10)
     if res.status_code == 200:
         return res.json()["embedding"]["values"]
     else:
@@ -33,11 +45,11 @@ def get_embedding(text: str):
         raise Exception("Embedding alınamadı")
 
 def generate_gemini_reply(prompt: str):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}]
     }
-    res = requests.post(url, json=payload, timeout=20)
+    res = requests.post(url, json=payload, headers=get_headers(), timeout=20)
     if res.status_code == 200:
         data = res.json()
         return data["candidates"][0]["content"]["parts"][0]["text"]
