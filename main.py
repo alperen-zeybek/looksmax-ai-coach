@@ -1,5 +1,7 @@
 import os
-from fastapi import FastAPI
+import time
+from typing import List, Dict
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import chromadb
@@ -8,14 +10,20 @@ from google import genai
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6KIYed6AADdAS02s2I9uTV6O_WpLz8-3A5ys5GlCkTKWw")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-app = FastAPI(title="Looksmaxxing & Physique AI Coach")
+app = FastAPI(title="Looksmaxxing & Physique AI Coach with Memory")
 
 # ChromaDB Bağlantısı
 chroma_client = chromadb.PersistentClient(path="./looksmax_db")
 collection = chroma_client.get_or_create_collection(name="looksmax_knowledge")
 
+# Veri Modeli: Mesaj + Konuşma Geçmişi
+class ChatMessage(BaseModel):
+    role: str
+    text: str
+
 class ChatInput(BaseModel):
     user_message: str
+    history: List[ChatMessage] = []
 
 def get_embedding(text: str):
     response = client.models.embed_content(
@@ -38,7 +46,7 @@ HTML_INTERFACE = """
         .chat-container { width: 100%; max-width: 800px; display: flex; flex-direction: column; height: 100vh; border-left: 1px solid #1f242d; border-right: 1px solid #1f242d; background: #13161c; }
         .chat-header { padding: 18px 24px; border-bottom: 1px solid #1f242d; background: #0f1217; display: flex; align-items: center; justify-content: space-between; }
         .chat-header h1 { font-size: 1.15rem; font-weight: 700; color: #00f2fe; letter-spacing: 0.5px; }
-        .chat-header span { font-size: 0.8rem; background: #1f2937; padding: 4px 10px; border-radius: 12px; color: #9ca3af; }
+        .chat-header span { font-size: 0.8rem; background: #1f2937; padding: 4px 10px; border-radius: 12px; color: #10b981; font-weight: 600; }
         .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
         .msg { max-width: 80%; padding: 14px 18px; border-radius: 14px; font-size: 0.95rem; line-height: 1.5; word-wrap: break-word; }
         .msg.user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
@@ -55,18 +63,21 @@ HTML_INTERFACE = """
     <div class="chat-container">
         <div class="chat-header">
             <h1>⚡ LOOKSMAX & PHYSIQUE AI COACH</h1>
-            <span>RAG + Bilimsel Tabanlı</span>
+            <span>● Hafıza Aktif</span>
         </div>
         <div class="messages" id="chatBox">
-            <div class="msg coach">Selam kral! V-Taper fiziği, hipertrofi, çene hattı veya cilt/bakım optimizasyonu hakkında neyi öğrenmek istiyorsun? Sor, bilimsel protokollere göre yanıtlayayım.</div>
+            <div class="msg coach">Selam kral! Antrenman, progressive overload, beslenme veya vücut optimizasyonunu takip ediyorum. Ağırlıklarını veya hedeflerini yaz, konuşmayı aklımda tutarak koçluk yapayım.</div>
         </div>
         <div class="input-area">
-            <input type="text" id="userInput" placeholder="Sorunu sor... (örn: Omuz genişliği için en iyi hareket ne?)" onkeypress="handleKey(event)" />
+            <input type="text" id="userInput" placeholder="Mesajını yaz... (örn: Bugün benchte 90x8 attım)" onkeypress="handleKey(event)" />
             <button id="sendBtn" onclick="sendMessage()">Gönder</button>
         </div>
     </div>
 
     <script>
+        // Konuşma geçmişini tarayıcı tarafında tutuyoruz
+        let conversationHistory = [];
+
         async function sendMessage() {
             const input = document.getElementById("userInput");
             const btn = document.getElementById("sendBtn");
@@ -74,24 +85,38 @@ HTML_INTERFACE = """
             const text = input.value.trim();
             if (!text) return;
 
+            // Kullanıcı mesajını ekrana bas ve listeye ekle
             chatBox.innerHTML += `<div class="msg user">${text}</div>`;
             input.value = "";
             btn.disabled = true;
             chatBox.scrollTop = chatBox.scrollHeight;
 
             const loadingId = "load-" + Date.now();
-            chatBox.innerHTML += `<div class="msg coach" id="${loadingId}"><i>Bilimsel veritabanı taranıyor & analiz ediliyor...</i></div>`;
+            chatBox.innerHTML += `<div class="msg coach" id="${loadingId}"><i>Analiz ediliyor...</i></div>`;
             chatBox.scrollTop = chatBox.scrollHeight;
 
             try {
                 const response = await fetch("/chat", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ user_message: text })
+                    body: JSON.stringify({
+                        user_message: text,
+                        history: conversationHistory
+                    })
                 });
                 const data = await response.json();
+                
                 let replyFormatted = data.coach_reply.replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
                 document.getElementById(loadingId).innerHTML = replyFormatted;
+
+                // Konuşma geçmişine ekle (Hem kullanıcıyı hem koçu)
+                conversationHistory.push({ role: "user", text: text });
+                conversationHistory.push({ role: "model", text: data.coach_reply });
+
+                // Çok uzarsa hafızayı son 10 mesajla sınırla
+                if (conversationHistory.length > 10) {
+                    conversationHistory = conversationHistory.slice(-10);
+                }
             } catch (err) {
                 document.getElementById(loadingId).innerText = "Hata oluştu, tekrar dene.";
             } finally {
@@ -114,6 +139,9 @@ def serve_ui():
 
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
+    start_time = time.time()
+    
+    # 1. Vektör Tabanında Arama Yap
     context_text = ""
     try:
         query_vector = get_embedding(data.user_message)
@@ -121,22 +149,36 @@ def coach_dialogue(data: ChatInput):
         if results and results.get("documents"):
             context_text = "\n".join(results["documents"][0])
     except Exception:
-        context_text = "Hipertrofi ve vücut geliştirme prensipleri."
+        context_text = "Hipertrofi ve progressive overload prensipleri."
 
+    # 2. Geçmiş Konuşmaları Metne Çevir
+    history_formatted = ""
+    for msg in data.history:
+        role_label = "Kullanıcı" if msg.role == "user" else "Koç"
+        history_formatted += f"{role_label}: {msg.text}\n"
+
+    # 3. Prompt Hazırla (Rol + Hafıza + PDF Kaynağı)
     system_instruction = f"""
-    Sen elit seviyede, doğrudan kanıta ve bilime dayalı tavsiye veren bir 'Looksmaxxing & Hipertrofi Koçu'sun.
-    Aşağıdaki bilimsel protokol metnini referans alarak kullanıcının sorusuna net, motive edici ve doğrudan uygulanabilir maddelerle cevap ver.
-    Cevaplarında bro-science kullanma, bilimsel temele dayan. Samimi, enerjik ve koç edasıyla Türkçe cevap ver.
-    
-    BİLGİ BANKASI VERİSİ:
-    {context_text}
-    """
-    
+Sen elit seviyede, doğrudan bilime ve hipertrofi prensiplerine dayalı koçluk yapan 'Looksmaxxing & Hipertrofi Koçu'sun.
+Yalnızca antrenman, progressive overload, beslenme, hipertrofi ve fiziksel gelişim konularında konuş.
+
+ÖNEMLİ KURAL: Kullanıcının önceki mesajlardaki ağırlıklarını, setlerini ve hedeflerini kesinlikle hatırla. Ona göre progressive overload veya program önerisi sun. Bro-science yapma, net maddelerle konuş.
+
+KAYNAK DOKÜMAN BİLGİSİ:
+{context_text}
+
+GEÇMİŞ KONUŞMA AKIŞI:
+{history_formatted if history_formatted else "Henüz önceki mesaj yok (Yeni sohbet)."}
+"""
+
     response = client.models.generate_content(
         model='gemini-2.5-flash',
-        contents=f"{system_instruction}\n\nKULLANICI SORUSU: {data.user_message}"
+        contents=f"{system_instruction}\n\nKULLANICININ YENİ MESAJI: {data.user_message}"
     )
-    
+
+    elapsed = round(time.time() - start_time, 2)
+    print(f"--> [LOG] Soru: '{data.user_message}' | Süre: {elapsed}sn | Hafıza Boyutu: {len(data.history)} mesaj")
+
     return {
         "user_message": data.user_message,
         "coach_reply": response.text
