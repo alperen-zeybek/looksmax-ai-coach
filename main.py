@@ -1,13 +1,15 @@
 import os
 import time
-import requests
 from typing import List
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import chromadb
+from groq import Groq
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6JD-s-20Ny6FMZNm-oU9SiGvGsuIi6HsXMYLi52lEgV3w")
+# Groq API Tanımlama
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
+client = Groq(api_key=GROQ_API_KEY)
 
 app = FastAPI(title="Looksmaxxing & Physique AI Coach with Memory")
 
@@ -18,44 +20,6 @@ collection = chroma_client.get_or_create_collection(name="looksmax_knowledge")
 class ChatInput(BaseModel):
     user_message: str
     history: List[dict] = []
-
-def get_headers():
-    # AQ. ile başlayan token'lar Bearer header'ı olarak iletilir
-    if GEMINI_API_KEY.startswith("AQ."):
-        return {
-            "Authorization": f"Bearer {GEMINI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-    return {
-        "x-goog-api-key": GEMINI_API_KEY,
-        "Content-Type": "application/json"
-    }
-
-def get_embedding(text: str):
-    url = "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent"
-    payload = {
-        "model": "models/text-embedding-004",
-        "content": {"parts": [{"text": text}]}
-    }
-    res = requests.post(url, json=payload, headers=get_headers(), timeout=10)
-    if res.status_code == 200:
-        return res.json()["embedding"]["values"]
-    else:
-        print(f"Embedding Hatası ({res.status_code}): {res.text}")
-        raise Exception("Embedding alınamadı")
-
-def generate_gemini_reply(prompt: str):
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
-    res = requests.post(url, json=payload, headers=get_headers(), timeout=20)
-    if res.status_code == 200:
-        data = res.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    else:
-        print(f"Generate Hatası ({res.status_code}): {res.text}")
-        raise Exception(f"Gemini API Hatası: {res.status_code}")
 
 HTML_INTERFACE = """
 <!DOCTYPE html>
@@ -136,8 +100,8 @@ HTML_INTERFACE = """
                 let replyFormatted = data.coach_reply.replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
                 document.getElementById(loadingId).innerHTML = replyFormatted;
 
-                conversationHistory.push({ role: "user", text: text });
-                conversationHistory.push({ role: "model", text: data.coach_reply });
+                conversationHistory.push({ role: "user", content: text });
+                conversationHistory.push({ role: "assistant", content: data.coach_reply });
 
                 if (conversationHistory.length > 8) {
                     conversationHistory = conversationHistory.slice(-8);
@@ -170,23 +134,14 @@ def coach_dialogue(data: ChatInput):
     # 1. RAG Arama
     context_text = ""
     try:
-        query_vector = get_embedding(data.user_message)
-        results = collection.query(query_embeddings=[query_vector], n_results=2)
+        results = collection.query(query_texts=[data.user_message], n_results=2)
         if results and results.get("documents") and len(results["documents"]) > 0:
             context_text = "\n".join(results["documents"][0])
     except Exception as e:
-        print(f"RAG Arama Uyarısı: {e}")
         context_text = "Hipertrofi ve progressive overload prensipleri."
 
-    # 2. Geçmiş Konuşmalar
-    history_formatted = ""
-    if data.history:
-        for msg in data.history:
-            role_label = "Kullanıcı" if msg.get("role") == "user" else "Koç"
-            history_formatted += f"{role_label}: {msg.get('text', '')}\n"
-
-    # 3. Prompt
-    full_prompt = f"""
+    # 2. System Prompt ve Mesaj Formatı
+    system_prompt = f"""
 Sen elit seviyede, doğrudan bilime ve hipertrofi prensiplerine dayalı koçluk yapan 'Looksmaxxing & Hipertrofi Koçu'sun.
 Yalnızca antrenman, progressive overload, beslenme, hipertrofi ve fiziksel gelişim konularında konuş.
 
@@ -194,18 +149,23 @@ Yalnızca antrenman, progressive overload, beslenme, hipertrofi ve fiziksel geli
 
 KAYNAK DOKÜMAN BİLGİSİ:
 {context_text}
-
-GEÇMİŞ KONUŞMA:
-{history_formatted if history_formatted else "Yeni sohbet başladı."}
-
-KULLANICININ YENİ MESAJI:
-{data.user_message}
 """
 
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in data.history:
+        messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+    messages.append({"role": "user", "content": data.user_message})
+
     try:
-        reply_text = generate_gemini_reply(full_prompt)
+        chat_completion = client.chat.completions.create(
+            messages=messages,
+            model="llama-3.3-70b-versatile",
+            temperature=0.6,
+            max_tokens=600,
+        )
+        reply_text = chat_completion.choices[0].message.content
     except Exception as e:
-        print(f"Cevap Üretme Hatası: {e}")
+        print(f"Groq API Hatası: {e}")
         reply_text = "Şu anda yanıt üretilirken bir sorun oluştu kral, tekrar yazar mısın?"
 
     elapsed = round(time.time() - start_time, 2)
