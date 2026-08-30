@@ -140,7 +140,7 @@ def coach_dialogue(data: ChatInput):
     except Exception as e:
         context_text = "Hipertrofi ve progressive overload prensipleri."
 
-    # 2. System Prompt ve Mesaj Formatı
+    # 2. Prompt Tanımı
     system_prompt = f"""
 Sen elit seviyede, doğrudan bilime ve hipertrofi prensiplerine dayalı koçluk yapan 'Looksmaxxing & Hipertrofi Koçu'sun.
 Yalnızca antrenman, progressive overload, beslenme, hipertrofi ve fiziksel gelişim konularında konuş.
@@ -159,7 +159,7 @@ KAYNAK DOKÜMAN BİLGİSİ:
     try:
         chat_completion = client.chat.completions.create(
             messages=messages,
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             temperature=0.6,
             max_tokens=600,
         )
