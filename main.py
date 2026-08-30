@@ -2,27 +2,28 @@ import os
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+import chromadb
 from google import genai
 
-# API anahtarını ortam değişkeninden veya doğrudan değişkenden al
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6KIYed6AADdAS02s2I9uTV6O_WpLz8-3A5ys5GlCkTKWw")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 app = FastAPI(title="Looksmaxxing & Physique AI Coach")
 
-# Vektör hafızası
-embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-vector_db = Chroma(
-    persist_directory="./looksmax_db", 
-    embedding_function=embedding_model
-)
+# ChromaDB Bağlantısı
+chroma_client = chromadb.PersistentClient(path="./looksmax_db")
+collection = chroma_client.get_or_create_collection(name="looksmax_knowledge")
 
 class ChatInput(BaseModel):
     user_message: str
 
-# Dark Mode Chat Arayüzü
+def get_embedding(text: str):
+    response = client.models.embed_content(
+        model="text-embedding-004",
+        contents=text
+    )
+    return response.embeddings[0].values
+
 HTML_INTERFACE = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -113,9 +114,15 @@ def serve_ui():
 
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
-    docs = vector_db.similarity_search(data.user_message, k=2)
-    context_text = "\n".join([doc.page_content for doc in docs])
-    
+    context_text = ""
+    try:
+        query_vector = get_embedding(data.user_message)
+        results = collection.query(query_embeddings=[query_vector], n_results=2)
+        if results and results.get("documents"):
+            context_text = "\n".join(results["documents"][0])
+    except Exception:
+        context_text = "Hipertrofi ve vücut geliştirme prensipleri."
+
     system_instruction = f"""
     Sen elit seviyede, doğrudan kanıta ve bilime dayalı tavsiye veren bir 'Looksmaxxing & Hipertrofi Koçu'sun.
     Aşağıdaki bilimsel protokol metnini referans alarak kullanıcının sorusuna net, motive edici ve doğrudan uygulanabilir maddelerle cevap ver.
@@ -126,12 +133,16 @@ def coach_dialogue(data: ChatInput):
     """
     
     response = client.models.generate_content(
-        model='gemini-3.6-flash',
+        model='gemini-2.5-flash',
         contents=f"{system_instruction}\n\nKULLANICI SORUSU: {data.user_message}"
     )
     
     return {
         "user_message": data.user_message,
-        "coach_reply": response.text,
-        "referenced_context": [doc.page_content for doc in docs]
+        "coach_reply": response.text
     }
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

@@ -1,10 +1,6 @@
 fastapi
 uvicorn
 pydantic
-langchain
-langchain-community
-langchain-text-splitters
 chromadb
-sentence-transformers
-pypdf
 google-genai
+pypdf
