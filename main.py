@@ -1,5 +1,7 @@
 import os
 import time
+import json
+import re
 from typing import List, Optional
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -9,7 +11,7 @@ from groq import Groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
 client = Groq(api_key=GROQ_API_KEY)
 
-app = FastAPI(title="Looksmax Hub & Progressive Overload")
+app = FastAPI(title="Looksmax Hub & Macro Tracker")
 
 class ChatInput(BaseModel):
     user_message: str
@@ -17,12 +19,18 @@ class ChatInput(BaseModel):
     workout_summary: Optional[str] = ""
     history: List[dict] = []
 
+class NutritionChatInput(BaseModel):
+    user_message: str
+    image_base64: Optional[str] = None
+    daily_summary: Optional[str] = ""
+    history: List[dict] = []
+
 HTML_INTERFACE = """<!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Looksmax Hub & Progressive Overload</title>
+    <title>Looksmax Hub - Antrenman & Beslenme</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -50,20 +58,22 @@ HTML_INTERFACE = """<!DOCTYPE html>
         .view-panel { display: none; width: 100%; height: 100%; padding: 20px; }
         .view-panel.active { display: flex; }
 
-        #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 32px; }
+        /* --- 1. MODÜL SEÇİM EKRANI (HUB) --- */
+        #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 28px; }
         .hub-title { text-align: center; }
         .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
         .hub-title p { font-size: 0.95rem; color: #9ca3af; }
         
-        .hub-grid { display: flex; gap: 24px; max-width: 850px; width: 100%; justify-content: center; }
-        .hub-card { flex: 1; background: #131722; border: 1px solid #222c3f; border-radius: 20px; padding: 36px 28px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 8px 24px rgba(0,0,0,0.4); text-align: left; }
+        .hub-grid { display: flex; gap: 20px; max-width: 1050px; width: 100%; justify-content: center; }
+        .hub-card { flex: 1; background: #131722; border: 1px solid #222c3f; border-radius: 20px; padding: 32px 24px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 8px 24px rgba(0,0,0,0.4); text-align: left; }
         .hub-card:hover { transform: translateY(-6px); border-color: #00f2fe; box-shadow: 0 12px 35px rgba(0,242,254,0.22); }
-        .card-icon { font-size: 2.5rem; margin-bottom: 16px; }
-        .card-heading { font-size: 1.4rem; font-weight: 800; color: #fff; margin-bottom: 8px; }
-        .card-desc { font-size: 0.85rem; color: #9ca3af; line-height: 1.5; margin-bottom: 24px; }
-        .card-action { align-self: flex-start; background: #1a2232; color: #00f2fe; border: 1px solid #2d3b54; padding: 10px 18px; border-radius: 10px; font-weight: 700; font-size: 0.85rem; transition: 0.2s; }
+        .card-icon { font-size: 2.3rem; margin-bottom: 14px; }
+        .card-heading { font-size: 1.3rem; font-weight: 800; color: #fff; margin-bottom: 8px; }
+        .card-desc { font-size: 0.82rem; color: #9ca3af; line-height: 1.5; margin-bottom: 20px; }
+        .card-action { align-self: flex-start; background: #1a2232; color: #00f2fe; border: 1px solid #2d3b54; padding: 9px 16px; border-radius: 10px; font-weight: 700; font-size: 0.82rem; transition: 0.2s; }
         .hub-card:hover .card-action { background: #00f2fe; color: #000; }
 
+        /* --- 2. AI KOÇ EKRANI --- */
         #coachView { flex-direction: column; max-width: 950px; }
         .chat-container { flex: 1; display: flex; flex-direction: column; background: #131722; border-radius: 16px; border: 1px solid #1f2738; overflow: hidden; }
         .messages { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
@@ -83,6 +93,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
         input[type="file"] { display: none; }
         .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 800; padding: 12px 24px; border-radius: 10px; cursor: pointer; }
 
+        /* --- 3. PROGRESSIVE OVERLOAD EKRANI --- */
         #overloadView { gap: 20px; max-width: 1300px; }
         .overload-col-left { width: 44%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
         .overload-col-right { width: 56%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
@@ -90,9 +101,8 @@ HTML_INTERFACE = """<!DOCTYPE html>
         .panel-card { background: #131722; border: 1px solid #1f2738; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
         .panel-header { font-size: 0.95rem; font-weight: 800; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
 
-        .week-badge { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
+        .badge-cyan { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
 
-        /* Form Yapısı (Geniş ve Rahat 2x2 Izgara) */
         .input-form { display: flex; flex-direction: column; gap: 10px; }
         .input-form input { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 11px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; width: 100%; }
         .input-form input:focus { border-color: #00f2fe; }
@@ -113,6 +123,18 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         .chart-box { flex: 1; min-height: 320px; position: relative; }
 
+        /* --- 4. GÜNLÜK BESLENME EKRANI --- */
+        #nutritionView { gap: 20px; max-width: 1300px; }
+        .macro-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+        .macro-card { background: #0a0c10; border: 1px solid #1c2230; padding: 14px; border-radius: 12px; text-align: center; }
+        .macro-val { font-size: 1.35rem; font-weight: 800; margin-top: 4px; }
+        .macro-label { font-size: 0.72rem; font-weight: 700; color: #9ca3af; text-transform: uppercase; }
+
+        .macro-c-cal { color: #f59e0b; }
+        .macro-c-pro { color: #10b981; }
+        .macro-c-carb { color: #00f2fe; }
+        .macro-c-fat { color: #ec4899; }
+
         @media (max-width: 850px) {
             body { overflow: auto; height: auto; }
             .hub-grid { flex-direction: column; }
@@ -120,11 +142,13 @@ HTML_INTERFACE = """<!DOCTYPE html>
             .view-panel { height: auto; flex-direction: column !important; }
             .overload-col-left, .overload-col-right { width: 100%; }
             #coachView { height: 80vh; }
+            .macro-stat-grid { grid-template-columns: repeat(2, 1fr); }
         }
     </style>
 </head>
 <body>
 
+    <!-- GİRİŞ / KAYIT MODAL -->
     <div class="auth-overlay" id="authOverlay">
         <div class="auth-box">
             <h2 id="authTitle">⚡ LOOKSMAX PRO</h2>
@@ -135,6 +159,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- ÜST HEADER BAR -->
     <div class="header-bar">
         <div style="display:flex; align-items:center; gap:12px;">
             <div class="brand" onclick="openView('hub')">⚡ LOOKSMAX HUB</div>
@@ -146,38 +171,53 @@ HTML_INTERFACE = """<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- ANA İÇERİK PANELİ -->
     <div class="content-container">
 
+        <!-- 1. GİRİŞ SEÇİM EKRANI (DASHBOARD HUB) -->
         <div class="view-panel active" id="hubView">
             <div class="hub-title">
                 <h1>Modülünü Seç Kral 🦍</h1>
                 <p>Neyi yönetmek veya geliştirmek istiyorsan tıkla ve başla.</p>
             </div>
             <div class="hub-grid">
+                <!-- KART 1: AI KOÇ -->
                 <div class="hub-card" onclick="openView('coach')">
                     <div>
                         <div class="card-icon">🤖</div>
                         <div class="card-heading">AI Koç & Vision</div>
-                        <div class="card-desc">Hipertrofi taktikleri, form kontrolü, yemek fotoğraflarından kalori/makro analizi ve fizik değerlendirmesi yap.</div>
+                        <div class="card-desc">Hipertrofi taktikleri, form kontrolü ve detaylı fizik değerlendirmesi yap.</div>
                     </div>
                     <div class="card-action">Koçla Konuş →</div>
                 </div>
 
+                <!-- KART 2: PROGRESSIVE OVERLOAD -->
                 <div class="hub-card" onclick="openView('overload')">
                     <div>
                         <div class="card-icon">📈</div>
                         <div class="card-heading">Progressive Overload</div>
-                        <div class="card-desc">Günün hareketlerini, setlerini ve ağırlıklarını kaydet. Haftalık döngüyle geçmiş antrenmanlarını gün gün incele.</div>
+                        <div class="card-desc">Set ve ağırlıklarını kaydet. Haftalık döngüyle geçmiş antrenmanlarını gün gün incele.</div>
                     </div>
                     <div class="card-action">Overload Takip →</div>
+                </div>
+
+                <!-- KART 3: GÜNLÜK BESLENME -->
+                <div class="hub-card" onclick="openView('nutrition')">
+                    <div>
+                        <div class="card-icon">🥗</div>
+                        <div class="card-heading">Günlük Beslenme & Makro</div>
+                        <div class="card-desc">Yediklerini yaz veya fotoğrafını at; AI anında kalori ve makrolarını hesaplayıp günlüğe işlesin.</div>
+                    </div>
+                    <div class="card-action">Makro Takip →</div>
                 </div>
             </div>
         </div>
 
+        <!-- 2. AI KOÇ EKRANI -->
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
-                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload koçunum. Antrenman taktikleri sorabilir, formunu veya yemek fotoğraflarını atarak makro analizi alabilirsin.</div>
+                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload koçunum. Antrenman taktikleri sorabilir, formunu veya fiziğini değerlendirebilirim.</div>
                 </div>
 
                 <div class="preview-box" id="previewBox">
@@ -188,19 +228,20 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
                 <div class="chat-input-area">
                     <label class="file-btn" for="imageInput" title="Fotoğraf Yükle">📷</label>
-                    <input type="file" id="imageInput" accept="image/*" onchange="handleImageSelect(event)" />
-                    <input type="text" class="chat-input" id="userInput" placeholder="Koça danış..." onkeypress="handleKey(event)" />
+                    <input type="file" id="imageInput" accept="image/*" onchange="handleImageSelect(event, 'coach')" />
+                    <input type="text" class="chat-input" id="userInput" placeholder="Koça danış..." onkeypress="handleKey(event, 'coach')" />
                     <button class="send-btn" id="sendBtn" onclick="sendMessage()">Gönder</button>
                 </div>
             </div>
         </div>
 
+        <!-- 3. PROGRESSIVE OVERLOAD EKRANI -->
         <div class="view-panel" id="overloadView">
             <div class="overload-col-left">
                 <div class="panel-card">
                     <div class="panel-header">
                         <span>➕ Set Kaydet</span>
-                        <span class="week-badge" id="currentWeekDisplay">Haftalık Döngü</span>
+                        <span class="badge-cyan" id="currentWeekDisplay">Haftalık Döngü</span>
                     </div>
                     <div class="input-form">
                         <input type="text" id="exerciseName" placeholder="Hareket Adı (Örn: Incline Dumbbell Press)" list="defaultExercises" />
@@ -248,6 +289,67 @@ HTML_INTERFACE = """<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- 4. GÜNLÜK BESLENME EKRANI -->
+        <div class="view-panel" id="nutritionView">
+            <!-- Sol Panel: Beslenme AI Asistanı -->
+            <div class="overload-col-left">
+                <div class="chat-container">
+                    <div class="messages" id="nutriChatBox">
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"4 tam buğday ekmeği, 2 yumurta"</i>) veya tabağının fotoğrafını at; anında makroları çıkarıp günlüğüne ekleyeyim.</div>
+                    </div>
+
+                    <div class="preview-box" id="nutriPreviewBox">
+                        <img id="nutriImagePreview" src="" alt="Görsel" />
+                        <button onclick="clearNutriImage()">✕</button>
+                        <span style="font-size:0.75rem; color:#9ca3af;">Yemek görseli seçildi</span>
+                    </div>
+
+                    <div class="chat-input-area">
+                        <label class="file-btn" for="nutriImageInput" title="Yemek Fotoğrafı">📷</label>
+                        <input type="file" id="nutriImageInput" accept="image/*" onchange="handleImageSelect(event, 'nutri')" />
+                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Yediklerini yaz..." onkeypress="handleKey(event, 'nutri')" />
+                        <button class="send-btn" id="nutriSendBtn" onclick="sendNutriMessage()">Ekle</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sağ Panel: Günlük Makro Kartları & Yenenler Listesi -->
+            <div class="overload-col-right">
+                <div class="panel-card">
+                    <div class="panel-header">
+                        <span>🔥 Bugünkü Makro Durumu</span>
+                        <span class="badge-cyan" id="nutriTodayDate">Bugün</span>
+                    </div>
+                    <div class="macro-stat-grid">
+                        <div class="macro-card">
+                            <div class="macro-label">Kalori</div>
+                            <div class="macro-val macro-c-cal" id="totCalories">0 kcal</div>
+                        </div>
+                        <div class="macro-card">
+                            <div class="macro-label">Protein</div>
+                            <div class="macro-val macro-c-pro" id="totProtein">0g</div>
+                        </div>
+                        <div class="macro-card">
+                            <div class="macro-label">Karbonhidrat</div>
+                            <div class="macro-val macro-c-carb" id="totCarbs">0g</div>
+                        </div>
+                        <div class="macro-card">
+                            <div class="macro-label">Yağ</div>
+                            <div class="macro-val macro-c-fat" id="totFat">0g</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-card" style="flex:1;">
+                    <div class="panel-header">
+                        <span>🍽️ Bugün Tüketilen Öğünler</span>
+                        <button onclick="clearTodayMeals()" style="background:none; border:none; color:#ef4444; font-size:0.75rem; cursor:pointer; font-weight:700;">Günü Sıfırla</button>
+                    </div>
+                    <div class="history-list" id="mealsList"></div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script>
@@ -261,6 +363,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
         }
 
         const currentWeekKey = getMondayOfWeek(new Date());
+        const todayKey = new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
         function getStorageUsers() {
             return JSON.parse(localStorage.getItem("app_registered_users") || "{}");
@@ -269,25 +372,37 @@ HTML_INTERFACE = """<!DOCTYPE html>
             localStorage.setItem("app_registered_users", JSON.stringify(users));
         }
 
+        // Antrenman Verileri
         function getUserWeeklyLogs(username) {
             const allWeeks = JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
             return allWeeks[currentWeekKey] || [];
         }
-
         function saveUserWeeklyLogs(username, logs) {
             const allWeeks = JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
             allWeeks[currentWeekKey] = logs;
             localStorage.setItem("user_weeks_" + username, JSON.stringify(allWeeks));
         }
 
+        // Günlük Beslenme Verileri (Her gün ayrı tutulur)
+        function getUserDailyMeals(username) {
+            const allDays = JSON.parse(localStorage.getItem("user_nutrition_" + username) || "{}");
+            return allDays[todayKey] || [];
+        }
+        function saveUserDailyMeals(username, meals) {
+            const allDays = JSON.parse(localStorage.getItem("user_nutrition_" + username) || "{}");
+            allDays[todayKey] = meals;
+            localStorage.setItem("user_nutrition_" + username, JSON.stringify(allDays));
+        }
+
         let currentUser = JSON.parse(localStorage.getItem("active_user") || "null");
         let isRegisterMode = false;
         let weeklyLogs = [];
+        let dailyMeals = [];
         let chartInstance = null;
 
-        const todayStr = new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-        document.getElementById("exerciseDate").value = todayStr;
+        document.getElementById("exerciseDate").value = todayKey;
         document.getElementById("currentWeekDisplay").innerText = "Hafta: " + currentWeekKey;
+        document.getElementById("nutriTodayDate").innerText = todayKey;
 
         function openView(viewName) {
             document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
@@ -308,6 +423,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 document.getElementById("authOverlay").style.display = "none";
                 document.getElementById("activeUserName").innerText = "👤 " + currentUser.username;
                 loadUserWorkouts();
+                loadUserNutrition();
             }
         }
 
@@ -356,6 +472,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             location.reload();
         }
 
+        // ANTRENMAN FONKSİYONLARI
         function loadUserWorkouts() {
             if (!currentUser) return;
             weeklyLogs = getUserWeeklyLogs(currentUser.username);
@@ -366,44 +483,26 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         function addWorkoutLog() {
             if (!currentUser) return;
-            
             const name = document.getElementById("exerciseName").value.trim();
             const setVal = document.getElementById("exerciseSet").value.trim();
             const weightVal = document.getElementById("exerciseWeight").value.trim();
             const repsVal = document.getElementById("exerciseReps").value.trim();
-            const dateVal = document.getElementById("exerciseDate").value.trim() || todayStr;
+            const dateVal = document.getElementById("exerciseDate").value.trim() || todayKey;
 
-            if (!name) {
-                return alert("Lütfen hareket adını gir kral!");
-            }
-            if (!weightVal || isNaN(Number(weightVal))) {
-                return alert("Lütfen ağırlığı (kg) gir kral!");
-            }
-            if (!repsVal || isNaN(Number(repsVal))) {
-                return alert("Lütfen tekrar sayısını gir kral!");
-            }
+            if (!name) return alert("Lütfen hareket adını gir kral!");
+            if (!weightVal || isNaN(Number(weightVal))) return alert("Lütfen ağırlığı (kg) gir kral!");
+            if (!repsVal || isNaN(Number(repsVal))) return alert("Lütfen tekrar sayısını gir kral!");
 
             const setNum = parseInt(setVal, 10) || 1;
             const weight = parseFloat(weightVal);
             const reps = parseInt(repsVal, 10);
 
-            const newLog = {
-                id: Date.now(),
-                exercise: name,
-                set_num: setNum,
-                weight: weight,
-                reps: reps,
-                date: dateVal
-            };
-
-            weeklyLogs.push(newLog);
+            weeklyLogs.push({ id: Date.now(), exercise: name, set_num: setNum, weight: weight, reps: reps, date: dateVal });
             saveUserWeeklyLogs(currentUser.username, weeklyLogs);
 
-            // Bir sonraki set için otomatik artır ve alanları temizle
             document.getElementById("exerciseSet").value = setNum + 1;
             document.getElementById("exerciseWeight").value = "";
             document.getElementById("exerciseReps").value = "";
-            
             loadUserWorkouts();
         }
 
@@ -423,14 +522,12 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 select.innerHTML = "<option value=''>Kayıt Yok</option>";
                 return;
             }
-
             unique.forEach(ex => {
                 const opt = document.createElement("option");
                 opt.value = ex;
                 opt.innerText = ex;
                 select.appendChild(opt);
             });
-
             if (unique.includes(currentSelected)) select.value = currentSelected;
             else select.value = unique[0];
         }
@@ -452,7 +549,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
             });
 
             const sortedDates = Object.keys(grouped).reverse();
-
             sortedDates.forEach(date => {
                 const sets = grouped[date];
                 let setsHtml = "";
@@ -475,9 +571,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                             <span>📅 ${date}</span>
                             <span>${sets.length} Set</span>
                         </div>
-                        <div class="day-items">
-                            ${setsHtml}
-                        </div>
+                        <div class="day-items">${setsHtml}</div>
                     </div>
                 `;
             });
@@ -538,17 +632,83 @@ HTML_INTERFACE = """<!DOCTYPE html>
             });
         }
 
+        // BESLENME YÖNETİMİ
+        function loadUserNutrition() {
+            if (!currentUser) return;
+            dailyMeals = getUserDailyMeals(currentUser.username);
+            renderNutritionStats();
+        }
+
+        function renderNutritionStats() {
+            let cal = 0, pro = 0, carb = 0, fat = 0;
+            const list = document.getElementById("mealsList");
+            list.innerHTML = "";
+
+            dailyMeals.forEach(meal => {
+                cal += (meal.calories || 0);
+                pro += (meal.protein || 0);
+                carb += (meal.carbs || 0);
+                fat += (meal.fat || 0);
+
+                list.innerHTML += `
+                    <div class="log-item">
+                        <div>
+                            <span class="ex-title">${meal.food_name}</span>
+                            <div style="font-size:0.75rem; color:#9ca3af; margin-top:2px;">
+                                <span class="macro-c-cal">${meal.calories} kcal</span> | 
+                                <span class="macro-c-pro">P: ${meal.protein}g</span> | 
+                                <span class="macro-c-carb">K: ${meal.carbs}g</span> | 
+                                <span class="macro-c-fat">Y: ${meal.fat}g</span>
+                            </div>
+                        </div>
+                        <button onclick="deleteMeal(${meal.id})">Sil</button>
+                    </div>
+                `;
+            });
+
+            document.getElementById("totCalories").innerText = cal + " kcal";
+            document.getElementById("totProtein").innerText = pro + "g";
+            document.getElementById("totCarbs").innerText = carb + "g";
+            document.getElementById("totFat").innerText = fat + "g";
+
+            if (dailyMeals.length === 0) {
+                list.innerHTML = "<div style='color:#6b7280; font-size:0.85rem; text-align:center; padding:20px;'>Bugün henüz bir şey kaydedilmedi.</div>";
+            }
+        }
+
+        function deleteMeal(id) {
+            dailyMeals = dailyMeals.filter(m => m.id !== id);
+            saveUserDailyMeals(currentUser.username, dailyMeals);
+            renderNutritionStats();
+        }
+
+        function clearTodayMeals() {
+            if (!confirm("Bugünkü tüm öğünleri sıfırlamak istiyor musun?")) return;
+            dailyMeals = [];
+            saveUserDailyMeals(currentUser.username, dailyMeals);
+            renderNutritionStats();
+        }
+
+        // GÖRSEL & CHAT YÖNETİMİ
         let conversationHistory = [];
         let selectedBase64Image = null;
+        let nutriHistory = [];
+        let nutriSelectedImage = null;
 
-        function handleImageSelect(event) {
+        function handleImageSelect(event, type) {
             const file = event.target.files[0];
             if (!file) return;
             const reader = new FileReader();
             reader.onload = function(e) {
-                selectedBase64Image = e.target.result;
-                document.getElementById("imagePreview").src = selectedBase64Image;
-                document.getElementById("previewBox").style.display = "flex";
+                if (type === 'coach') {
+                    selectedBase64Image = e.target.result;
+                    document.getElementById("imagePreview").src = selectedBase64Image;
+                    document.getElementById("previewBox").style.display = "flex";
+                } else {
+                    nutriSelectedImage = e.target.result;
+                    document.getElementById("nutriImagePreview").src = nutriSelectedImage;
+                    document.getElementById("nutriPreviewBox").style.display = "flex";
+                }
             };
             reader.readAsDataURL(file);
         }
@@ -557,6 +717,12 @@ HTML_INTERFACE = """<!DOCTYPE html>
             selectedBase64Image = null;
             document.getElementById("imageInput").value = "";
             document.getElementById("previewBox").style.display = "none";
+        }
+
+        function clearNutriImage() {
+            nutriSelectedImage = null;
+            document.getElementById("nutriImageInput").value = "";
+            document.getElementById("nutriPreviewBox").style.display = "none";
         }
 
         async function sendMessage() {
@@ -597,7 +763,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
                         history: conversationHistory
                     })
                 });
-                
                 const data = await response.json();
                 let replyFormatted = data.coach_reply.replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
                 document.getElementById(loadingId).innerHTML = replyFormatted;
@@ -613,7 +778,80 @@ HTML_INTERFACE = """<!DOCTYPE html>
             }
         }
 
-        function handleKey(e) { if (e.key === "Enter") sendMessage(); }
+        async function sendNutriMessage() {
+            const input = document.getElementById("nutriUserInput");
+            const btn = document.getElementById("nutriSendBtn");
+            const chatBox = document.getElementById("nutriChatBox");
+            const text = input.value.trim();
+
+            if (!text && !nutriSelectedImage) return;
+
+            let userHtml = "";
+            if (nutriSelectedImage) userHtml += `<img src="${nutriSelectedImage}" class="preview-img" />`;
+            userHtml += `<span>${text || "Yemek analizi"}</span>`;
+
+            chatBox.innerHTML += `<div class="msg user">${userHtml}</div>`;
+            const currentImg = nutriSelectedImage;
+            const currentText = text || "Bu yemeğin makrolarını hesapla ve ekle.";
+
+            input.value = "";
+            clearNutriImage();
+            btn.disabled = true;
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            const loadingId = "load-nutri-" + Date.now();
+            chatBox.innerHTML += `<div class="msg coach" id="${loadingId}"><i>Makrolar hesaplanıyor...</i></div>`;
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            const mealSummary = dailyMeals.map(m => `${m.food_name} (${m.calories} kcal)`).join(", ");
+
+            try {
+                const response = await fetch("/nutrition-chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        user_message: currentText,
+                        daily_summary: mealSummary,
+                        image_base64: currentImg,
+                        history: nutriHistory
+                    })
+                });
+                const data = await response.json();
+                
+                let replyFormatted = data.coach_reply.replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
+                document.getElementById(loadingId).innerHTML = replyFormatted;
+
+                if (data.detected_meal && data.detected_meal.calories > 0) {
+                    const newMeal = {
+                        id: Date.now(),
+                        food_name: data.detected_meal.food_name || "Öğün",
+                        calories: data.detected_meal.calories || 0,
+                        protein: data.detected_meal.protein || 0,
+                        carbs: data.detected_meal.carbs || 0,
+                        fat: data.detected_meal.fat || 0
+                    };
+                    dailyMeals.push(newMeal);
+                    saveUserDailyMeals(currentUser.username, dailyMeals);
+                    renderNutritionStats();
+                }
+
+                nutriHistory.push({ role: "user", content: currentText });
+                nutriHistory.push({ role: "assistant", content: data.coach_reply });
+                if (nutriHistory.length > 8) nutriHistory = nutriHistory.slice(-8);
+            } catch (err) {
+                document.getElementById(loadingId).innerText = "Hata oluştu kral.";
+            } finally {
+                btn.disabled = false;
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
+        }
+
+        function handleKey(e, type) {
+            if (e.key === "Enter") {
+                if (type === 'coach') sendMessage();
+                else sendNutriMessage();
+            }
+        }
 
         checkAuth();
     </script>
@@ -628,7 +866,6 @@ def serve_ui():
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
     start_time = time.time()
-    
     user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
 
     system_prompt = f"""
@@ -639,41 +876,31 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
 1. SET / PROGRESSIVE OVERLOAD DEĞERLENDİRMESİ:
 - Kullanıcının bu haftaki ağırlık ve setlerine bakarak bir sonraki idmanda hedeflemesi gereken net kg ve tekrarı söyle.
 2. FOTOĞRAF ANALİZİ (Varsa):
-- Yemekse: Gramaj, kalori, makro çıkar.
 - Fizikse: Tahmini yağ oranı ve eksik bölgeleri listele.
 """
-
-    is_vision = bool(data.image_base64)
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
         messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
 
-    if is_vision:
-        user_content = [
+    if data.image_base64:
+        messages.append({"role": "user", "content": [
             {"type": "text", "text": data.user_message},
             {"type": "image_url", "image_url": {"url": data.image_base64}}
-        ]
-        messages.append({"role": "user", "content": user_content})
+        ]})
     else:
         messages.append({"role": "user", "content": data.user_message})
 
     reply_text = None
     try:
         all_models = client.models.list()
-        available_models = [
-            m.id for m in all_models.data 
-            if not any(x in m.id.lower() for x in ["whisper", "guard", "orpheus", "allam"])
-        ]
+        available_models = [m.id for m in all_models.data if not any(x in m.id.lower() for x in ["whisper", "guard", "orpheus", "allam"])]
     except Exception:
         available_models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "groq/compound"]
 
     for model_name in available_models:
         try:
             chat_completion = client.chat.completions.create(
-                messages=messages,
-                model=model_name,
-                temperature=0.4,
-                max_tokens=500,
+                messages=messages, model=model_name, temperature=0.4, max_tokens=500,
             )
             reply_text = chat_completion.choices[0].message.content
             break
@@ -684,11 +911,81 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
         reply_text = "Analiz motoru şu anda yanıt veremedi kral."
 
     elapsed = round(time.time() - start_time, 2)
-    print(f"--> [LOG] Yanit uretildi: {elapsed}sn")
+    print(f"--> [LOG] Coach Yaniti: {elapsed}sn")
+
+    return {"user_message": data.user_message, "coach_reply": reply_text}
+
+@app.post("/nutrition-chat")
+def nutrition_dialogue(data: NutritionChatInput):
+    start_time = time.time()
+    
+    system_prompt = f"""
+Sen uzman bir 'Sporcu Beslenme & Makro Koçu'sun.
+Kullanıcının bugünkü kayıtlı öğünleri: {data.daily_summary if data.daily_summary else 'Henüz öğün girilmedi.'}
+
+GÖREVİN:
+1. Kullanıcının yazdığı veya görseldeki yemeklerin toplam Kalori, Protein, Karbonhidrat ve Yağ (Gram cinsinden) değerlerini en gerçekçi şekilde tahmin et.
+2. Samimi, motive edici ve sporcu dilinde kısa bir açıklama yap.
+3. YANITININ EN SONUNA mutlaka şu JSON formatını iliştir:
+<<<JSON
+{{
+  "food_name": "Öğünün kısa adı (örn: 4 Dilim Ekmek, 2 Yumurta)",
+  "calories": 420,
+  "protein": 24,
+  "carbs": 52,
+  "fat": 12
+}}
+JSON>>>
+"""
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in data.history:
+        messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+
+    if data.image_base64:
+        messages.append({"role": "user", "content": [
+            {"type": "text", "text": data.user_message},
+            {"type": "image_url", "image_url": {"url": data.image_base64}}
+        ]})
+    else:
+        messages.append({"role": "user", "content": data.user_message})
+
+    reply_text = None
+    try:
+        all_models = client.models.list()
+        available_models = [m.id for m in all_models.data if not any(x in m.id.lower() for x in ["whisper", "guard", "orpheus", "allam"])]
+    except Exception:
+        available_models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "groq/compound"]
+
+    for model_name in available_models:
+        try:
+            chat_completion = client.chat.completions.create(
+                messages=messages, model=model_name, temperature=0.3, max_tokens=500,
+            )
+            reply_text = chat_completion.choices[0].message.content
+            break
+        except Exception:
+            continue
+
+    if not reply_text:
+        reply_text = "Makro hesaplanamadı kral."
+
+    detected_meal = None
+    try:
+        json_match = re.search(r'<<<JSON\s*(\{.*?\})\s*JSON>>>', reply_text, re.DOTALL)
+        if json_match:
+            detected_meal = json.loads(json_match.group(1))
+            reply_text = reply_text.replace(json_match.group(0), "").strip()
+    except Exception as e:
+        print("JSON parse hatasi:", e)
+
+    elapsed = round(time.time() - start_time, 2)
+    print(f"--> [LOG] Nutrition Yaniti: {elapsed}sn")
 
     return {
         "user_message": data.user_message,
-        "coach_reply": reply_text
+        "coach_reply": reply_text,
+        "detected_meal": detected_meal
     }
 
 if __name__ == "__main__":
