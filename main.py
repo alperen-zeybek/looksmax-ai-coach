@@ -92,11 +92,13 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         .week-badge { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
 
+        /* Form Yapısı (Geniş ve Rahat 2x2 Izgara) */
         .input-form { display: flex; flex-direction: column; gap: 10px; }
-        .input-form input, .input-form select { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 10px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; }
-        .input-form input:focus, .input-form select:focus { border-color: #00f2fe; }
-        .form-grid-row { display: flex; gap: 8px; }
-        .btn-log { background: #00f2fe; color: #000; border: none; font-weight: 800; padding: 11px; border-radius: 8px; cursor: pointer; margin-top: 2px; }
+        .input-form input { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 11px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; width: 100%; }
+        .input-form input:focus { border-color: #00f2fe; }
+        
+        .form-grid-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
+        .btn-log { background: #00f2fe; color: #000; border: none; font-weight: 800; padding: 12px; border-radius: 8px; cursor: pointer; margin-top: 4px; }
 
         .history-list { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
         .day-group { background: #0e121a; border: 1px solid #1f2738; border-radius: 12px; overflow: hidden; }
@@ -214,11 +216,11 @@ HTML_INTERFACE = """<!DOCTYPE html>
                             <option value="Face Pull">
                         </datalist>
 
-                        <div class="form-grid-row">
-                            <input type="number" id="exerciseSet" placeholder="Set No" min="1" value="1" style="flex:1;" />
-                            <input type="number" id="exerciseWeight" placeholder="Kilo (kg)" step="0.5" style="flex:1.2;" />
-                            <input type="number" id="exerciseReps" placeholder="Tekrar" style="flex:1;" />
-                            <input type="text" id="exerciseDate" placeholder="Tarih" style="flex:1.2;" />
+                        <div class="form-grid-2x2">
+                            <input type="number" id="exerciseSet" placeholder="🔢 Set No (1, 2...)" min="1" value="1" />
+                            <input type="number" id="exerciseWeight" placeholder="⚖️ Kilo (kg)" step="0.5" />
+                            <input type="number" id="exerciseReps" placeholder="🔁 Tekrar Sayısı" min="1" />
+                            <input type="text" id="exerciseDate" placeholder="📅 Tarih" />
                         </div>
                         <button class="btn-log" onclick="addWorkoutLog()">Seti Kaydet</button>
                     </div>
@@ -375,7 +377,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 return alert("Lütfen hareket adını gir kral!");
             }
             if (!weightVal || isNaN(Number(weightVal))) {
-                return alert("Lütfen ağırlığı (kg) sayı olarak gir kral!");
+                return alert("Lütfen ağırlığı (kg) gir kral!");
             }
             if (!repsVal || isNaN(Number(repsVal))) {
                 return alert("Lütfen tekrar sayısını gir kral!");
@@ -397,7 +399,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             weeklyLogs.push(newLog);
             saveUserWeeklyLogs(currentUser.username, weeklyLogs);
 
-            // Bir sonraki set için hazırla
+            // Bir sonraki set için otomatik artır ve alanları temizle
             document.getElementById("exerciseSet").value = setNum + 1;
             document.getElementById("exerciseWeight").value = "";
             document.getElementById("exerciseReps").value = "";
