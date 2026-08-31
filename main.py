@@ -1,81 +1,22 @@
 import os
 import time
-import sqlite3
-import hashlib
 from typing import List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-import chromadb
 from groq import Groq
 
-# ----------------- VERİTABANI KURULUMU (SQLite) -----------------
-DB_FILE = "coach_app.db"
-
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS workouts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            exercise TEXT NOT NULL,
-            set_num INTEGER DEFAULT 1,
-            weight REAL NOT NULL,
-            reps INTEGER NOT NULL,
-            date TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id)
-        )
-    ''')
-    # Kolon eksikse otomatik ekleme (Migration garantisi)
-    try:
-        c.execute("ALTER TABLE workouts ADD COLUMN set_num INTEGER DEFAULT 1")
-    except Exception:
-        pass
-    conn.commit()
-    conn.close()
-
-init_db()
-
-def hash_pw(pw: str) -> str:
-    return hashlib.sha256(pw.encode()).hexdigest()
-
-# ----------------- GROQ & CHROMADB -----------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
 client = Groq(api_key=GROQ_API_KEY)
 
-app = FastAPI(title="Looksmax Coach & Tracker")
-
-chroma_client = chromadb.PersistentClient(path="./looksmax_db")
-collection = chroma_client.get_or_create_collection(name="looksmax_knowledge")
-
-# ----------------- PYDANTIC MODELLERİ -----------------
-class AuthInput(BaseModel):
-    username: str
-    password: str
-
-class WorkoutLogInput(BaseModel):
-    user_id: int
-    exercise: str
-    set_num: int
-    weight: float
-    reps: int
-    date: str
+app = FastAPI(title="Looksmax Hub & Progressive Overload")
 
 class ChatInput(BaseModel):
-    user_id: Optional[int] = None
     user_message: str
     image_base64: Optional[str] = None
+    workout_summary: Optional[str] = ""
     history: List[dict] = []
 
-# ----------------- FRONTEND HTML / CSS / JS -----------------
 HTML_INTERFACE = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -99,7 +40,7 @@ HTML_INTERFACE = """
         .auth-toggle { font-size: 0.8rem; color: #9ca3af; text-align: center; cursor: pointer; }
         .auth-toggle b { color: #00f2fe; }
 
-        /* Üst Header Bar */
+        /* Üst Bar */
         .header-bar { height: 60px; background: #0f121a; border-bottom: 1px solid #1c2230; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; }
         .brand { font-size: 1.15rem; font-weight: 800; color: #00f2fe; display: flex; align-items: center; gap: 8px; cursor: pointer; }
         .back-hub-btn { background: #1a202c; color: #00f2fe; border: 1px solid #28334a; padding: 6px 14px; border-radius: 8px; font-size: 0.8rem; font-weight: 700; cursor: pointer; display: none; }
@@ -108,12 +49,12 @@ HTML_INTERFACE = """
         .user-tag { font-size: 0.8rem; background: #161c26; padding: 6px 12px; border-radius: 8px; color: #10b981; border: 1px solid #263245; }
         .logout-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem; font-weight: 600; }
 
-        /* Ana İçerik Taşıyıcı */
+        /* Ana İçerik */
         .content-container { flex: 1; display: flex; justify-content: center; align-items: center; overflow: hidden; position: relative; }
         .view-panel { display: none; width: 100%; height: 100%; padding: 20px; }
         .view-panel.active { display: flex; }
 
-        /* --- 1. MODÜL SEÇİM EKRANI (HUB / DASHBOARD) --- */
+        /* --- 1. MODÜL SEÇİM EKRANI (HUB) --- */
         #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 32px; }
         .hub-title { text-align: center; }
         .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
@@ -313,6 +254,21 @@ HTML_INTERFACE = """
     </div>
 
     <script>
+        // KALICI LOCAL STORAGE YÖNETİMİ (Kullanıcılar & Antrenmanlar Asla Silinmez)
+        function getStorageUsers() {
+            return JSON.parse(localStorage.getItem("app_registered_users") || "{}");
+        }
+        function saveStorageUsers(users) {
+            localStorage.setItem("app_registered_users", JSON.stringify(users));
+        }
+
+        function getUserLogs(username) {
+            return JSON.parse(localStorage.getItem("workout_logs_" + username) || "[]");
+        }
+        function saveUserLogs(username, logs) {
+            localStorage.setItem("workout_logs_" + username, JSON.stringify(logs));
+        }
+
         let currentUser = JSON.parse(localStorage.getItem("active_user") || "null");
         let isRegisterMode = false;
         let workoutLogs = [];
@@ -320,7 +276,7 @@ HTML_INTERFACE = """
 
         document.getElementById("exerciseDate").value = new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
 
-        // MODÜL / GÖRÜNÜM GEÇİŞİ
+        // MODÜL GEÇİŞİ
         function openView(viewName) {
             document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
             const target = document.getElementById(viewName + "View");
@@ -333,7 +289,7 @@ HTML_INTERFACE = """
             }
         }
 
-        // AUTH KONTROL
+        // KALICI AUTH
         function checkAuth() {
             if (!currentUser) {
                 document.getElementById("authOverlay").style.display = "flex";
@@ -351,26 +307,36 @@ HTML_INTERFACE = """
             document.getElementById("authToggle").innerHTML = isRegisterMode ? "Zaten hesabın var mı? <b>Giriş Yap</b>" : "Hesabın yok mu? <b>Kayıt Ol</b>";
         }
 
-        async function handleAuthSubmit() {
+        function handleAuthSubmit() {
             const u = document.getElementById("authUsername").value.trim();
             const p = document.getElementById("authPassword").value.trim();
             if (!u || !p) return alert("Kullanıcı adı ve şifre gir!");
 
-            const endpoint = isRegisterMode ? "/register" : "/login";
-            try {
-                const res = await fetch(endpoint, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ username: u, password: p })
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || "Hata oluştu");
+            const allUsers = getStorageUsers();
 
-                currentUser = { id: data.user_id, username: data.username };
+            if (isRegisterMode) {
+                if (allUsers[u]) return alert("Bu kullanıcı adı zaten var!");
+                allUsers[u] = p;
+                saveStorageUsers(allUsers);
+                currentUser = { username: u };
                 localStorage.setItem("active_user", JSON.stringify(currentUser));
                 checkAuth();
-            } catch (err) {
-                alert(err.message);
+            } else {
+                if (!allUsers[u] || allUsers[u] !== p) {
+                    // İlk defa geliyorsa otomatik oluştur kolaylığı
+                    if (Object.keys(allUsers).length === 0 || !allUsers[u]) {
+                        allUsers[u] = p;
+                        saveStorageUsers(allUsers);
+                        currentUser = { username: u };
+                        localStorage.setItem("active_user", JSON.stringify(currentUser));
+                        checkAuth();
+                        return;
+                    }
+                    return alert("Kullanıcı adı veya şifre hatalı!");
+                }
+                currentUser = { username: u };
+                localStorage.setItem("active_user", JSON.stringify(currentUser));
+                checkAuth();
             }
         }
 
@@ -380,21 +346,16 @@ HTML_INTERFACE = """
             location.reload();
         }
 
-        // WORKOUT LOGGING & GRAFİK
-        async function loadUserWorkouts() {
+        // SET & PROGRESSIVE OVERLOAD
+        function loadUserWorkouts() {
             if (!currentUser) return;
-            try {
-                const res = await fetch(`/workouts/${currentUser.id}`);
-                workoutLogs = await res.json();
-                populateDropdown();
-                renderHistory();
-                updateChart();
-            } catch (err) {
-                console.error("Setler alınamadı", err);
-            }
+            workoutLogs = getUserLogs(currentUser.username);
+            populateDropdown();
+            renderHistory();
+            updateChart();
         }
 
-        async function addWorkoutLog() {
+        function addWorkoutLog() {
             if (!currentUser) return;
             const name = document.getElementById("exerciseName").value.trim();
             const setNum = parseInt(document.getElementById("exerciseSet").value) || 1;
@@ -404,38 +365,28 @@ HTML_INTERFACE = """
 
             if (!name || isNaN(weight) || isNaN(reps)) return alert("Tüm bilgileri eksiksiz doldur kral!");
 
-            try {
-                const res = await fetch("/workouts", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        user_id: currentUser.id,
-                        exercise: name,
-                        set_num: setNum,
-                        weight: weight,
-                        reps: reps,
-                        date: date
-                    })
-                });
-                if (!res.ok) throw new Error("Kayıt başarısız");
+            const newLog = {
+                id: Date.now(),
+                exercise: name,
+                set_num: setNum,
+                weight: weight,
+                reps: reps,
+                date: date
+            };
 
-                // Bir sonraki sete hazırla
-                document.getElementById("exerciseSet").value = setNum + 1;
-                document.getElementById("exerciseWeight").value = "";
-                document.getElementById("exerciseReps").value = "";
-                loadUserWorkouts();
-            } catch (err) {
-                alert(err.message);
-            }
+            workoutLogs.push(newLog);
+            saveUserLogs(currentUser.username, workoutLogs);
+
+            document.getElementById("exerciseSet").value = setNum + 1;
+            document.getElementById("exerciseWeight").value = "";
+            document.getElementById("exerciseReps").value = "";
+            loadUserWorkouts();
         }
 
-        async function deleteWorkout(id) {
-            try {
-                await fetch(`/workouts/${id}`, { method: "DELETE" });
-                loadUserWorkouts();
-            } catch (err) {
-                console.error(err);
-            }
+        function deleteWorkout(id) {
+            workoutLogs = workoutLogs.filter(item => item.id !== id);
+            saveUserLogs(currentUser.username, workoutLogs);
+            loadUserWorkouts();
         }
 
         function populateDropdown() {
@@ -587,13 +538,15 @@ HTML_INTERFACE = """
             chatBox.innerHTML += `<div class="msg coach" id="${loadingId}"><i>Analiz ediliyor...</i></div>`;
             chatBox.scrollTop = chatBox.scrollHeight;
 
+            const lastSets = workoutLogs.slice(-5).map(s => `${s.exercise} (${s.set_num}.Set): ${s.weight}kg x ${s.reps}`).join(", ");
+
             try {
                 const response = await fetch("/chat", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                        user_id: currentUser ? currentUser.id : null,
                         user_message: currentText,
+                        workout_summary: lastSets,
                         image_base64: currentImg,
                         history: conversationHistory
                     })
@@ -622,97 +575,23 @@ HTML_INTERFACE = """
 </html>
 """
 
-# ----------------- BACKEND ENDPOINTS -----------------
-
 @app.get("/", response_class=HTMLResponse)
 def serve_ui():
     return HTML_INTERFACE
-
-@app.post("/register")
-def register(auth: AuthInput):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (auth.username, hash_pw(auth.password)))
-        conn.commit()
-        user_id = c.lastrowid
-        return {"user_id": user_id, "username": auth.username}
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten alınmış!")
-    finally:
-        conn.close()
-
-@app.post("/login")
-def login(auth: AuthInput):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT id, username FROM users WHERE username = ? AND password_hash = ?", (auth.username, hash_pw(auth.password)))
-    user = c.fetchone()
-    conn.close()
-    if not user:
-        raise HTTPException(status_code=401, detail="Kullanıcı adı veya şifre hatalı!")
-    return {"user_id": user[0], "username": user[1]}
-
-@app.get("/workouts/{user_id}")
-def get_workouts(user_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT id, exercise, set_num, weight, reps, date FROM workouts WHERE user_id = ? ORDER BY id ASC", (user_id,))
-    rows = c.fetchall()
-    conn.close()
-    return [{"id": r[0], "exercise": r[1], "set_num": r[2], "weight": r[3], "reps": r[4], "date": r[5]} for r in rows]
-
-@app.post("/workouts")
-def add_workout(data: WorkoutLogInput):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO workouts (user_id, exercise, set_num, weight, reps, date) VALUES (?, ?, ?, ?, ?, ?)",
-              (data.user_id, data.exercise, data.set_num, data.weight, data.reps, data.date))
-    conn.commit()
-    conn.close()
-    return {"status": "success"}
-
-@app.delete("/workouts/{workout_id}")
-def delete_workout_item(workout_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM workouts WHERE id = ?", (workout_id,))
-    conn.commit()
-    conn.close()
-    return {"status": "deleted"}
 
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
     start_time = time.time()
     
-    user_context = ""
-    if data.user_id:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("SELECT exercise, set_num, weight, reps FROM workouts WHERE user_id = ? ORDER BY id DESC LIMIT 6", (data.user_id,))
-        recent = c.fetchall()
-        conn.close()
-        if recent:
-            user_context = "Kullanıcının Son Setleri: " + ", ".join([f"{r[0]} ({r[1]}.Set): {r[2]}kg x {r[3]}" for r in recent])
-
-    rag_text = ""
-    try:
-        results = collection.query(query_texts=[data.user_message], n_results=2)
-        if results and results.get("documents") and len(results["documents"]) > 0:
-            rag_text = "\n".join(results["documents"][0])
-    except Exception:
-        rag_text = "Hipertrofi ve progressive overload prensipleri."
+    user_context = f"Kullanıcının Son Setleri: {data.workout_summary}" if data.workout_summary else "Henüz set kaydedilmedi."
 
     system_prompt = f"""
 Sen elit seviyede bir 'Looksmaxxing, Hipertrofi & Fizik Koçu'sun.
 KULLANICI SET GEÇMİŞİ:
 {user_context}
 
-KAYNAK DOKÜMAN:
-{rag_text}
-
 1. SET / PROGRESSIVE OVERLOAD DEĞERLENDİRMESİ:
-- Kullanıcının veritabanındaki son ağırlık ve setlerine bakarak bir sonraki antrenmanda hedeflemesi gereken net kg ve tekrarı söyle.
+- Kullanıcının son ağırlık ve setlerine bakarak bir sonraki antrenmanda hedeflemesi gereken net kg ve tekrarı söyle.
 2. FOTOĞRAF ANALİZİ (Varsa):
 - Yemekse: Gramaj, kalori, makro çıkar.
 - Fizikse: Tahmini yağ oranı ve eksik bölgeleri listele.
