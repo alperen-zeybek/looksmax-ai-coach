@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import re
 import logging
@@ -1007,13 +1008,15 @@ NUTRITION_SYSTEM_PROMPT = """
 Sen uzman bir Spor Diyetisyeni ve Besin Değeri Hesaplama Motorusun.
 Görevin, kullanıcının yazdığı yiyecekleri analiz edip TEK bir JSON nesnesi olarak döndürmektir.
 
-ÇOK ÖNEMLİ HESAPLAMA KURALLARI:
-1. Kullanıcının girdiği miktarı (gram, kg, adet, porsiyon) doğru orantıyla hesapla:
+ÇOK ÖNEMLİ HESAPLAMA VE JSON KURALLARI:
+1. Yanıtın SADECE geçerli bir JSON objesi olmalıdır.
+2. Kullanıcının girdiği miktarı (gram, kg, adet, porsiyon) doğru orantıyla hesapla:
    - "1 kg kanat" -> 1000g tavuk kanat: ~2200 kcal, ~180g protein, 0g karb, ~160g yağ
    - "3 tam kokoreç" -> 3 x 950 kcal: ~2850 kcal, ~114g protein, ~255g karb, ~150g yağ
    - "220g tavuk, 70g bulgur, 1 laviva" -> ~720 kcal, ~75g protein, ~70g karb, ~12g yağ
-2. Başka hiçbir metin veya açıklama ekleme. SADECE aşağıdaki JSON şemasını döndür:
+3. SADECE aşağıdaki JSON şemasını döndür:
 
+```json
 {
   "coach_reply": "Kullanıcıya motive edici kısa sporcu koçu dökümü",
   "food_name": "Öğünün kısa adı (Örn: 1 Kg Tavuk Kanat)",
@@ -1023,94 +1026,3 @@ Görevin, kullanıcının yazdığı yiyecekleri analiz edip TEK bir JSON nesnes
   "carbs": 0,
   "fat": 160
 }
-"""
-
-def extract_clean_json(text: str):
-    """Hem saf JSON hem de Markdown json bloklarını hatasız ayrıştırır."""
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    
-    match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1))
-        except Exception:
-            pass
-            
-    match_brace = re.search(r'\{[^{}]*"calories"[^{}]*\}', text, re.DOTALL)
-    if match_brace:
-        try:
-            return json.loads(match_brace.group(0))
-        except Exception:
-            pass
-            
-    return None
-
-@app.post("/nutrition-chat")
-def nutrition_dialogue(data: NutritionChatInput):
-    messages = [
-        {"role": "system", "content": NUTRITION_SYSTEM_PROMPT},
-        {"role": "user", "content": f"Hesapla: {data.user_message}"}
-    ]
-
-    detected_meal = None
-    reply_text = None
-    last_error = None
-
-    for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
-        try:
-            chat_completion = client.chat.completions.create(
-                messages=messages,
-                model=model_name,
-                temperature=0.1,
-                max_tokens=600,
-                response_format={"type": "json_object"}
-            )
-            raw_content = chat_completion.choices[0].message.content
-            parsed_json = extract_clean_json(raw_content)
-
-            if parsed_json and float(parsed_json.get("calories", 0)) > 0:
-                detected_meal = {
-                    "food_name": str(parsed_json.get("food_name", data.user_message.title())),
-                    "items_summary": str(parsed_json.get("items_summary", data.user_message)),
-                    "calories": round(float(parsed_json.get("calories", 0))),
-                    "protein": round(float(parsed_json.get("protein", 0))),
-                    "carbs": round(float(parsed_json.get("carbs", 0))),
-                    "fat": round(float(parsed_json.get("fat", 0)))
-                }
-                reply_text = str(parsed_json.get("coach_reply", ""))
-                break
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(f"[/nutrition-chat] model {model_name} failed: {e}")
-            continue
-
-    if not detected_meal:
-        logger.error(f"[/nutrition-chat] Tum modeller basarisiz oldu: {last_error}")
-        return {
-            "user_message": data.user_message,
-            "coach_reply": "Bu öğün hesaplanırken anlık bir bağlantı hatası oluştu kral, lütfen tekrar bas.",
-            "detected_meal": None
-        }
-
-    if not reply_text:
-        reply_text = (
-            f"Afiyet olsun kral! Girdiğin **{detected_meal['items_summary']}** listene eklendi: "
-            f"**{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | "
-            f"{detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
-        )
-
-    return {
-        "user_message": data.user_message,
-        "coach_reply": reply_text,
-        "detected_meal": detected_meal
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
