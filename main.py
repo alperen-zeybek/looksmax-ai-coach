@@ -301,7 +301,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Ne yediysen tek tek veya topluca yaz (örn: <i>"220g tavuk, 70g bulgur, 2 tırnak pide, 105g ruffles"</i>) ya da fotoğrafını at; seçtiğin güne makroları ekleyeyim.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen tek tek veya topluca yaz (örn: <i>"220g tavuk, 70g bulgur"</i> veya sonradan <i>"1 laviva"</i>) ya da fotoğrafını at; seçtiğin güne yeni öğün olarak ekleyeyim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -979,7 +979,7 @@ def calculate_fallback_macros(text: str):
         total_fat += g * 0.02
         items_found.append(f"{int(g)}g Tavuk")
 
-    # 2. Bulgur / Bulgur Pilavı
+    # 2. Bulgur
     m_bulgur = re.search(r'(\d+)\s*g?\s*(?:bulgur|bulgur pilavı|bulgur pilavi)', t)
     if m_bulgur:
         g = float(m_bulgur.group(1))
@@ -989,7 +989,7 @@ def calculate_fallback_macros(text: str):
         total_fat += g * 0.01
         items_found.append(f"{int(g)}g Bulgur")
 
-    # 3. Pirinç / Pilav
+    # 3. Pirinç
     m_rice = re.search(r'(\d+)\s*g?\s*(?:pirinç|pilav|rice)', t)
     if m_rice and not m_bulgur:
         g = float(m_rice.group(1))
@@ -999,11 +999,11 @@ def calculate_fallback_macros(text: str):
         total_fat += g * 0.01
         items_found.append(f"{int(g)}g Pirinç")
 
-    # 4. Ruffles / Cips
+    # 4. Cips / Ruffles
     m_chips = re.search(r'(\d+)\s*g?\s*(?:ruffles|cips|doritos|lays|patates cipsi|ketçaplı ruffles)', t)
     if m_chips:
         g = float(m_chips.group(1))
-        if g < 10:  # Eğer '05 g' gibi yanlışlıkla tek haneli yazıldıysa
+        if g < 10:
             g = 105.0 if g == 5 else 50.0
         total_cal += g * 5.35
         total_pro += g * 0.06
@@ -1011,7 +1011,7 @@ def calculate_fallback_macros(text: str):
         total_fat += g * 0.33
         items_found.append(f"{int(g)}g Ruffles/Cips")
 
-    # 5. Tırnak Pide (Küçük garnitür veya normal)
+    # 5. Tırnak Pide
     m_pide = re.search(r'(\d+)\s*(?:adet|tane)?\s*(?:tırnak pide|tirnak pide|pide|tırnak)', t)
     if m_pide:
         count = float(m_pide.group(1))
@@ -1021,7 +1021,7 @@ def calculate_fallback_macros(text: str):
         total_fat += count * 1.0
         items_found.append(f"{int(count)} Tırnak Pide")
 
-    # 6. Lavaş / İnce Lavaş
+    # 6. Lavaş
     m_lavas = re.search(r'(\d+)\s*(?:adet|tane)?\s*(?:lavaş|lavas|ince lavaş|tam buğday lavaş)', t)
     if m_lavas:
         count = float(m_lavas.group(1))
@@ -1071,7 +1071,7 @@ def calculate_fallback_macros(text: str):
     if total_cal > 0:
         summary_title = ", ".join(items_found[:2]) + ("..." if len(items_found) > 2 else "")
         return {
-            "food_name": summary_title or "Girilen Zengin Öğün",
+            "food_name": summary_title or "Girilen Öğün",
             "items_summary": ", ".join(items_found),
             "calories": round(total_cal),
             "protein": round(total_pro),
@@ -1137,23 +1137,28 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
 def nutrition_dialogue(data: NutritionChatInput):
     start_time = time.time()
     
+    # Modele sadece ve sadece SON mesajı hesaplaması kesin olarak emrediliyor
     system_prompt = f"""
 Sen uzman bir Sporcu Beslenme ve Makro Koçusun.
-Kullanıcının yazdığı mesajdaki TÜM besinleri (tavuk, cips, bulgur, tırnak pide, lavaş, tatlı, yağ vb.) istisnasız tek tek hesaba katmalısın.
+
+KRİTİK VE DEĞİŞMEZ KURAL:
+1. SADECE VE SADECE kullanıcının SON mesajındaki ({data.user_message}) yiyeceklerin makrolarını ve kalorisini hesapla.
+2. Sohbet geçmişindeki (history) veya önceki öğünlerdeki besinleri ASLA bu yeni hesaba DAHİL ETME, onları tekrar toplama! Bu bağımsız tekil bir öğün kaydıdır.
+3. Örneğin kullanıcı sadece "1 tane laviva" yazdıysa, sadece o 1 lavivanın (~180 kcal, 2.5g protein, 22g karb, 9g yağ) değerlerini dön.
 
 GÖREVİN:
 Yanıtını SADECE ve SADECE aşağıdaki JSON formatında döndür:
 {{
-  "coach_reply": "Kullanıcıya samimi sporcu koçu diliyle her bir besinin makrosunu ve toplam kaloriyi açıklayan metin",
-  "food_name": "Öğünün kısa başlığı (örn: Tavuk, Bulgur, Pide & Ruffles)",
-  "items_summary": "Yenilen tüm besinlerin özeti (örn: 220g Tavuk, 70g Bulgur, 2 Tırnak Pide, 1 Lavaş, 105g Ruffles)",
-  "calories": 1450,
-  "protein": 85,
-  "carbs": 160,
-  "fat": 42
+  "coach_reply": "Kullanıcıya sadece şu an girdiği yeni besini değerlendiren kısa ve motive edici sporcu koçu mesajı",
+  "food_name": "Şu an girilen besinin kısa adı (örn: 1 Adet Laviva veya Tavuk & Bulgur)",
+  "items_summary": "Şu an girilen besinlerin özeti (örn: 1 Adet Laviva)",
+  "calories": 180,
+  "protein": 2,
+  "carbs": 22,
+  "fat": 9
 }}
 
-Önemli: "calories", "protein", "carbs", "fat" alanları girilen TÜM besinlerin toplamı olmalı ve sadece TAM SAYI içermelidir.
+Önemli: "calories", "protein", "carbs", "fat" alanları SADECE son mesajdaki besinlerin toplamı olmalı ve sadece TAM SAYI içermelidir.
 """
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -1199,18 +1204,18 @@ Yanıtını SADECE ve SADECE aşağıdaki JSON formatında döndür:
             print(f"Model {model_name} denemesi hatasi: {e}")
             continue
 
-    # Eğer LLM JSON üretemezse kapsamlı regex motoru devreye girer
+    # Model JSON üretemezse sadece son mesaja regex uygulanır
     if not detected_meal:
         detected_meal = calculate_fallback_macros(data.user_message)
 
     if not reply_text:
         if detected_meal:
-            reply_text = f"Afiyet olsun kral! Girdiğin tüm besinler (**{detected_meal['items_summary']}**) başarıyla analiz edildi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ** günlüğüne işlendi!"
+            reply_text = f"Afiyet olsun kral! Girdiğin öğün (**{detected_meal['items_summary']}**) listene eklendi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
         else:
             reply_text = "Öğünün kaydedildi kral, makrolarını dengeli tutmaya devam et!"
 
     elapsed = round(time.time() - start_time, 2)
-    print(f"--> [LOG] Nutrition Yaniti: {elapsed}sn | Toplam Cal: {detected_meal.get('calories') if detected_meal else 0}")
+    print(f"--> [LOG] Nutrition Yaniti: {elapsed}sn | Eklenen Cal: {detected_meal.get('calories') if detected_meal else 0}")
 
     return {
         "user_message": data.user_message,
