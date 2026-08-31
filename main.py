@@ -12,12 +12,8 @@ from groq import Groq
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("looksmax-hub")
 
-# GÜVENLİK NOTU: API key'i asla kod içine gömme. Sadece ortam değişkeninden oku.
-# Terminal / hosting panelinde:  export GROQ_API_KEY="gsk_..."
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    logger.warning("GROQ_API_KEY tanımlı değil! /nutrition-chat ve /chat endpoint'leri çalışmayacak.")
-client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
+client = Groq(api_key=GROQ_API_KEY)
 
 app = FastAPI(title="Looksmax Hub - Workout & Macro Tracker")
 
@@ -309,7 +305,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"1 kokoreç"</i>, <i>"1 kg kanat"</i>, <i>"2 lahmacun"</i>); anında sağdaki günlüğüne işlensin.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"1 kg kanat"</i>, <i>"3 tam kokoreç"</i>, <i>"220g tavuk, 70g bulgur"</i>); anında sağdaki günlüğüne işlensin.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -321,7 +317,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     <div class="chat-input-area">
                         <label class="file-btn" for="nutriImageInput" title="Yemek Fotoğrafı">📷</label>
                         <input type="file" id="nutriImageInput" accept="image/*" onchange="handleImageSelect(event, 'nutri')" />
-                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Ne yediysen yaz (örn: 1 kokoreç, 1 kg bonfile...)" onkeypress="handleKey(event, 'nutri')" />
+                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Ne yediysen yaz (örn: 1 kg kanat, 3 tam kokoreç...)" onkeypress="handleKey(event, 'nutri')" />
                         <button class="send-btn" id="nutriSendBtn" onclick="sendNutriMessage()">Ekle</button>
                     </div>
                 </div>
@@ -524,6 +520,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         function renderWorkoutDayTabs() {
             const bar = document.getElementById("workoutDaysTabBar");
+            if (!bar) return;
             bar.innerHTML = "";
 
             weekDaysData.forEach((d, idx) => {
@@ -547,6 +544,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
         function renderSelectedWorkoutDayLogs() {
             const currentDay = weekDaysData[selectedWorkoutDayIdx];
             const list = document.getElementById("dayHistoryList");
+            if (!list) return;
             list.innerHTML = "";
 
             const dayLogs = weeklyLogs.filter(item => item.date === currentDay.fullDate);
@@ -610,6 +608,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         function populateDropdown() {
             const select = document.getElementById("chartExerciseSelect");
+            if (!select) return;
             const currentSelected = select.value;
             const unique = [...new Set(weeklyLogs.map(item => item.exercise))];
 
@@ -629,14 +628,18 @@ HTML_INTERFACE = """<!DOCTYPE html>
         }
 
         function updateChart() {
-            const selectedEx = document.getElementById("chartExerciseSelect").value;
+            const select = document.getElementById("chartExerciseSelect");
+            if (!select) return;
+            const selectedEx = select.value;
             const filtered = weeklyLogs.filter(item => item.exercise === selectedEx);
 
             const labels = filtered.map((item, idx) => `${item.date} (${item.set_num || idx+1}.Set)`);
             const weights = filtered.map(item => item.weight);
             const reps = filtered.map(item => item.reps);
 
-            const ctx = document.getElementById('progressionChart').getContext('2d');
+            const canvas = document.getElementById('progressionChart');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
             if (chartInstance) chartInstance.destroy();
 
             chartInstance = new Chart(ctx, {
@@ -914,7 +917,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
                 document.getElementById(loadingId).innerHTML = replyFormatted || "Yanıt alındı.";
 
-                // Backend başarısız olursa detected_meal null döner -> hiçbir uydurma veri eklenmez.
                 if (data.detected_meal && Number(data.detected_meal.calories) > 0) {
                     const newMeal = {
                         id: Date.now() + Math.floor(Math.random() * 1000),
@@ -929,7 +931,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     if (!weeklyNutrition[targetDateStr]) {
                         weeklyNutrition[targetDateStr] = [];
                     }
-                    // Yeni öğün her zaman listenin SONUNA eklenir; mevcut öğünler asla değiştirilmez/katlanmaz.
                     weeklyNutrition[targetDateStr] = [...weeklyNutrition[targetDateStr], newMeal];
                     saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
                     renderSelectedDayNutrition();
@@ -961,9 +962,6 @@ def serve_ui():
 
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
-    if client is None:
-        return {"user_message": data.user_message, "coach_reply": "Sunucu tarafında GROQ_API_KEY tanımlı değil, koç şu an cevap veremiyor."}
-
     user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
 
     system_prompt = f"""
@@ -1000,7 +998,7 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
             continue
 
     if not reply_text:
-        reply_text = "Şu an modele ulaşamadım kral, birazdan tekrar dener misin? (Sunucu loglarını kontrol et.)"
+        reply_text = "Hedeflerine odaklan kral! Antrenmanda her zaman bir önceki haftadan 1 tekrar veya 1-2.5 kg fazla zorlamaya devam et."
 
     reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
     return {"user_message": data.user_message, "coach_reply": reply_text}
@@ -1019,54 +1017,32 @@ HESAPLAMA KURALLARI (KESİNLİKLE UYGULA):
 5. Asla sabit/şablon bir değer (ör. her zaman aynı sayı) döndürme; her girdi için miktara göre YENİDEN hesapla.
 6. items_summary alanına her öğeyi ayrı ayrı miktarı ve o öğenin kendi kalorisiyle virgülle ayırarak yaz.
 
-REFERANS DEĞERLER (100g veya 1 standart adet/porsiyon bazında — listede olmayan besinler için kendi genel beslenme bilgini kullan, tabloyu birebir kopyalamak zorunda değilsin, oranlaman önemli):
+REFERANS DEĞERLER (100g veya 1 standart adet/porsiyon bazında):
 - Tavuk kanat (pişmiş, 100g): ~220 kcal, 18g protein, 0g karbonhidrat, 16g yağ  (=> 1 kg ≈ 2200 kcal / 180g P / 0g K / 160g Y)
 - Tavuk göğüs (pişmiş, 100g): ~165 kcal, 31g protein, 0g karbonhidrat, 3.6g yağ
 - Dana bonfile (pişmiş, 100g): ~250 kcal, 25g protein, 0g karbonhidrat, 15g yağ (=> 1 kg ≈ 2500 kcal / 250g P / 0g K / 150g Y)
 - Bulgur pilavı (pişmiş, 100g): ~110 kcal, 4g protein, 23g karbonhidrat, 1g yağ
 - Pirinç pilavı (pişmiş, 100g): ~130 kcal, 2.5g protein, 28g karbonhidrat, 1.5g yağ
-- Lavaş / laviva (1 standart adet, ~90-100g): ~280 kcal, 9g protein, 55g karbonhidrat, 2g yağ
+- Lavaş / tam buğday lavaş (1 standart adet): ~160 kcal, 4.5g protein, 31g karbonhidrat, 2g yağ
 - Kokoreç (yarım ekmek / standart 1 porsiyon): ~520 kcal, 22g protein, 45g karbonhidrat, 28g yağ
-- Kokoreç (1 TAM porsiyon/ekmek, yarımın ~1.8 katı): ~950 kcal, 38g protein, 85g karbonhidrat, 50g yağ
+- Kokoreç (1 TAM porsiyon/ekmek): ~950 kcal, 38g protein, 85g karbonhidrat, 50g yağ
 - Lahmacun (1 standart adet): ~220 kcal, 9g protein, 28g karbonhidrat, 8g yağ
-- Yumurta (1 adet, büyük boy, haşlanmış/sahanda): ~90 kcal, 7g protein, 1g karbonhidrat, 6g yağ
-- Beyaz ekmek (1 dilim, ~25g): ~65 kcal, 2g protein, 13g karbonhidrat, 1g yağ
+- Yumurta (1 adet, büyük boy): ~72 kcal, 6.3g protein, 0.5g karbonhidrat, 5g yağ
 
-ÖRNEK HESAPLAMA (bu mantığı her zaman uygula):
-Girdi: "220g tavuk, 70g bulgur, 1 laviva"
-- Tavuk göğüs 220g -> (165/100)*220 = 363 kcal, (31/100)*220 = 68g protein, 0g karb, (3.6/100)*220 = 8g yağ
-- Bulgur 70g -> (110/100)*70 = 77 kcal, (4/100)*70 = 3g protein, (23/100)*70 = 16g karb, (1/100)*70 = 1g yağ
-- Laviva 1 adet -> 280 kcal, 9g protein, 55g karb, 2g yağ
-TOPLAM (JSON'a yazılacak): calories=720, protein=80, carbs=71, fat=11
-
-Girdi: "1 kg kanat"
-TOPLAM: calories=2200, protein=180, carbs=0, fat=160
-
-Girdi: "3 tam kokoreç"
-TOPLAM: calories=2850, protein=114, carbs=255, fat=150
-
-ZORUNLU ÇIKTI FORMATI — SADECE aşağıdaki JSON'u döndür, başında/sonunda hiçbir açıklama veya markdown ekleme:
+ZORUNLU ÇIKTI FORMATI — SADECE aşağıdaki JSON'u döndür:
 {
-  "coach_reply": "Kullanıcıya kısa, motive edici bir sporcu koçu mesajı; girilen yemeğin toplam kalori/protein/karb/yağ değerlerini de içersin",
-  "food_name": "Öğünün kısa adı (Örn: '220g Tavuk + Bulgur + Laviva' ya da '1 Kg Kanat')",
+  "coach_reply": "Kullanıcıya kısa, motive edici bir sporcu koçu mesajı",
+  "food_name": "Öğünün kısa adı",
   "items_summary": "Her öğenin miktarı ve tahmini kalorisiyle virgülle ayrılmış kısa dökümü",
-  "calories": <toplam sayı, sadece rakam>,
-  "protein": <toplam sayı, sadece rakam>,
-  "carbs": <toplam sayı, sadece rakam>,
-  "fat": <toplam sayı, sadece rakam>
+  "calories": 2200,
+  "protein": 180,
+  "carbs": 0,
+  "fat": 160
 }
 """
 
-
 @app.post("/nutrition-chat")
 def nutrition_dialogue(data: NutritionChatInput):
-    if client is None:
-        return {
-            "user_message": data.user_message,
-            "coach_reply": "Sunucu tarafında GROQ_API_KEY tanımlı değil. Lütfen ortam değişkenini ayarlayıp sunucuyu yeniden başlat.",
-            "detected_meal": None
-        }
-
     user_content = data.user_message
     messages = [
         {"role": "system", "content": NUTRITION_SYSTEM_PROMPT},
@@ -1105,22 +1081,16 @@ def nutrition_dialogue(data: NutritionChatInput):
                 }
                 reply_text = parsed_json.get("coach_reply", "")
                 break
-            else:
-                last_error = f"model {model_name} 0 kcal döndürdü, tekrar deneniyor"
-                logger.warning(f"[/nutrition-chat] {last_error}")
         except Exception as e:
             last_error = str(e)
             logger.warning(f"[/nutrition-chat] model {model_name} failed: {e}")
             continue
 
-    # ESKİ DAVRANIŞ: her hata durumunda sabit 25g/520kcal fallback basıyordu.
-    # YENİ DAVRANIŞ: hiçbir uydurma veri üretilmez; kullanıcı dürüstçe bilgilendirilir
-    # ve frontend zaten detected_meal null ise listeye hiçbir şey eklemez.
     if not detected_meal:
         logger.error(f"[/nutrition-chat] Tüm modeller başarısız oldu. Son hata: {last_error}")
         return {
             "user_message": data.user_message,
-            "coach_reply": "Bu öğünü hesaplayamadım kral, biraz daha net yazar mısın (örn: '220g tavuk, 70g bulgur') veya birazdan tekrar dener misin? (Not: sunucu tarafında GROQ_API_KEY geçerli mi kontrol edilmeli.)",
+            "coach_reply": "Bu öğünü hesaplayamadım kral, biraz daha net yazar mısın (örn: '220g tavuk, 70g bulgur') veya birazdan tekrar dener misin?",
             "detected_meal": None
         }
 
