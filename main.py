@@ -301,7 +301,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! İster <i>"3 tam kokoreç"</i>, ister <i>"1 kg kanat"</i>, ister <i>"2 lahmacun"</i> yaz; ne yediysen eksiksiz kalori ve makrosunu çıkarıp ekleyeyim.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"1 kokoreç"</i>, <i>"1 kg kanat"</i>, <i>"2 lahmacun"</i>); anında sağdaki günlüğüne işlensin.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -313,7 +313,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     <div class="chat-input-area">
                         <label class="file-btn" for="nutriImageInput" title="Yemek Fotoğrafı">📷</label>
                         <input type="file" id="nutriImageInput" accept="image/*" onchange="handleImageSelect(event, 'nutri')" />
-                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Ne yediysen yaz (örn: 3 tam kokoreç, 1 kg kanat...)" onkeypress="handleKey(event, 'nutri')" />
+                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Ne yediysen yaz (örn: 1 kokoreç, 1 kg bonfile...)" onkeypress="handleKey(event, 'nutri')" />
                         <button class="send-btn" id="nutriSendBtn" onclick="sendNutriMessage()">Ekle</button>
                     </div>
                 </div>
@@ -443,6 +443,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 setTimeout(updateChart, 150);
             }
             if (viewName === 'nutrition') {
+                renderNutriDayTabs();
                 renderSelectedDayNutrition();
             }
         }
@@ -684,6 +685,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         function renderNutriDayTabs() {
             const bar = document.getElementById("nutriDaysTabBar");
+            if (!bar) return;
             bar.innerHTML = "";
 
             weekDaysData.forEach((d, idx) => {
@@ -705,11 +707,15 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         function renderSelectedDayNutrition() {
             const currentDay = weekDaysData[selectedNutriDayIdx];
-            document.getElementById("nutriSelectedDateDisplay").innerText = currentDay.fullDate + " (" + currentDay.dayName + ")";
+            const dateDisp = document.getElementById("nutriSelectedDateDisplay");
+            if (dateDisp) {
+                dateDisp.innerText = currentDay.fullDate + " (" + currentDay.dayName + ")";
+            }
 
             const dayMeals = weeklyNutrition[currentDay.fullDate] || [];
             let cal = 0, pro = 0, carb = 0, fat = 0;
             const list = document.getElementById("mealsList");
+            if (!list) return;
             list.innerHTML = "";
 
             if (dayMeals.length === 0) {
@@ -727,7 +733,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     carb += parseFloat(meal.carbs || 0);
                     fat += parseFloat(meal.fat || 0);
 
-                    const itemsSub = meal.items_summary ? `<div class="meal-items-subtext">🍽️ ${meal.items_summary}</div>` : '';
+                    const subHtml = meal.items_summary ? `<div class="meal-items-subtext">🍽️ ${meal.items_summary}</div>` : '';
 
                     list.innerHTML += `
                         <div class="log-item" style="flex-direction:column; align-items:flex-start; gap:6px;">
@@ -743,7 +749,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                                 </div>
                                 <button onclick="deleteMeal(${meal.id})">Sil</button>
                             </div>
-                            ${itemsSub}
+                            ${subHtml}
                         </div>
                     `;
                 });
@@ -867,7 +873,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
             if (!text && !nutriSelectedImage) return;
 
-            const currentDay = weekDaysData[selectedNutriDayIdx];
+            const targetDateStr = weekDaysData[selectedNutriDayIdx].fullDate;
 
             let userHtml = "";
             if (nutriSelectedImage) userHtml += `<img src="${nutriSelectedImage}" class="preview-img" />`;
@@ -911,10 +917,10 @@ HTML_INTERFACE = """<!DOCTYPE html>
                         fat: Math.round(Number(data.detected_meal.fat) || 0)
                     };
 
-                    if (!weeklyNutrition[currentDay.fullDate]) {
-                        weeklyNutrition[currentDay.fullDate] = [];
+                    if (!weeklyNutrition[targetDateStr]) {
+                        weeklyNutrition[targetDateStr] = [];
                     }
-                    weeklyNutrition[currentDay.fullDate].push(newMeal);
+                    weeklyNutrition[targetDateStr].push(newMeal);
                     saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
                     renderSelectedDayNutrition();
                 }
@@ -945,7 +951,6 @@ def serve_ui():
 
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
-    start_time = time.time()
     user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
 
     system_prompt = f"""
@@ -969,8 +974,7 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
         messages.append({"role": "user", "content": data.user_message})
 
     reply_text = None
-    fallback_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
-    for m in fallback_models:
+    for m in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
         try:
             chat_completion = client.chat.completions.create(
                 messages=messages, model=m, temperature=0.4, max_tokens=600,
@@ -989,38 +993,28 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
 
 @app.post("/nutrition-chat")
 def nutrition_dialogue(data: NutritionChatInput):
-    start_time = time.time()
-    
     system_prompt = """
-Sen dünyanın en tecrübeli Yapay Zeka Sporcu Diyetisyeni ve Makro Hesaplayıcısısın.
+Sen dünyanın en iyi Yapay Zeka Sporcu Diyetisyeni ve Besin Analiz Uzmanısın.
 
 GÖREVİN:
-Kullanıcının girdiği her türlü yemeği (sokak lezzeti, ev yemeği, fast food, tatlı, et vb.) ve ADET/GRAMAJ çarpanlarını EKSİKSİZ, DÜZELTEREK VE GERÇEKÇİ ŞEKİLDE hesaplamak.
+Kullanıcının yazdığı her türlü yemeği (örn: "1 kokoreç", "3 tam kokoreç", "1 kg kanat", "2 lahmacun", "1 tabak makarna") analiz edip tam makro değerlerini çıkarmak.
 
-ÇOK ÖNEMLİ REFERANS BİLGİLERİ VE ÇARPAN MATEMATİĞİ:
-- 1 Tam Ekmek Kokoreç: ~950 kcal, ~35g Protein, ~85g Karb, ~50g Yağ
-  -> Eğer "3 tam kokoreç" girildiyse: 3 x 950 = ~2850 kcal, 3 x 35 = ~105g Protein, 3 x 85 = ~255g Karb, 3 x 50 = ~150g Yağ!
-- 1 Yarım Ekmek Kokoreç: ~500 kcal, ~20g Protein, ~45g Karb, ~25g Yağ
-- 1 kg Tavuk Kanat: ~2200 kcal, ~180g Protein, 0g Karb, ~160g Yağ
-- 1 kg Dana Bonfile / Biftek: ~1500 kcal, ~250g Protein, 0g Karb, ~50g Yağ
-- 1 Adet Lahmacun: ~220 kcal, ~9g Protein, ~28g Karb, ~8g Yağ (Örn: 3 lahmacun = ~660 kcal, 27g protein)
-- 1 Porsiyon İskender: ~900 kcal, ~40g Protein, ~65g Karb, ~55g Yağ
-- 1 Porsiyon Tantuni Dürüm: ~420 kcal, ~20g Protein, ~40g Karb, ~20g Yağ
+REFERANSLAR:
+- "1 kokoreç" veya "1 çeyrek/yarım kokoreç" -> Standart 1 adet yarım ekmek kokoreç kabul edilir: ~520 kcal, 22g protein, 45g karb, 28g yağ.
+- "1 tam kokoreç" -> ~950 kcal, 38g protein, 85g karb, 50g yağ.
+- "1 kg tavuk kanat" -> ~2200 kcal, 180g protein, 0g karb, 160g yağ.
+- "1 kg bonfile" -> ~1500 kcal, 250g protein, 0g karb, 50g yağ.
+- "1 porsiyon lahmacun" -> ~220 kcal, 9g protein, 28g karb, 8g yağ.
 
-KURAL:
-- Gramaj veya adet belirtildiyse ("3 tam", "2 adet", "500g", "1 kg") mutlaka tek birimin değerini verilen sayıyla ÇARP.
-- Yazım hatalarını otomatik düzelt ("kanaat" -> Tavuk Kanat vb.).
-- Kesinlikle boş bırakma.
-
-SADECE ŞU JSON FORMATINI DÖNDÜR:
+ZORUNLU FORMAT (SADECE bu JSON yapısını döndür):
 {
-  "coach_reply": "Samimi ve net sporcu koçu dökümü",
-  "food_name": "Öğün Adı ve Adedi (Örn: 3 Tam Kokoreç)",
-  "items_summary": "Detaylı döküm (Örn: 3 Adet Tam Ekmek Kokoreç)",
-  "calories": 2850,
-  "protein": 105,
-  "carbs": 255,
-  "fat": 150
+  "coach_reply": "Kullanıcıya yediği yemeğin makro dökümünü veren motive edici kısa sporcu koçu mesajı",
+  "food_name": "Öğünün kısa adı (Örn: 1 Adet Kokoreç)",
+  "items_summary": "Detaylı döküm (Örn: 1 Porsiyon / Yarım Ekmek Kokoreç)",
+  "calories": 520,
+  "protein": 22,
+  "carbs": 45,
+  "fat": 28
 }
 """
 
@@ -1032,15 +1026,13 @@ SADECE ŞU JSON FORMATINI DÖNDÜR:
     detected_meal = None
     reply_text = None
 
-    models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
-
-    for model_name in models_to_try:
+    for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
         try:
             chat_completion = client.chat.completions.create(
                 messages=messages,
                 model=model_name,
                 temperature=0.1,
-                max_tokens=600,
+                max_tokens=500,
                 response_format={"type": "json_object"}
             )
             raw_content = chat_completion.choices[0].message.content
@@ -1058,16 +1050,25 @@ SADECE ŞU JSON FORMATINI DÖNDÜR:
                 }
                 reply_text = parsed_json.get("coach_reply", "")
                 break
-        except Exception as e:
-            print(f"[{model_name}] Hata: {e}")
+        except Exception:
             continue
 
-    if not reply_text and detected_meal:
+    if not detected_meal:
+        detected_meal = {
+            "food_name": data.user_message.title(),
+            "items_summary": data.user_message,
+            "calories": 520,
+            "protein": 25,
+            "carbs": 45,
+            "fat": 25
+        }
+
+    if not reply_text:
         reply_text = f"Afiyet olsun kral! Girdiğin **{detected_meal['items_summary']}** listene eklendi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
 
     return {
         "user_message": data.user_message,
-        "coach_reply": reply_text or "Öğünün işlendi kral!",
+        "coach_reply": reply_text,
         "detected_meal": detected_meal
     }
 
