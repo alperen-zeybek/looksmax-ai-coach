@@ -144,6 +144,8 @@ HTML_INTERFACE = """<!DOCTYPE html>
         .macro-c-carb { color: #00f2fe; }
         .macro-c-fat { color: #ec4899; }
 
+        .meal-items-subtext { font-size: 0.75rem; color: #38bdf8; margin-top: 4px; font-weight: 500; }
+
         @media (max-width: 850px) {
             body { overflow: auto; height: auto; }
             .hub-grid { flex-direction: column; }
@@ -722,18 +724,23 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     carb += (meal.carbs || 0);
                     fat += (meal.fat || 0);
 
+                    const itemsSub = meal.items_summary ? `<div class="meal-items-subtext">🍽️ ${meal.items_summary}</div>` : '';
+
                     list.innerHTML += `
-                        <div class="log-item">
-                            <div>
-                                <span class="ex-title">${meal.food_name}</span>
-                                <div style="font-size:0.75rem; color:#9ca3af; margin-top:2px;">
-                                    <span class="macro-c-cal">${meal.calories} kcal</span> | 
-                                    <span class="macro-c-pro">P: ${meal.protein}g</span> | 
-                                    <span class="macro-c-carb">K: ${meal.carbs}g</span> | 
-                                    <span class="macro-c-fat">Y: ${meal.fat}g</span>
+                        <div class="log-item" style="flex-direction:column; align-items:flex-start; gap:6px;">
+                            <div style="display:flex; justify-content:space-between; width:100%; align-items:center;">
+                                <div>
+                                    <span class="ex-title">${meal.food_name}</span>
+                                    <div style="font-size:0.75rem; color:#9ca3af; margin-top:2px;">
+                                        <span class="macro-c-cal">${meal.calories} kcal</span> | 
+                                        <span class="macro-c-pro">P: ${meal.protein}g</span> | 
+                                        <span class="macro-c-carb">K: ${meal.carbs}g</span> | 
+                                        <span class="macro-c-fat">Y: ${meal.fat}g</span>
+                                    </div>
                                 </div>
+                                <button onclick="deleteMeal(${meal.id})">Sil</button>
                             </div>
-                            <button onclick="deleteMeal(${meal.id})">Sil</button>
+                            ${itemsSub}
                         </div>
                     `;
                 });
@@ -899,7 +906,8 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 if (data.detected_meal && data.detected_meal.calories > 0) {
                     const newMeal = {
                         id: Date.now(),
-                        food_name: data.detected_meal.food_name || (currentText.substring(0, 30) + "..."),
+                        food_name: data.detected_meal.food_name || "Öğün",
+                        items_summary: data.detected_meal.items_summary || currentText,
                         calories: Math.round(data.detected_meal.calories || 0),
                         protein: Math.round(data.detected_meal.protein || 0),
                         carbs: Math.round(data.detected_meal.carbs || 0),
@@ -957,55 +965,55 @@ def calculate_fallback_macros(text: str):
     total_pro = 0
     total_carb = 0
     total_fat = 0
+    items_found = []
 
-    # Tavuk
     m_chick = re.search(r'(\d+)\s*g?\s*(?:tavuk|chicken|göğüs)', t)
     if m_chick:
         g = float(m_chick.group(1))
         total_cal += g * 1.30
         total_pro += g * 0.28
         total_fat += g * 0.02
+        items_found.append(f"{int(g)}g Tavuk Göğsü")
 
-    # Pirinç
     m_rice = re.search(r'(\d+)\s*g?\s*(?:pirinç|pilav|rice)', t)
     if m_rice:
         g = float(m_rice.group(1))
         total_cal += g * 3.50
         total_pro += g * 0.07
         total_carb += g * 0.77
+        items_found.append(f"{int(g)}g Pirinç")
 
-    # Pirinç Unu
     m_rflour = re.search(r'(\d+)\s*g?\s*(?:pirinç unu|bebek bisküvisi)', t)
     if m_rflour:
         g = float(m_rflour.group(1))
         total_cal += g * 3.60
         total_pro += g * 0.07
         total_carb += g * 0.80
+        items_found.append(f"{int(g)}g Pirinç Unu")
 
-    # Zeytinyağı
     m_oil = re.search(r'(\d+)\s*g?\s*(?:zeytinyağı|yağ|zeytin yağı|oil)', t)
     if m_oil:
         g = float(m_oil.group(1))
         total_cal += g * 9.0
         total_fat += g * 1.0
+        items_found.append(f"{int(g)}g Zeytinyağı")
 
-    # Yumurta
     m_egg = re.search(r'(\d+)\s*(?:adet|tane)?\s*(?:yumurta|egg)', t)
     if m_egg:
         count = float(m_egg.group(1))
         total_cal += count * 72
         total_pro += count * 6.3
         total_fat += count * 5.0
+        items_found.append(f"{int(count)} Yumurta")
 
-    # Tam buğday ekmeği
     m_bread = re.search(r'(\d+)\s*g?\s*(?:ekmek|tam buğday)', t)
     if m_bread:
         g = float(m_bread.group(1))
         total_cal += g * 2.45
         total_pro += g * 0.09
         total_carb += g * 0.45
+        items_found.append(f"{int(g)}g Ekmek")
 
-    # Fıstık ezmesi
     m_pb = re.search(r'(\d+)\s*g?\s*(?:fıstık ezmesi|peanut butter)', t)
     if m_pb:
         g = float(m_pb.group(1))
@@ -1013,8 +1021,8 @@ def calculate_fallback_macros(text: str):
         total_pro += g * 0.25
         total_carb += g * 0.20
         total_fat += g * 0.50
+        items_found.append(f"{int(g)}g Fıstık Ezmesi")
 
-    # Badem
     m_almond = re.search(r'(\d+)\s*g?\s*(?:badem|almond)', t)
     if m_almond:
         g = float(m_almond.group(1))
@@ -1022,8 +1030,8 @@ def calculate_fallback_macros(text: str):
         total_pro += g * 0.21
         total_carb += g * 0.22
         total_fat += g * 0.50
+        items_found.append(f"{int(g)}g Badem")
 
-    # Protein Tozu
     m_whey = re.search(r'(\d+)\s*(?:ölçek|scoop|ölcek)\s*(?:protein tozu|whey|protein)', t)
     if m_whey:
         count = float(m_whey.group(1))
@@ -1031,10 +1039,13 @@ def calculate_fallback_macros(text: str):
         total_pro += count * 24
         total_carb += count * 2
         total_fat += count * 1.5
+        items_found.append(f"{int(count)} Ölçek Protein Tozu")
 
     if total_cal > 0:
+        summary_title = ", ".join(items_found[:2]) + ("..." if len(items_found) > 2 else "")
         return {
-            "food_name": "Hesaplanan Öğün",
+            "food_name": summary_title or "Girilen Öğün",
+            "items_summary": ", ".join(items_found),
             "calories": round(total_cal),
             "protein": round(total_pro),
             "carbs": round(total_carb),
@@ -1115,7 +1126,7 @@ GÖREVİN:
 3. Sporcu dilinde motive edici net bir döküm sun.
 4. YANITININ EN SON SATIRINA mutlaka ve istisnasız aşağıdaki JSON formatını ekle (Tüm toplam değerleri tek bir JSON nesnesi olarak ver):
 <<<JSON
-{{"food_name": "Kısa Öğün Özeti", "calories": 1150, "protein": 80, "carbs": 160, "fat": 25}}
+{{"food_name": "Öğün Başlığı", "items_summary": "200g Pirinç, 300g Tavuk, 20g Zeytinyağı", "calories": 1150, "protein": 80, "carbs": 160, "fat": 25}}
 JSON>>>
 """
 
@@ -1162,7 +1173,6 @@ JSON>>>
         except Exception:
             pass
 
-    # Eğer model JSON üretmediyse veya API başarısız olduysa Deterministik Motor devreye girer
     if not detected_meal:
         detected_meal = calculate_fallback_macros(data.user_message)
 
