@@ -15,7 +15,6 @@ DB_FILE = "coach_app.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Kullanıcılar tablosu
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,7 +22,6 @@ def init_db():
             password_hash TEXT NOT NULL
         )
     ''')
-    # Antrenman setleri tablosu
     c.execute('''
         CREATE TABLE IF NOT EXISTS workouts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,11 +41,11 @@ init_db()
 def hash_pw(pw: str) -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
 
-# ----------------- GROQ & CHROMADB TANIMLARI -----------------
+# ----------------- GROQ & CHROMADB -----------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
 client = Groq(api_key=GROQ_API_KEY)
 
-app = FastAPI(title="Looksmax Coach & Multi-User Tracker")
+app = FastAPI(title="Looksmax Coach & Tracker")
 
 chroma_client = chromadb.PersistentClient(path="./looksmax_db")
 collection = chroma_client.get_or_create_collection(name="looksmax_knowledge")
@@ -70,7 +68,7 @@ class ChatInput(BaseModel):
     image_base64: Optional[str] = None
     history: List[dict] = []
 
-# ----------------- FRONTEND HTML & JS -----------------
+# ----------------- FRONTEND HTML / CSS / JS -----------------
 HTML_INTERFACE = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -82,11 +80,11 @@ HTML_INTERFACE = """
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
-        body { background-color: #0b0d10; color: #e5e7eb; display: flex; justify-content: center; height: 100vh; overflow: hidden; }
-        
-        /* Modal (Giriş / Kayıt) */
-        .auth-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); display: flex; justify-content: center; align-items: center; z-index: 9999; backdrop-filter: blur(5px); }
-        .auth-box { background: #131720; border: 1px solid #1f2937; padding: 30px; border-radius: 16px; width: 340px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 10px 25px rgba(0,242,254,0.1); }
+        body { background-color: #0b0d10; color: #e5e7eb; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+        /* Auth Modal */
+        .auth-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.88); display: flex; justify-content: center; align-items: center; z-index: 9999; backdrop-filter: blur(6px); }
+        .auth-box { background: #131720; border: 1px solid #1f2937; padding: 32px; border-radius: 16px; width: 350px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 10px 30px rgba(0,242,254,0.15); }
         .auth-box h2 { font-size: 1.25rem; font-weight: 700; color: #00f2fe; text-align: center; }
         .auth-box input { background: #0b0d10; border: 1px solid #2b3547; color: #fff; padding: 12px; border-radius: 8px; font-size: 0.9rem; outline: none; }
         .auth-box input:focus { border-color: #00f2fe; }
@@ -94,64 +92,70 @@ HTML_INTERFACE = """
         .auth-toggle { font-size: 0.8rem; color: #9ca3af; text-align: center; cursor: pointer; }
         .auth-toggle b { color: #00f2fe; }
 
-        /* Ana Layout */
-        .app-layout { display: flex; width: 100%; max-width: 1400px; height: 100vh; border-left: 1px solid #1c212b; border-right: 1px solid #1c212b; }
-        
-        /* Sol Panel */
-        .tracker-panel { width: 45%; background: #10141b; border-right: 1px solid #1c212b; display: flex; flex-direction: column; padding: 20px; gap: 16px; overflow-y: auto; }
-        .tracker-header { display: flex; align-items: center; justify-content: space-between; }
-        .tracker-title { font-size: 1.05rem; font-weight: 700; color: #00f2fe; }
-        .user-badge { font-size: 0.8rem; background: #1a202c; padding: 4px 10px; border-radius: 8px; color: #10b981; border: 1px solid #2b3547; display: flex; align-items: center; gap: 8px; }
-        .logout-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.75rem; font-weight: bold; }
-        
-        .tracker-form { background: #161b24; padding: 14px; border-radius: 12px; border: 1px solid #232a38; display: flex; flex-direction: column; gap: 10px; }
-        .form-row { display: flex; gap: 8px; }
-        .tracker-form input, .tracker-form select { background: #0b0d10; border: 1px solid #2b3547; color: #fff; padding: 10px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; }
-        .tracker-form input:focus, .tracker-form select:focus { border-color: #00f2fe; }
-        .btn-add { background: #00f2fe; color: #000; border: none; font-weight: 700; padding: 10px; border-radius: 8px; cursor: pointer; transition: 0.2s; }
-        .btn-add:hover { opacity: 0.9; }
+        /* Üst Menü / Navbar */
+        .navbar { height: 64px; background: #0e1117; border-bottom: 1px solid #1c212b; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; }
+        .nav-brand { font-size: 1.15rem; font-weight: 800; color: #00f2fe; display: flex; align-items: center; gap: 8px; }
+        .nav-tabs { display: flex; gap: 8px; background: #161b24; padding: 4px; border-radius: 10px; border: 1px solid #232a38; }
+        .tab-btn { background: transparent; border: none; color: #9ca3af; padding: 8px 18px; border-radius: 8px; font-weight: 600; font-size: 0.85rem; cursor: pointer; transition: 0.2s; }
+        .tab-btn.active { background: #00f2fe; color: #000; font-weight: 700; }
+        .nav-user { display: flex; align-items: center; gap: 12px; }
+        .user-badge { font-size: 0.8rem; background: #161b24; padding: 6px 12px; border-radius: 8px; color: #10b981; border: 1px solid #2b3547; }
+        .logout-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem; font-weight: 600; }
 
-        .chart-box { background: #161b24; padding: 16px; border-radius: 12px; border: 1px solid #232a38; flex: 1; min-height: 240px; display: flex; flex-direction: column; }
-        .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .chart-header select { background: #0b0d10; border: 1px solid #2b3547; color: #00f2fe; padding: 6px 10px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; outline: none; }
+        /* Sayfa İçerik Alanı */
+        .main-content { flex: 1; display: flex; justify-content: center; overflow: hidden; position: relative; }
+        .tab-view { display: none; width: 100%; max-width: 1200px; height: 100%; padding: 20px; }
+        .tab-view.active { display: flex; }
 
-        .history-list { background: #161b24; padding: 12px; border-radius: 12px; border: 1px solid #232a38; max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
-        .history-item { display: flex; justify-content: space-between; background: #0b0d10; padding: 8px 12px; border-radius: 6px; font-size: 0.8rem; border: 1px solid #1c212b; }
-        .history-item span.highlight { color: #00f2fe; font-weight: 600; }
-        .history-item button { background: transparent; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem; }
-
-        /* Sağ Panel */
-        .chat-container { width: 55%; display: flex; flex-direction: column; height: 100vh; background: #131720; }
-        .chat-header { padding: 18px 24px; border-bottom: 1px solid #1c212b; background: #0e1117; display: flex; align-items: center; justify-content: space-between; }
-        .chat-header h1 { font-size: 1.1rem; font-weight: 700; color: #00f2fe; }
-        .chat-header span { font-size: 0.75rem; background: #1c2433; padding: 4px 10px; border-radius: 12px; color: #10b981; font-weight: 600; }
-        
-        .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+        /* --- 1. KOÇ / CHAT GÖRÜNÜMÜ --- */
+        #coachView { flex-direction: column; max-width: 900px; }
+        .chat-container { flex: 1; display: flex; flex-direction: column; background: #131720; border-radius: 16px; border: 1px solid #1c212b; overflow: hidden; }
+        .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
         .msg { max-width: 82%; padding: 13px 16px; border-radius: 12px; font-size: 0.9rem; line-height: 1.5; word-wrap: break-word; }
         .msg.user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
         .msg.coach { align-self: flex-start; background: #1a202c; border: 1px solid #283347; border-bottom-left-radius: 4px; }
-        .msg img.preview-img { max-width: 200px; border-radius: 8px; margin-bottom: 8px; display: block; }
+        .msg img.preview-img { max-width: 220px; border-radius: 8px; margin-bottom: 8px; display: block; }
         
-        .preview-container { display: none; padding: 8px 20px 0; background: #0e1117; align-items: center; gap: 10px; }
-        .preview-container img { height: 50px; border-radius: 6px; border: 1px solid #00f2fe; }
-        .preview-container button { background: #ef4444; color: white; border: none; border-radius: 50%; width: 20px; height: 20px; cursor: pointer; font-size: 11px; }
+        .preview-container { display: none; padding: 8px 16px; background: #0e1117; align-items: center; gap: 10px; border-top: 1px solid #1c212b; }
+        .preview-container img { height: 45px; border-radius: 6px; border: 1px solid #00f2fe; }
+        .preview-container button { background: #ef4444; color: white; border: none; border-radius: 50%; width: 20px; height: 20px; cursor: pointer; }
 
-        .input-area { padding: 14px 20px; border-top: 1px solid #1c212b; background: #0e1117; display: flex; gap: 10px; align-items: center; }
-        input[type="text"].chat-input { flex: 1; background: #1a202c; border: 1px solid #283347; color: #fff; padding: 12px 16px; border-radius: 10px; font-size: 0.9rem; outline: none; }
-        input[type="text"].chat-input:focus { border-color: #00f2fe; }
-        
+        .chat-input-area { padding: 14px 18px; border-top: 1px solid #1c212b; background: #0e1117; display: flex; gap: 10px; align-items: center; }
+        .chat-input { flex: 1; background: #1a202c; border: 1px solid #283347; color: #fff; padding: 12px 16px; border-radius: 10px; font-size: 0.9rem; outline: none; }
+        .chat-input:focus { border-color: #00f2fe; }
         .file-label { background: #1a202c; border: 1px solid #283347; color: #00f2fe; padding: 10px 14px; border-radius: 10px; cursor: pointer; font-size: 1rem; }
-        .file-label:hover { border-color: #00f2fe; }
         input[type="file"] { display: none; }
+        .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 700; padding: 12px 22px; border-radius: 10px; cursor: pointer; }
 
-        .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 700; padding: 12px 20px; border-radius: 10px; cursor: pointer; }
-        .send-btn:hover { opacity: 0.9; }
+        /* --- 2. PROGRESSIVE OVERLOAD GÖRÜNÜMÜ --- */
+        #overloadView { gap: 20px; }
+        .overload-left { width: 38%; display: flex; flex-direction: column; gap: 16px; }
+        .overload-right { width: 62%; display: flex; flex-direction: column; gap: 16px; }
+
+        .card { background: #131720; border: 1px solid #1c212b; border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+        .card-title { font-size: 0.95rem; font-weight: 700; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
+
+        .overload-form { display: flex; flex-direction: column; gap: 10px; }
+        .overload-form input, .overload-form select { background: #0b0d10; border: 1px solid #2b3547; color: #fff; padding: 10px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; }
+        .overload-form input:focus, .overload-form select:focus { border-color: #00f2fe; }
+        .form-row { display: flex; gap: 8px; }
+        .btn-save { background: #00f2fe; color: #000; border: none; font-weight: 700; padding: 11px; border-radius: 8px; cursor: pointer; }
+
+        .history-box { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 8px; }
+        .history-item { display: flex; justify-content: space-between; align-items: center; background: #0b0d10; padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; border: 1px solid #1c212b; }
+        .history-item .ex-name { font-weight: 600; color: #fff; }
+        .history-item .ex-stat { color: #00f2fe; font-weight: 700; }
+        .history-item button { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.85rem; }
+
+        .chart-container-box { flex: 1; min-height: 320px; position: relative; }
 
         @media (max-width: 900px) {
             body { overflow: auto; height: auto; }
-            .app-layout { flex-direction: column; height: auto; }
-            .tracker-panel, .chat-container { width: 100%; height: auto; }
-            .chat-container { height: 80vh; }
+            .navbar { flex-direction: column; height: auto; padding: 12px; gap: 10px; }
+            .main-content { overflow: visible; height: auto; }
+            .tab-view { height: auto; flex-direction: column !important; }
+            .overload-left, .overload-right { width: 100%; }
+            #coachView { height: 80vh; }
         }
     </style>
 </head>
@@ -168,77 +172,91 @@ HTML_INTERFACE = """
         </div>
     </div>
 
-    <!-- ANA PANEL -->
-    <div class="app-layout">
-        <!-- SOL PANEL -->
-        <div class="tracker-panel">
-            <div class="tracker-header">
-                <span class="tracker-title">📈 SET TRACKER</span>
-                <div class="user-badge">
-                    <span id="activeUserName">Giriş Yok</span>
-                    <button class="logout-btn" onclick="logout()">Çıkış</button>
+    <!-- ÜST NAVBAR & TABLAR -->
+    <div class="navbar">
+        <div class="nav-brand">⚡ LOOKSMAX PRO</div>
+        <div class="nav-tabs">
+            <button class="tab-btn active" id="tabCoachBtn" onclick="switchTab('coach')">💬 AI Koç</button>
+            <button class="tab-btn" id="tabOverloadBtn" onclick="switchTab('overload')">📈 Progressive Overload</button>
+        </div>
+        <div class="nav-user">
+            <div class="user-badge" id="activeUserName">Giriş Yok</div>
+            <button class="logout-btn" onclick="logout()">Çıkış</button>
+        </div>
+    </div>
+
+    <!-- ANA İÇERİK -->
+    <div class="main-content">
+
+        <!-- 1. TAB: AI KOÇ -->
+        <div class="tab-view active" id="coachView">
+            <div class="chat-container">
+                <div class="messages" id="chatBox">
+                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload koçunum. Antrenman taktikleri sorabilir, formunu ve yemek fotoğraflarını atarak makro analizi alabilirsin.</div>
+                </div>
+
+                <div class="preview-container" id="previewContainer">
+                    <img id="imagePreview" src="" alt="Görsel" />
+                    <button onclick="clearImage()">✕</button>
+                    <span style="font-size:0.75rem; color:#9ca3af;">Görsel eklendi</span>
+                </div>
+
+                <div class="chat-input-area">
+                    <label class="file-label" for="imageInput" title="Fotoğraf Yükle">📷</label>
+                    <input type="file" id="imageInput" accept="image/*" onchange="handleImageSelect(event)" />
+                    <input type="text" class="chat-input" id="userInput" placeholder="Koça soru sor..." onkeypress="handleKey(event)" />
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">Gönder</button>
                 </div>
             </div>
-
-            <!-- Set Kayıt Formu -->
-            <div class="tracker-form">
-                <input type="text" id="exerciseName" placeholder="Egzersiz Adı (örn: Incline DB Press, Bench, Squat)" list="exerciseList" />
-                <datalist id="exerciseList">
-                    <option value="Bench Press">
-                    <option value="Incline Dumbbell Press">
-                    <option value="Squat">
-                    <option value="Deadlift">
-                    <option value="Barbell Row">
-                    <option value="Overhead Press">
-                    <option value="Lateral Raise">
-                </datalist>
-                <div class="form-row">
-                    <input type="number" id="exerciseWeight" placeholder="Ağırlık (kg)" step="0.5" style="flex:1;" />
-                    <input type="number" id="exerciseReps" placeholder="Tekrar" style="flex:1;" />
-                    <input type="text" id="exerciseDate" placeholder="Tarih" style="flex:1.2;" />
-                </div>
-                <button class="btn-add" onclick="addWorkoutLog()">Seti Kaydet & Grafiğe Ekle</button>
-            </div>
-
-            <!-- Grafik Alanı -->
-            <div class="chart-box">
-                <div class="chart-header">
-                    <span style="font-size:0.85rem; font-weight:600; color:#9ca3af;">Gelişim Grafiği</span>
-                    <select id="chartExerciseSelect" onchange="updateChart()"></select>
-                </div>
-                <div style="flex:1; position:relative; min-height:160px;">
-                    <canvas id="progressionChart"></canvas>
-                </div>
-            </div>
-
-            <!-- Geçmiş Setler -->
-            <span style="font-size:0.85rem; font-weight:600; color:#9ca3af;">Kayıtlı Setlerin</span>
-            <div class="history-list" id="historyList"></div>
         </div>
 
-        <!-- SAĞ PANEL: CHAT -->
-        <div class="chat-container">
-            <div class="chat-header">
-                <h1>⚡ LOOKSMAX AI COACH</h1>
-                <span>● Vision & DB Aktif</span>
-            </div>
-            <div class="messages" id="chatBox">
-                <div class="msg coach">Selam kral! Hesabına bağlandın. Sol tarafa girdiğin tüm setler doğrudan veritabanında saklanır. Bana beslenme fotoğrafı atabilir veya antrenman tavsiyesi isteyebilirsin.</div>
+        <!-- 2. TAB: PROGRESSIVE OVERLOAD & HAREKETLER -->
+        <div class="tab-view" id="overloadView">
+            <!-- Sol: Hareket Ekle & Günün Hareketleri -->
+            <div class="overload-left">
+                <div class="card">
+                    <div class="card-title">➕ Set Kaydet</div>
+                    <div class="overload-form">
+                        <input type="text" id="exerciseName" placeholder="Hareket Adı (Örn: Bench Press, Incline DB)" list="exerciseList" />
+                        <datalist id="exerciseList">
+                            <option value="Bench Press">
+                            <option value="Incline Dumbbell Press">
+                            <option value="Squat">
+                            <option value="Deadlift">
+                            <option value="Barbell Row">
+                            <option value="Overhead Press">
+                            <option value="Lateral Raise">
+                            <option value="Pull-up">
+                        </datalist>
+                        <div class="form-row">
+                            <input type="number" id="exerciseWeight" placeholder="Kg" step="0.5" style="flex:1;" />
+                            <input type="number" id="exerciseReps" placeholder="Tekrar" style="flex:1;" />
+                            <input type="text" id="exerciseDate" placeholder="Tarih" style="flex:1.2;" />
+                        </div>
+                        <button class="btn-save" onclick="addWorkoutLog()">Seti İşle & Grafiğe Ekle</button>
+                    </div>
+                </div>
+
+                <div class="card" style="flex:1;">
+                    <div class="card-title">📋 Kayıtlı Setlerin Geçmişi</div>
+                    <div class="history-box" id="historyList"></div>
+                </div>
             </div>
 
-            <div class="preview-container" id="previewContainer">
-                <img id="imagePreview" src="" alt="Görsel" />
-                <button onclick="clearImage()">✕</button>
-                <span style="font-size:0.75rem; color:#9ca3af;">Görsel eklendi</span>
-            </div>
-
-            <div class="input-area">
-                <label class="file-label" for="imageInput" title="Fotoğraf Yükle">📷</label>
-                <input type="file" id="imageInput" accept="image/*" onchange="handleImageSelect(event)" />
-                <input type="text" class="chat-input" id="userInput" placeholder="Koça soru sor..." onkeypress="handleKey(event)" />
-                <button class="send-btn" id="sendBtn" onclick="sendMessage()">Gönder</button>
+            <!-- Sağ: Progressive Overload Grafiği -->
+            <div class="overload-right">
+                <div class="card" style="height: 100%;">
+                    <div class="card-title">
+                        <span>📊 Gelişim & Overload Eğrisi</span>
+                        <select id="chartExerciseSelect" onchange="updateChart()" style="background:#0b0d10; border:1px solid #2b3547; color:#00f2fe; padding:6px 12px; border-radius:6px; font-weight:600; outline:none;"></select>
+                    </div>
+                    <div class="chart-container-box">
+                        <canvas id="progressionChart"></canvas>
+                    </div>
+                </div>
             </div>
         </div>
+
     </div>
 
     <script>
@@ -249,7 +267,18 @@ HTML_INTERFACE = """
 
         document.getElementById("exerciseDate").value = new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
 
-        // ----------------- AUTH YÖNETİMİ -----------------
+        // TAB GEÇİŞİ
+        function switchTab(tab) {
+            document.getElementById("tabCoachBtn").classList.toggle("active", tab === 'coach');
+            document.getElementById("tabOverloadBtn").classList.toggle("active", tab === 'overload');
+            document.getElementById("coachView").classList.toggle("active", tab === 'coach');
+            document.getElementById("overloadView").classList.toggle("active", tab === 'overload');
+            if (tab === 'overload') {
+                setTimeout(updateChart, 100);
+            }
+        }
+
+        // AUTH
         function checkAuth() {
             if (!currentUser) {
                 document.getElementById("authOverlay").style.display = "flex";
@@ -293,11 +322,10 @@ HTML_INTERFACE = """
         function logout() {
             localStorage.removeItem("active_user");
             currentUser = null;
-            workoutLogs = [];
             location.reload();
         }
 
-        // ----------------- WORKOUT DB & CHART -----------------
+        // WORKOUT & CHART
         async function loadUserWorkouts() {
             if (!currentUser) return;
             try {
@@ -318,7 +346,7 @@ HTML_INTERFACE = """
             const reps = parseInt(document.getElementById("exerciseReps").value);
             const date = document.getElementById("exerciseDate").value.trim() || "Bugün";
 
-            if (!name || isNaN(weight) || isNaN(reps)) return alert("Tüm alanları doldur kral!");
+            if (!name || isNaN(weight) || isNaN(reps)) return alert("Tüm alanları eksiksiz gir kral!");
 
             try {
                 const res = await fetch("/workouts", {
@@ -376,10 +404,10 @@ HTML_INTERFACE = """
         function renderHistory() {
             const list = document.getElementById("historyList");
             list.innerHTML = "";
-            const reversed = [...workoutLogs].reverse().slice(0, 10);
+            const reversed = [...workoutLogs].reverse();
 
             if (reversed.length === 0) {
-                list.innerHTML = "<div style='color:#6b7280; font-size:0.8rem; text-align:center;'>Henüz set yok.</div>";
+                list.innerHTML = "<div style='color:#6b7280; font-size:0.85rem; text-align:center; padding:15px;'>Henüz set girilmedi.</div>";
                 return;
             }
 
@@ -387,8 +415,9 @@ HTML_INTERFACE = """
                 list.innerHTML += `
                     <div class="history-item">
                         <div>
-                            <b>${item.exercise}</b>: <span class="highlight">${item.weight} kg</span> × ${item.reps}
-                            <span style="color:#6b7280; margin-left:4px;">(${item.date})</span>
+                            <span class="ex-name">${item.exercise}</span>: 
+                            <span class="ex-stat">${item.weight} kg</span> × ${item.reps} tkr
+                            <span style="color:#6b7280; font-size:0.75rem; margin-left:6px;">(${item.date})</span>
                         </div>
                         <button onclick="deleteWorkout(${item.id})">Sil</button>
                     </div>
@@ -416,11 +445,13 @@ HTML_INTERFACE = """
                             label: 'Ağırlık (kg)',
                             data: weights,
                             borderColor: '#00f2fe',
-                            backgroundColor: 'rgba(0, 242, 254, 0.1)',
-                            borderWidth: 2,
+                            backgroundColor: 'rgba(0, 242, 254, 0.12)',
+                            borderWidth: 3,
                             yAxisID: 'y',
-                            tension: 0.3,
-                            fill: true
+                            tension: 0.35,
+                            fill: true,
+                            pointBackgroundColor: '#00f2fe',
+                            pointRadius: 4
                         },
                         {
                             label: 'Tekrar',
@@ -428,9 +459,11 @@ HTML_INTERFACE = """
                             borderColor: '#f59e0b',
                             backgroundColor: 'transparent',
                             borderWidth: 2,
-                            borderDash: [4, 4],
+                            borderDash: [5, 5],
                             yAxisID: 'y1',
-                            tension: 0.3
+                            tension: 0.35,
+                            pointBackgroundColor: '#f59e0b',
+                            pointRadius: 4
                         }
                     ]
                 },
@@ -438,16 +471,16 @@ HTML_INTERFACE = """
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                        x: { grid: { color: '#1c212b' }, ticks: { color: '#9ca3af', font: { size: 9 } } },
-                        y: { type: 'linear', position: 'left', grid: { color: '#1c212b' }, ticks: { color: '#00f2fe', font: { size: 9 } } },
-                        y1: { type: 'linear', position: 'right', grid: { display: false }, ticks: { color: '#f59e0b', font: { size: 9 } } }
+                        x: { grid: { color: '#1c212b' }, ticks: { color: '#9ca3af' } },
+                        y: { type: 'linear', position: 'left', grid: { color: '#1c212b' }, ticks: { color: '#00f2fe' } },
+                        y1: { type: 'linear', position: 'right', grid: { display: false }, ticks: { color: '#f59e0b' } }
                     },
-                    plugins: { legend: { labels: { color: '#e5e7eb', font: { size: 10 } } } }
+                    plugins: { legend: { labels: { color: '#e5e7eb', font: { size: 11, weight: 'bold' } } } }
                 }
             });
         }
 
-        // ----------------- CHAT & VISION -----------------
+        // CHAT & VISION
         let conversationHistory = [];
         let selectedBase64Image = null;
 
@@ -529,7 +562,7 @@ HTML_INTERFACE = """
 </html>
 """
 
-# ----------------- BACKEND ROUTING -----------------
+# ----------------- BACKEND ENDPOINTS -----------------
 
 @app.get("/", response_class=HTMLResponse)
 def serve_ui():
@@ -545,7 +578,7 @@ def register(auth: AuthInput):
         user_id = c.lastrowid
         return {"user_id": user_id, "username": auth.username}
     except sqlite3.IntegrityError:
-        raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten alınmış kral!")
+        raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten alınmış!")
     finally:
         conn.close()
 
@@ -592,7 +625,6 @@ def delete_workout_item(workout_id: int):
 def coach_dialogue(data: ChatInput):
     start_time = time.time()
     
-    # Kullanıcının DB'deki son 5 setini çekip prompt'a ekle
     user_context = ""
     if data.user_id:
         conn = sqlite3.connect(DB_FILE)
@@ -601,9 +633,8 @@ def coach_dialogue(data: ChatInput):
         recent = c.fetchall()
         conn.close()
         if recent:
-            user_context = "Kullanıcının Veritabanındaki Son Kayıtlı Setleri: " + ", ".join([f"{r[0]}: {r[1]}kg x {r[2]}" for r in recent])
+            user_context = "Kullanıcının Kayıtlı Son Setleri: " + ", ".join([f"{r[0]}: {r[1]}kg x {r[2]}" for r in recent])
 
-    # RAG sorgusu
     rag_text = ""
     try:
         results = collection.query(query_texts=[data.user_message], n_results=2)
@@ -614,14 +645,14 @@ def coach_dialogue(data: ChatInput):
 
     system_prompt = f"""
 Sen elit seviyede bir 'Looksmaxxing, Hipertrofi & Fizik Koçu'sun.
-KULLANICI BİLGİSİ:
+KULLANICI VERİTABANI:
 {user_context}
 
 KAYNAK DOKÜMAN:
 {rag_text}
 
 1. SET / PROGRESSIVE OVERLOAD DEĞERLENDİRMESİ:
-- Kullanıcının veritabanındaki kayıtlarını dikkate alarak bir sonraki hedef ağırlık/tekrarı net söyle.
+- Kullanıcının veritabanındaki son ağırlıklarına bakarak bir sonraki antrenmanda hedeflemesi gereken net kg ve tekrarı söyle.
 2. FOTOĞRAF ANALİZİ (Varsa):
 - Yemekse: Gramaj, kalori, makro çıkar.
 - Fizikse: Tahmini yağ oranı ve eksik bölgeleri listele.
@@ -668,7 +699,7 @@ KAYNAK DOKÜMAN:
         reply_text = "Analiz motoru şu anda yanıt veremedi kral."
 
     elapsed = round(time.time() - start_time, 2)
-    print(f"--> [LOG] İşlem tamam: {elapsed}sn")
+    print(f"--> [LOG] Yanıt üretildi: {elapsed}sn")
 
     return {
         "user_message": data.user_message,
