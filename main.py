@@ -17,8 +17,7 @@ class ChatInput(BaseModel):
     workout_summary: Optional[str] = ""
     history: List[dict] = []
 
-HTML_INTERFACE = """
-<!DOCTYPE html>
+HTML_INTERFACE = """<!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
@@ -30,7 +29,6 @@ HTML_INTERFACE = """
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
         body { background-color: #0b0d12; color: #e5e7eb; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
-        /* Auth Modal */
         .auth-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); display: flex; justify-content: center; align-items: center; z-index: 9999; backdrop-filter: blur(8px); }
         .auth-box { background: #131722; border: 1px solid #1f293d; padding: 36px; border-radius: 18px; width: 360px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 12px 40px rgba(0,242,254,0.18); }
         .auth-box h2 { font-size: 1.35rem; font-weight: 800; color: #00f2fe; text-align: center; }
@@ -40,7 +38,6 @@ HTML_INTERFACE = """
         .auth-toggle { font-size: 0.8rem; color: #9ca3af; text-align: center; cursor: pointer; }
         .auth-toggle b { color: #00f2fe; }
 
-        /* Üst Header Bar */
         .header-bar { height: 60px; background: #0f121a; border-bottom: 1px solid #1c2230; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; }
         .brand { font-size: 1.15rem; font-weight: 800; color: #00f2fe; display: flex; align-items: center; gap: 8px; cursor: pointer; }
         .back-hub-btn { background: #1a202c; color: #00f2fe; border: 1px solid #28334a; padding: 6px 14px; border-radius: 8px; font-size: 0.8rem; font-weight: 700; cursor: pointer; display: none; }
@@ -49,12 +46,10 @@ HTML_INTERFACE = """
         .user-tag { font-size: 0.8rem; background: #161c26; padding: 6px 12px; border-radius: 8px; color: #10b981; border: 1px solid #263245; }
         .logout-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem; font-weight: 600; }
 
-        /* Ana İçerik Taşıyıcı */
         .content-container { flex: 1; display: flex; justify-content: center; align-items: center; overflow: hidden; position: relative; }
         .view-panel { display: none; width: 100%; height: 100%; padding: 20px; }
         .view-panel.active { display: flex; }
 
-        /* --- 1. MODÜL SEÇİM EKRANI (HUB) --- */
         #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 32px; }
         .hub-title { text-align: center; }
         .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
@@ -69,7 +64,6 @@ HTML_INTERFACE = """
         .card-action { align-self: flex-start; background: #1a2232; color: #00f2fe; border: 1px solid #2d3b54; padding: 10px 18px; border-radius: 10px; font-weight: 700; font-size: 0.85rem; transition: 0.2s; }
         .hub-card:hover .card-action { background: #00f2fe; color: #000; }
 
-        /* --- 2. AI KOÇ EKRANI --- */
         #coachView { flex-direction: column; max-width: 950px; }
         .chat-container { flex: 1; display: flex; flex-direction: column; background: #131722; border-radius: 16px; border: 1px solid #1f2738; overflow: hidden; }
         .messages { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
@@ -89,7 +83,6 @@ HTML_INTERFACE = """
         input[type="file"] { display: none; }
         .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 800; padding: 12px 24px; border-radius: 10px; cursor: pointer; }
 
-        /* --- 3. PROGRESSIVE OVERLOAD EKRANI --- */
         #overloadView { gap: 20px; max-width: 1300px; }
         .overload-col-left { width: 44%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
         .overload-col-right { width: 56%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
@@ -105,7 +98,6 @@ HTML_INTERFACE = """
         .form-grid-row { display: flex; gap: 8px; }
         .btn-log { background: #00f2fe; color: #000; border: none; font-weight: 800; padding: 11px; border-radius: 8px; cursor: pointer; margin-top: 2px; }
 
-        /* Gün Gün Gruplanmış Antrenman Listesi */
         .history-list { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
         .day-group { background: #0e121a; border: 1px solid #1f2738; border-radius: 12px; overflow: hidden; }
         .day-header { background: #171e2c; padding: 8px 12px; font-size: 0.8rem; font-weight: 700; color: #00f2fe; display: flex; justify-content: space-between; }
@@ -257,11 +249,10 @@ HTML_INTERFACE = """
     </div>
 
     <script>
-        // HAFTALIK DÖNGÜ VE PAZARTESİ TESPİTİ
         function getMondayOfWeek(d) {
             d = new Date(d);
             var day = d.getDay(),
-                diff = d.getDate() - day + (day === 0 ? -6 : 1); // Pazartesi = 1
+                diff = d.getDate() - day + (day === 0 ? -6 : 1);
             var mon = new Date(d.setDate(diff));
             mon.setHours(0, 0, 0, 0);
             return mon.toISOString().split('T')[0];
@@ -276,7 +267,6 @@ HTML_INTERFACE = """
             localStorage.setItem("app_registered_users", JSON.stringify(users));
         }
 
-        // Kullanıcının sadece bu haftaki kayıtlarını al/kaydet
         function getUserWeeklyLogs(username) {
             const allWeeks = JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
             return allWeeks[currentWeekKey] || [];
@@ -293,12 +283,10 @@ HTML_INTERFACE = """
         let weeklyLogs = [];
         let chartInstance = null;
 
-        // Varsayılan bugünün tarihi (Örn: 31.08.2026)
         const todayStr = new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
         document.getElementById("exerciseDate").value = todayStr;
         document.getElementById("currentWeekDisplay").innerText = "Hafta: " + currentWeekKey;
 
-        // MODÜL GEÇİŞİ
         function openView(viewName) {
             document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
             const target = document.getElementById(viewName + "View");
@@ -311,7 +299,6 @@ HTML_INTERFACE = """
             }
         }
 
-        // AUTH
         function checkAuth() {
             if (!currentUser) {
                 document.getElementById("authOverlay").style.display = "flex";
@@ -367,7 +354,6 @@ HTML_INTERFACE = """
             location.reload();
         }
 
-        // SET & HAFTALIK GÜNLÜK YÖNETİMİ
         function loadUserWorkouts() {
             if (!currentUser) return;
             weeklyLogs = getUserWeeklyLogs(currentUser.username);
@@ -432,7 +418,6 @@ HTML_INTERFACE = """
             else select.value = unique[0];
         }
 
-        // GÜN GÜN GRUPLAYARAK LİSTELEME
         function renderWeeklyHistory() {
             const list = document.getElementById("historyList");
             list.innerHTML = "";
@@ -443,7 +428,6 @@ HTML_INTERFACE = """
                 return;
             }
 
-            // Tarihe göre grupla (En yeni gün en üstte)
             const grouped = {};
             weeklyLogs.forEach(item => {
                 if (!grouped[item.date]) grouped[item.date] = [];
@@ -537,7 +521,6 @@ HTML_INTERFACE = """
             });
         }
 
-        // CHAT & VISION
         let conversationHistory = [];
         let selectedBase64Image = null;
 
@@ -684,4 +667,14 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
         reply_text = "Analiz motoru şu anda yanıt veremedi kral."
 
     elapsed = round(time.time() - start_time, 2)
-    print(f"--> [LOG]
+    print(f"--> [LOG] Yanit uretildi: {elapsed}sn")
+
+    return {
+        "user_message": data.user_message,
+        "coach_reply": reply_text
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
