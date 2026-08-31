@@ -103,7 +103,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         .badge-cyan { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
 
-        /* Günler Sekmesi (Tabs) */
+        /* Ortak Günler Sekmesi (Tabs) */
         .days-tab-bar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
         .day-tab-btn { flex: 1; min-width: 48px; background: #0a0c10; border: 1px solid #1f2738; border-radius: 10px; padding: 8px 4px; color: #9ca3af; font-size: 0.75rem; font-weight: 700; cursor: pointer; text-align: center; transition: 0.2s; }
         .day-tab-btn .tab-sub { font-size: 0.65rem; color: #6b7280; display: block; margin-top: 2px; }
@@ -111,11 +111,10 @@ HTML_INTERFACE = """<!DOCTYPE html>
         .day-tab-btn.active { background: #172133; border-color: #00f2fe; color: #00f2fe; }
         .day-tab-btn.active .tab-sub { color: #38bdf8; }
 
-        /* Off Day Kartı */
-        .off-day-box { background: #0a0c10; border: 1px dashed #242f44; border-radius: 12px; padding: 36px 16px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
-        .off-day-icon { font-size: 2rem; }
-        .off-day-title { font-size: 1.05rem; font-weight: 800; color: #e5e7eb; }
-        .off-day-desc { font-size: 0.78rem; color: #6b7280; max-width: 250px; line-height: 1.4; }
+        .empty-day-box { background: #0a0c10; border: 1px dashed #242f44; border-radius: 12px; padding: 36px 16px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+        .empty-day-icon { font-size: 2rem; }
+        .empty-day-title { font-size: 1.05rem; font-weight: 800; color: #e5e7eb; }
+        .empty-day-desc { font-size: 0.78rem; color: #6b7280; max-width: 250px; line-height: 1.4; }
 
         .input-form { display: flex; flex-direction: column; gap: 10px; }
         .input-form input { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 11px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; width: 100%; }
@@ -135,7 +134,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
         .chart-box { flex: 1; min-height: 320px; position: relative; }
 
         /* --- 4. GÜNLÜK BESLENME EKRANI --- */
-        #nutritionView { gap: 20px; max-width: 1300px; }
+        #nutritionView { gap: 20px; max-width: 1350px; }
         .macro-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
         .macro-card { background: #0a0c10; border: 1px solid #1c2230; padding: 14px; border-radius: 12px; text-align: center; }
         .macro-val { font-size: 1.35rem; font-weight: 800; margin-top: 4px; }
@@ -210,8 +209,8 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 <div class="hub-card" onclick="openView('nutrition')">
                     <div>
                         <div class="card-icon">🥗</div>
-                        <div class="card-heading">Günlük Beslenme & Makro</div>
-                        <div class="card-desc">Yediklerini yaz veya fotoğrafını at; AI anında kalori ve makrolarını hesaplayıp günlüğe işlesin.</div>
+                        <div class="card-heading">Haftalık Beslenme & Makro</div>
+                        <div class="card-desc">Yediklerini yaz veya fotoğrafını at; gün gün tüm haftalık makro ve kalorilerini takip et.</div>
                     </div>
                     <div class="card-action">Makro Takip →</div>
                 </div>
@@ -276,14 +275,14 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 <!-- Günlük Sekmeli Antrenman Listesi -->
                 <div class="panel-card" style="flex:1;">
                     <div class="panel-header">
-                        <span>🗓️ Haftalık Takvim</span>
+                        <span>🗓️ Antrenman Takvimi</span>
                         <span style="font-size:0.75rem; color:#9ca3af;" id="daySetsBadge">0 Set</span>
                     </div>
 
                     <!-- 7 Gün Sekme Butonları -->
-                    <div class="days-tab-bar" id="daysTabBar"></div>
+                    <div class="days-tab-bar" id="workoutDaysTabBar"></div>
 
-                    <!-- Seçili Günün İçeriği -->
+                    <!-- Seçili Günün Antrenman İçeriği -->
                     <div class="history-list" id="dayHistoryList"></div>
                 </div>
             </div>
@@ -301,12 +300,12 @@ HTML_INTERFACE = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 4. GÜNLÜK BESLENME EKRANI -->
+        <!-- 4. GÜNLÜK & HAFTALIK BESLENME EKRANI -->
         <div class="view-panel" id="nutritionView">
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Ne yediysen tek tek veya topluca yaz (örn: <i>"200g pirinç, 300g tavuk, 20g zeytinyağı"</i>) ya da fotoğrafını at; makrolarını çıkarıp otomatik günlüğe ekleyeyim.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen tek tek veya topluca yaz (örn: <i>"200g pirinç, 300g tavuk, 20g zeytinyağı"</i>) ya da fotoğrafını at; seçtiğin güne makroları ekleyeyim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -327,10 +326,14 @@ HTML_INTERFACE = """<!DOCTYPE html>
             <div class="overload-col-right">
                 <div class="panel-card">
                     <div class="panel-header">
-                        <span>🔥 Bugünkü Makro Durumu</span>
-                        <span class="badge-cyan" id="nutriTodayDate">Bugün</span>
+                        <span>🔥 Makro Durumu</span>
+                        <span class="badge-cyan" id="nutriSelectedDateDisplay">Seçili Gün</span>
                     </div>
-                    <div class="macro-stat-grid">
+
+                    <!-- 7 Günlük Beslenme Sekmesi -->
+                    <div class="days-tab-bar" id="nutriDaysTabBar"></div>
+
+                    <div class="macro-stat-grid" style="margin-top: 6px;">
                         <div class="macro-card">
                             <div class="macro-label">Kalori</div>
                             <div class="macro-val macro-c-cal" id="totCalories">0 kcal</div>
@@ -352,8 +355,8 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
                 <div class="panel-card" style="flex:1;">
                     <div class="panel-header">
-                        <span>🍽️ Bugün Tüketilen Öğünler</span>
-                        <button onclick="clearTodayMeals()" style="background:none; border:none; color:#ef4444; font-size:0.75rem; cursor:pointer; font-weight:700;">Günü Sıfırla</button>
+                        <span>🍽️ Seçili Günün Öğünleri</span>
+                        <button onclick="clearSelectedDayMeals()" style="background:none; border:none; color:#ef4444; font-size:0.75rem; cursor:pointer; font-weight:700;">Bu Günü Sıfırla</button>
                     </div>
                     <div class="history-list" id="mealsList"></div>
                 </div>
@@ -377,7 +380,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
         const currentWeekKey = mondayObj.toISOString().split('T')[0];
         const todayKey = new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
-        // Haftanın 7 gününün gün isimleri ve formatlı tarihleri
         const dayNames = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"];
         const weekDaysData = [];
 
@@ -394,9 +396,11 @@ HTML_INTERFACE = """<!DOCTYPE html>
             });
         }
 
-        // Seçili aktif gün sekmesi (Varsayılan: Bugünün günü)
-        let selectedDayIndex = weekDaysData.findIndex(item => item.fullDate === todayKey);
-        if (selectedDayIndex === -1) selectedDayIndex = 0;
+        let selectedWorkoutDayIdx = weekDaysData.findIndex(item => item.fullDate === todayKey);
+        if (selectedWorkoutDayIdx === -1) selectedWorkoutDayIdx = 0;
+
+        let selectedNutriDayIdx = weekDaysData.findIndex(item => item.fullDate === todayKey);
+        if (selectedNutriDayIdx === -1) selectedNutriDayIdx = 0;
 
         function getStorageUsers() {
             return JSON.parse(localStorage.getItem("app_registered_users") || "{}");
@@ -405,6 +409,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             localStorage.setItem("app_registered_users", JSON.stringify(users));
         }
 
+        // Antrenman (Haftalık Bazda)
         function getUserWeeklyLogs(username) {
             const allWeeks = JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
             return allWeeks[currentWeekKey] || [];
@@ -415,25 +420,25 @@ HTML_INTERFACE = """<!DOCTYPE html>
             localStorage.setItem("user_weeks_" + username, JSON.stringify(allWeeks));
         }
 
-        function getUserDailyMeals(username) {
-            const allDays = JSON.parse(localStorage.getItem("user_nutrition_" + username) || "{}");
-            return allDays[todayKey] || [];
+        // Beslenme (Haftalık & Gün Gün)
+        function getUserWeeklyNutrition(username) {
+            const allWeeks = JSON.parse(localStorage.getItem("user_nutri_weeks_" + username) || "{}");
+            return allWeeks[currentWeekKey] || {};
         }
-        function saveUserDailyMeals(username, meals) {
-            const allDays = JSON.parse(localStorage.getItem("user_nutrition_" + username) || "{}");
-            allDays[todayKey] = meals;
-            localStorage.setItem("user_nutrition_" + username, JSON.stringify(allDays));
+        function saveUserWeeklyNutrition(username, nutriData) {
+            const allWeeks = JSON.parse(localStorage.getItem("user_nutri_weeks_" + username) || "{}");
+            allWeeks[currentWeekKey] = nutriData;
+            localStorage.setItem("user_nutri_weeks_" + username, JSON.stringify(allWeeks));
         }
 
         let currentUser = JSON.parse(localStorage.getItem("active_user") || "null");
         let isRegisterMode = false;
         let weeklyLogs = [];
-        let dailyMeals = [];
+        let weeklyNutrition = {};
         let chartInstance = null;
 
-        document.getElementById("exerciseDate").value = weekDaysData[selectedDayIndex].fullDate;
+        document.getElementById("exerciseDate").value = weekDaysData[selectedWorkoutDayIdx].fullDate;
         document.getElementById("currentWeekDisplay").innerText = "Hafta: " + currentWeekKey;
-        document.getElementById("nutriTodayDate").innerText = todayKey;
 
         function openView(viewName) {
             document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
@@ -503,24 +508,24 @@ HTML_INTERFACE = """<!DOCTYPE html>
             location.reload();
         }
 
-        // ANTRENMAN & SEKMELİ GÜNLÜK YÖNETİMİ
+        // ================= ANTRENMAN YÖNETİMİ =================
         function loadUserWorkouts() {
             if (!currentUser) return;
             weeklyLogs = getUserWeeklyLogs(currentUser.username);
             populateDropdown();
-            renderDayTabs();
-            renderSelectedDayLogs();
+            renderWorkoutDayTabs();
+            renderSelectedWorkoutDayLogs();
             updateChart();
         }
 
-        function renderDayTabs() {
-            const bar = document.getElementById("daysTabBar");
+        function renderWorkoutDayTabs() {
+            const bar = document.getElementById("workoutDaysTabBar");
             bar.innerHTML = "";
 
             weekDaysData.forEach((d, idx) => {
-                const isActive = (idx === selectedDayIndex) ? "active" : "";
+                const isActive = (idx === selectedWorkoutDayIdx) ? "active" : "";
                 bar.innerHTML += `
-                    <button class="day-tab-btn ${isActive}" onclick="selectDayTab(${idx})">
+                    <button class="day-tab-btn ${isActive}" onclick="selectWorkoutDayTab(${idx})">
                         ${d.dayName}
                         <span class="tab-sub">${d.shortDate}</span>
                     </button>
@@ -528,34 +533,32 @@ HTML_INTERFACE = """<!DOCTYPE html>
             });
         }
 
-        function selectDayTab(idx) {
-            selectedDayIndex = idx;
+        function selectWorkoutDayTab(idx) {
+            selectedWorkoutDayIdx = idx;
             document.getElementById("exerciseDate").value = weekDaysData[idx].fullDate;
-            renderDayTabs();
-            renderSelectedDayLogs();
+            renderWorkoutDayTabs();
+            renderSelectedWorkoutDayLogs();
         }
 
-        function renderSelectedDayLogs() {
-            const currentDay = weekDaysData[selectedDayIndex];
+        function renderSelectedWorkoutDayLogs() {
+            const currentDay = weekDaysData[selectedWorkoutDayIdx];
             const list = document.getElementById("dayHistoryList");
             list.innerHTML = "";
 
             const dayLogs = weeklyLogs.filter(item => item.date === currentDay.fullDate);
             document.getElementById("daySetsBadge").innerText = `${dayLogs.length} Set`;
 
-            // Eğer o gün hiç set girilmediyse -> OFF DAY
             if (dayLogs.length === 0) {
                 list.innerHTML = `
-                    <div class="off-day-box">
-                        <div class="off-day-icon">😴</div>
-                        <div class="off-day-title">Dinlenme Günü (Off Day)</div>
-                        <div class="off-day-desc">${currentDay.fullDate} tarihinde henüz kayıtlı bir setin yok kral.</div>
+                    <div class="empty-day-box">
+                        <div class="empty-day-icon">😴</div>
+                        <div class="empty-day-title">Dinlenme Günü (Off Day)</div>
+                        <div class="empty-day-desc">${currentDay.fullDate} tarihinde henüz kayıtlı bir setin yok kral.</div>
                     </div>
                 `;
                 return;
             }
 
-            // Setleri listele
             dayLogs.forEach(item => {
                 list.innerHTML += `
                     <div class="log-item">
@@ -576,7 +579,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             const setVal = document.getElementById("exerciseSet").value.trim();
             const weightVal = document.getElementById("exerciseWeight").value.trim();
             const repsVal = document.getElementById("exerciseReps").value.trim();
-            const dateVal = document.getElementById("exerciseDate").value.trim() || weekDaysData[selectedDayIndex].fullDate;
+            const dateVal = document.getElementById("exerciseDate").value.trim() || weekDaysData[selectedWorkoutDayIdx].fullDate;
 
             if (!name) return alert("Lütfen hareket adını gir kral!");
             if (!weightVal || isNaN(Number(weightVal))) return alert("Lütfen ağırlığı (kg) gir kral!");
@@ -676,64 +679,99 @@ HTML_INTERFACE = """<!DOCTYPE html>
             });
         }
 
-        // BESLENME YÖNETİMİ
+        // ================= BESLENME YÖNETİMİ =================
         function loadUserNutrition() {
             if (!currentUser) return;
-            dailyMeals = getUserDailyMeals(currentUser.username);
-            renderNutritionStats();
+            weeklyNutrition = getUserWeeklyNutrition(currentUser.username);
+            renderNutriDayTabs();
+            renderSelectedDayNutrition();
         }
 
-        function renderNutritionStats() {
+        function renderNutriDayTabs() {
+            const bar = document.getElementById("nutriDaysTabBar");
+            bar.innerHTML = "";
+
+            weekDaysData.forEach((d, idx) => {
+                const isActive = (idx === selectedNutriDayIdx) ? "active" : "";
+                bar.innerHTML += `
+                    <button class="day-tab-btn ${isActive}" onclick="selectNutriDayTab(${idx})">
+                        ${d.dayName}
+                        <span class="tab-sub">${d.shortDate}</span>
+                    </button>
+                `;
+            });
+        }
+
+        function selectNutriDayTab(idx) {
+            selectedNutriDayIdx = idx;
+            renderNutriDayTabs();
+            renderSelectedDayNutrition();
+        }
+
+        function renderSelectedDayNutrition() {
+            const currentDay = weekDaysData[selectedNutriDayIdx];
+            document.getElementById("nutriSelectedDateDisplay").innerText = currentDay.fullDate + " (" + currentDay.dayName + ")";
+
+            const dayMeals = weeklyNutrition[currentDay.fullDate] || [];
             let cal = 0, pro = 0, carb = 0, fat = 0;
             const list = document.getElementById("mealsList");
             list.innerHTML = "";
 
-            dailyMeals.forEach(meal => {
-                cal += (meal.calories || 0);
-                pro += (meal.protein || 0);
-                carb += (meal.carbs || 0);
-                fat += (meal.fat || 0);
-
-                list.innerHTML += `
-                    <div class="log-item">
-                        <div>
-                            <span class="ex-title">${meal.food_name}</span>
-                            <div style="font-size:0.75rem; color:#9ca3af; margin-top:2px;">
-                                <span class="macro-c-cal">${meal.calories} kcal</span> | 
-                                <span class="macro-c-pro">P: ${meal.protein}g</span> | 
-                                <span class="macro-c-carb">K: ${meal.carbs}g</span> | 
-                                <span class="macro-c-fat">Y: ${meal.fat}g</span>
-                            </div>
-                        </div>
-                        <button onclick="deleteMeal(${meal.id})">Sil</button>
+            if (dayMeals.length === 0) {
+                list.innerHTML = `
+                    <div class="empty-day-box">
+                        <div class="empty-day-icon">🍽️</div>
+                        <div class="empty-day-title">Öğün Girilmedi</div>
+                        <div class="empty-day-desc">${currentDay.fullDate} tarihi için henüz yemek kaydedilmedi.</div>
                     </div>
                 `;
-            });
+            } else {
+                dayMeals.forEach(meal => {
+                    cal += (meal.calories || 0);
+                    pro += (meal.protein || 0);
+                    carb += (meal.carbs || 0);
+                    fat += (meal.fat || 0);
+
+                    list.innerHTML += `
+                        <div class="log-item">
+                            <div>
+                                <span class="ex-title">${meal.food_name}</span>
+                                <div style="font-size:0.75rem; color:#9ca3af; margin-top:2px;">
+                                    <span class="macro-c-cal">${meal.calories} kcal</span> | 
+                                    <span class="macro-c-pro">P: ${meal.protein}g</span> | 
+                                    <span class="macro-c-carb">K: ${meal.carbs}g</span> | 
+                                    <span class="macro-c-fat">Y: ${meal.fat}g</span>
+                                </div>
+                            </div>
+                            <button onclick="deleteMeal(${meal.id})">Sil</button>
+                        </div>
+                    `;
+                });
+            }
 
             document.getElementById("totCalories").innerText = Math.round(cal) + " kcal";
             document.getElementById("totProtein").innerText = Math.round(pro) + "g";
             document.getElementById("totCarbs").innerText = Math.round(carb) + "g";
             document.getElementById("totFat").innerText = Math.round(fat) + "g";
-
-            if (dailyMeals.length === 0) {
-                list.innerHTML = "<div style='color:#6b7280; font-size:0.85rem; text-align:center; padding:20px;'>Bugün henüz bir şey kaydedilmedi.</div>";
-            }
         }
 
         function deleteMeal(id) {
-            dailyMeals = dailyMeals.filter(m => m.id !== id);
-            saveUserDailyMeals(currentUser.username, dailyMeals);
-            renderNutritionStats();
+            const currentDay = weekDaysData[selectedNutriDayIdx];
+            if (!weeklyNutrition[currentDay.fullDate]) return;
+            weeklyNutrition[currentDay.fullDate] = weeklyNutrition[currentDay.fullDate].filter(m => m.id !== id);
+            saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
+            renderSelectedDayNutrition();
         }
 
-        function clearTodayMeals() {
-            if (!confirm("Bugünkü tüm öğünleri sıfırlamak istiyor musun?")) return;
-            dailyMeals = [];
-            saveUserDailyMeals(currentUser.username, dailyMeals);
-            renderNutritionStats();
+        function clearSelectedDayMeals() {
+            const currentDay = weekDaysData[selectedNutriDayIdx];
+            if (!confirm(currentDay.fullDate + " tarihindeki tüm öğünleri sıfırlamak istiyor musun?")) return;
+            weeklyNutrition[currentDay.fullDate] = [];
+            saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
+            renderSelectedDayNutrition();
         }
 
-        // CHAT & VISION
+        // ================= CHAT & VISION =================
         let conversationHistory = [];
         let selectedBase64Image = null;
         let nutriHistory = [];
@@ -830,6 +868,8 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
             if (!text && !nutriSelectedImage) return;
 
+            const currentDay = weekDaysData[selectedNutriDayIdx];
+
             let userHtml = "";
             if (nutriSelectedImage) userHtml += `<img src="${nutriSelectedImage}" class="preview-img" />`;
             userHtml += `<span>${text || "Yemek analizi"}</span>`;
@@ -847,7 +887,8 @@ HTML_INTERFACE = """<!DOCTYPE html>
             chatBox.innerHTML += `<div class="msg coach" id="${loadingId}"><i>Makrolar hesaplanıyor...</i></div>`;
             chatBox.scrollTop = chatBox.scrollHeight;
 
-            const mealSummary = dailyMeals.map(m => `${m.food_name} (${m.calories} kcal)`).join(", ");
+            const dayMeals = weeklyNutrition[currentDay.fullDate] || [];
+            const mealSummary = dayMeals.map(m => `${m.food_name} (${m.calories} kcal)`).join(", ");
 
             try {
                 const response = await fetch("/nutrition-chat", {
@@ -874,9 +915,13 @@ HTML_INTERFACE = """<!DOCTYPE html>
                         carbs: Math.round(data.detected_meal.carbs || 0),
                         fat: Math.round(data.detected_meal.fat || 0)
                     };
-                    dailyMeals.push(newMeal);
-                    saveUserDailyMeals(currentUser.username, dailyMeals);
-                    renderNutritionStats();
+
+                    if (!weeklyNutrition[currentDay.fullDate]) {
+                        weeklyNutrition[currentDay.fullDate] = [];
+                    }
+                    weeklyNutrition[currentDay.fullDate].push(newMeal);
+                    saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
+                    renderSelectedDayNutrition();
                 }
 
                 nutriHistory.push({ role: "user", content: currentText });
@@ -965,11 +1010,11 @@ def nutrition_dialogue(data: NutritionChatInput):
     
     system_prompt = f"""
 Sen uzman bir 'Sporcu Beslenme & Makro Koçu'sun.
-Kullanıcının bugünkü kayıtlı öğünleri: {data.daily_summary if data.daily_summary else 'Henüz öğün girilmedi.'}
+Kullanıcının seçili gündeki kayıtlı öğünleri: {data.daily_summary if data.daily_summary else 'Henüz öğün girilmedi.'}
 
 GÖREVİN:
 1. Kullanıcının yazdığı veya görseldeki TÜM besinlerin tek tek ve TOPLAM Kalori (kcal), Protein (g), Karbonhidrat (g), Yağ (g) değerlerini doğru ve gerçekçi hesapla.
-2. Sporcu dilinde kısa ve motive edici bir döküm sun.
+2. Sporcu dilinde motive edici net bir döküm sun.
 3. YANITININ EN SON SATIRINA mutlaka ve istisnasız aşağıdaki JSON formatını ekle (Tüm toplam değerleri tek bir JSON nesnesi olarak ver):
 <<<JSON
 {{"food_name": "Kısa Öğün Özeti", "calories": 1850, "protein": 110, "carbs": 210, "fat": 45}}
