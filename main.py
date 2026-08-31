@@ -103,7 +103,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         .badge-cyan { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
 
-        /* Ortak Günler Sekmesi (Tabs) */
         .days-tab-bar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
         .day-tab-btn { flex: 1; min-width: 48px; background: #0a0c10; border: 1px solid #1f2738; border-radius: 10px; padding: 8px 4px; color: #9ca3af; font-size: 0.75rem; font-weight: 700; cursor: pointer; text-align: center; transition: 0.2s; }
         .day-tab-btn .tab-sub { font-size: 0.65rem; color: #6b7280; display: block; margin-top: 2px; }
@@ -181,7 +180,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
     <div class="content-container">
 
-        <!-- 1. GİRİŞ SEÇİM EKRANI (DASHBOARD HUB) -->
         <div class="view-panel active" id="hubView">
             <div class="hub-title">
                 <h1>Modülünü Seç Kral 🦍</h1>
@@ -217,7 +215,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 2. AI KOÇ EKRANI -->
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
@@ -239,10 +236,8 @@ HTML_INTERFACE = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 3. PROGRESSIVE OVERLOAD EKRANI -->
         <div class="view-panel" id="overloadView">
             <div class="overload-col-left">
-                <!-- Set Ekleme Kartı -->
                 <div class="panel-card">
                     <div class="panel-header">
                         <span>➕ Set Kaydet</span>
@@ -272,17 +267,13 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     </div>
                 </div>
 
-                <!-- Günlük Sekmeli Antrenman Listesi -->
                 <div class="panel-card" style="flex:1;">
                     <div class="panel-header">
                         <span>🗓️ Antrenman Takvimi</span>
                         <span style="font-size:0.75rem; color:#9ca3af;" id="daySetsBadge">0 Set</span>
                     </div>
 
-                    <!-- 7 Gün Sekme Butonları -->
                     <div class="days-tab-bar" id="workoutDaysTabBar"></div>
-
-                    <!-- Seçili Günün Antrenman İçeriği -->
                     <div class="history-list" id="dayHistoryList"></div>
                 </div>
             </div>
@@ -300,7 +291,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 4. GÜNLÜK & HAFTALIK BESLENME EKRANI -->
         <div class="view-panel" id="nutritionView">
             <div class="overload-col-left">
                 <div class="chat-container">
@@ -330,7 +320,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
                         <span class="badge-cyan" id="nutriSelectedDateDisplay">Seçili Gün</span>
                     </div>
 
-                    <!-- 7 Günlük Beslenme Sekmesi -->
                     <div class="days-tab-bar" id="nutriDaysTabBar"></div>
 
                     <div class="macro-stat-grid" style="margin-top: 6px;">
@@ -366,7 +355,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
     </div>
 
     <script>
-        // HAFTALIK DÖNGÜ VE TARİH HESAPLARI
         function getMondayOfWeek(d) {
             d = new Date(d);
             var day = d.getDay(),
@@ -409,7 +397,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
             localStorage.setItem("app_registered_users", JSON.stringify(users));
         }
 
-        // Antrenman (Haftalık Bazda)
         function getUserWeeklyLogs(username) {
             const allWeeks = JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
             return allWeeks[currentWeekKey] || [];
@@ -420,7 +407,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
             localStorage.setItem("user_weeks_" + username, JSON.stringify(allWeeks));
         }
 
-        // Beslenme (Haftalık & Gün Gün)
         function getUserWeeklyNutrition(username) {
             const allWeeks = JSON.parse(localStorage.getItem("user_nutri_weeks_" + username) || "{}");
             return allWeeks[currentWeekKey] || {};
@@ -979,14 +965,15 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
     else:
         messages.append({"role": "user", "content": data.user_message})
 
-    reply_text = None
-    try:
-        all_models = client.models.list()
-        available_models = [m.id for m in all_models.data if not any(x in m.id.lower() for x in ["whisper", "guard", "orpheus", "allam"])]
-    except Exception:
-        available_models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "groq/compound"]
+    preferred_models = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+        "qwen-2.5-32b"
+    ]
 
-    for model_name in available_models:
+    reply_text = None
+    for model_name in preferred_models:
         try:
             chat_completion = client.chat.completions.create(
                 messages=messages, model=model_name, temperature=0.4, max_tokens=600,
@@ -999,6 +986,9 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
     if not reply_text:
         reply_text = "Analiz motoru şu anda yanıt veremedi kral."
 
+    # Think bloklarını temizle
+    reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
+
     elapsed = round(time.time() - start_time, 2)
     print(f"--> [LOG] Coach Yaniti: {elapsed}sn")
 
@@ -1010,14 +1000,21 @@ def nutrition_dialogue(data: NutritionChatInput):
     
     system_prompt = f"""
 Sen uzman bir 'Sporcu Beslenme & Makro Koçu'sun.
-Kullanıcının seçili gündeki kayıtlı öğünleri: {data.daily_summary if data.daily_summary else 'Henüz öğün girilmedi.'}
+Kullanıcının bugünkü kayıtlı öğünleri: {data.daily_summary if data.daily_summary else 'Henüz öğün girilmedi.'}
+
+ÖNEMLİ REFERANS BİLGİLERİ (100g için):
+- Çiğ Tavuk Göğsü / Pişmiş Tavuk: 100g ~ 120-165 kcal, 23-31g Protein, 0g Karb, 1-3g Yağ (300g tavuk en az 65-80g protein içerir!)
+- Çiğ Pirinç: 100g ~ 360 kcal, 7g Protein, 78g Karb, 1g Yağ. (Pişmiş pirinç 100g ~ 130 kcal, 28g Karb)
+- Zeytinyağı: 10g ~ 90 kcal, 10g Yağ. (20g zeytinyağı ~ 180 kcal, 20g Yağ)
+- Yumurta (1 adet orta): ~70 kcal, 6g Protein, 5g Yağ.
 
 GÖREVİN:
-1. Kullanıcının yazdığı veya görseldeki TÜM besinlerin tek tek ve TOPLAM Kalori (kcal), Protein (g), Karbonhidrat (g), Yağ (g) değerlerini doğru ve gerçekçi hesapla.
-2. Sporcu dilinde motive edici net bir döküm sun.
-3. YANITININ EN SON SATIRINA mutlaka ve istisnasız aşağıdaki JSON formatını ekle (Tüm toplam değerleri tek bir JSON nesnesi olarak ver):
+1. Kullanıcının yazdığı TÜM besinlerin tek tek ve TOPLAM Kalori, Protein, Karbonhidrat, Yağ değerlerini doğru hesapla.
+2. Kesinlikle <think> veya düşünce etiketleri basma.
+3. Sporcu dilinde kısa ve motive edici bir döküm sun.
+4. YANITININ EN SON SATIRINA mutlaka ve istisnasız aşağıdaki JSON formatını ekle (Tüm toplam değerleri tek bir JSON nesnesi olarak ver):
 <<<JSON
-{{"food_name": "Kısa Öğün Özeti", "calories": 1850, "protein": 110, "carbs": 210, "fat": 45}}
+{{"food_name": "Kısa Öğün Özeti", "calories": 1150, "protein": 80, "carbs": 160, "fat": 25}}
 JSON>>>
 """
 
@@ -1033,14 +1030,15 @@ JSON>>>
     else:
         messages.append({"role": "user", "content": data.user_message})
 
-    reply_text = None
-    try:
-        all_models = client.models.list()
-        available_models = [m.id for m in all_models.data if not any(x in m.id.lower() for x in ["whisper", "guard", "orpheus", "allam"])]
-    except Exception:
-        available_models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "groq/compound"]
+    preferred_models = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+        "qwen-2.5-32b"
+    ]
 
-    for model_name in available_models:
+    reply_text = None
+    for model_name in preferred_models:
         try:
             chat_completion = client.chat.completions.create(
                 messages=messages, model=model_name, temperature=0.2, max_tokens=700,
@@ -1052,6 +1050,9 @@ JSON>>>
 
     if not reply_text:
         reply_text = "Makro hesaplanamadı kral."
+
+    # Think bloklarını temizle
+    reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
 
     detected_meal = None
     
