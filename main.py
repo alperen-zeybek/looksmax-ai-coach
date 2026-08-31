@@ -27,12 +27,18 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             exercise TEXT NOT NULL,
+            set_num INTEGER DEFAULT 1,
             weight REAL NOT NULL,
             reps INTEGER NOT NULL,
             date TEXT NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(id)
         )
     ''')
+    # Kolon eksikse otomatik ekleme (Migration garantisi)
+    try:
+        c.execute("ALTER TABLE workouts ADD COLUMN set_num INTEGER DEFAULT 1")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -58,6 +64,7 @@ class AuthInput(BaseModel):
 class WorkoutLogInput(BaseModel):
     user_id: int
     exercise: str
+    set_num: int
     weight: float
     reps: int
     date: str
@@ -75,96 +82,111 @@ HTML_INTERFACE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Looksmax AI Coach & Performance Tracker</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <title>Looksmax Hub & Progressive Overload</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
-        body { background-color: #0b0d10; color: #e5e7eb; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        body { background-color: #0b0d12; color: #e5e7eb; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
         /* Auth Modal */
-        .auth-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.88); display: flex; justify-content: center; align-items: center; z-index: 9999; backdrop-filter: blur(6px); }
-        .auth-box { background: #131720; border: 1px solid #1f2937; padding: 32px; border-radius: 16px; width: 350px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 10px 30px rgba(0,242,254,0.15); }
-        .auth-box h2 { font-size: 1.25rem; font-weight: 700; color: #00f2fe; text-align: center; }
-        .auth-box input { background: #0b0d10; border: 1px solid #2b3547; color: #fff; padding: 12px; border-radius: 8px; font-size: 0.9rem; outline: none; }
+        .auth-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); display: flex; justify-content: center; align-items: center; z-index: 9999; backdrop-filter: blur(8px); }
+        .auth-box { background: #131722; border: 1px solid #1f293d; padding: 36px; border-radius: 18px; width: 360px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 12px 40px rgba(0,242,254,0.18); }
+        .auth-box h2 { font-size: 1.35rem; font-weight: 800; color: #00f2fe; text-align: center; }
+        .auth-box input { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 12px 14px; border-radius: 9px; font-size: 0.9rem; outline: none; }
         .auth-box input:focus { border-color: #00f2fe; }
-        .auth-box button { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 700; padding: 12px; border-radius: 8px; cursor: pointer; }
+        .auth-box button { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 800; padding: 13px; border-radius: 9px; cursor: pointer; }
         .auth-toggle { font-size: 0.8rem; color: #9ca3af; text-align: center; cursor: pointer; }
         .auth-toggle b { color: #00f2fe; }
 
-        /* Üst Menü / Navbar */
-        .navbar { height: 64px; background: #0e1117; border-bottom: 1px solid #1c212b; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; }
-        .nav-brand { font-size: 1.15rem; font-weight: 800; color: #00f2fe; display: flex; align-items: center; gap: 8px; }
-        .nav-tabs { display: flex; gap: 8px; background: #161b24; padding: 4px; border-radius: 10px; border: 1px solid #232a38; }
-        .tab-btn { background: transparent; border: none; color: #9ca3af; padding: 8px 18px; border-radius: 8px; font-weight: 600; font-size: 0.85rem; cursor: pointer; transition: 0.2s; }
-        .tab-btn.active { background: #00f2fe; color: #000; font-weight: 700; }
-        .nav-user { display: flex; align-items: center; gap: 12px; }
-        .user-badge { font-size: 0.8rem; background: #161b24; padding: 6px 12px; border-radius: 8px; color: #10b981; border: 1px solid #2b3547; }
+        /* Üst Header Bar */
+        .header-bar { height: 60px; background: #0f121a; border-bottom: 1px solid #1c2230; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; }
+        .brand { font-size: 1.15rem; font-weight: 800; color: #00f2fe; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+        .back-hub-btn { background: #1a202c; color: #00f2fe; border: 1px solid #28334a; padding: 6px 14px; border-radius: 8px; font-size: 0.8rem; font-weight: 700; cursor: pointer; display: none; }
+        .back-hub-btn:hover { background: #232b3b; }
+        .user-section { display: flex; align-items: center; gap: 12px; }
+        .user-tag { font-size: 0.8rem; background: #161c26; padding: 6px 12px; border-radius: 8px; color: #10b981; border: 1px solid #263245; }
         .logout-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem; font-weight: 600; }
 
-        /* Sayfa İçerik Alanı */
-        .main-content { flex: 1; display: flex; justify-content: center; overflow: hidden; position: relative; }
-        .tab-view { display: none; width: 100%; max-width: 1200px; height: 100%; padding: 20px; }
-        .tab-view.active { display: flex; }
+        /* Ana İçerik Taşıyıcı */
+        .content-container { flex: 1; display: flex; justify-content: center; align-items: center; overflow: hidden; position: relative; }
+        .view-panel { display: none; width: 100%; height: 100%; padding: 20px; }
+        .view-panel.active { display: flex; }
 
-        /* --- 1. KOÇ / CHAT GÖRÜNÜMÜ --- */
-        #coachView { flex-direction: column; max-width: 900px; }
-        .chat-container { flex: 1; display: flex; flex-direction: column; background: #131720; border-radius: 16px; border: 1px solid #1c212b; overflow: hidden; }
-        .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
-        .msg { max-width: 82%; padding: 13px 16px; border-radius: 12px; font-size: 0.9rem; line-height: 1.5; word-wrap: break-word; }
-        .msg.user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
-        .msg.coach { align-self: flex-start; background: #1a202c; border: 1px solid #283347; border-bottom-left-radius: 4px; }
-        .msg img.preview-img { max-width: 220px; border-radius: 8px; margin-bottom: 8px; display: block; }
+        /* --- 1. MODÜL SEÇİM EKRANI (HUB / DASHBOARD) --- */
+        #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 32px; }
+        .hub-title { text-align: center; }
+        .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
+        .hub-title p { font-size: 0.95rem; color: #9ca3af; }
         
-        .preview-container { display: none; padding: 8px 16px; background: #0e1117; align-items: center; gap: 10px; border-top: 1px solid #1c212b; }
-        .preview-container img { height: 45px; border-radius: 6px; border: 1px solid #00f2fe; }
-        .preview-container button { background: #ef4444; color: white; border: none; border-radius: 50%; width: 20px; height: 20px; cursor: pointer; }
+        .hub-grid { display: flex; gap: 24px; max-width: 850px; width: 100%; justify-content: center; }
+        .hub-card { flex: 1; background: #131722; border: 1px solid #222c3f; border-radius: 20px; padding: 36px 28px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 8px 24px rgba(0,0,0,0.4); text-align: left; }
+        .hub-card:hover { transform: translateY(-6px); border-color: #00f2fe; box-shadow: 0 12px 35px rgba(0,242,254,0.22); }
+        .card-icon { font-size: 2.5rem; margin-bottom: 16px; }
+        .card-heading { font-size: 1.4rem; font-weight: 800; color: #fff; margin-bottom: 8px; }
+        .card-desc { font-size: 0.85rem; color: #9ca3af; line-height: 1.5; margin-bottom: 24px; }
+        .card-action { align-self: flex-start; background: #1a2232; color: #00f2fe; border: 1px solid #2d3b54; padding: 10px 18px; border-radius: 10px; font-weight: 700; font-size: 0.85rem; transition: 0.2s; }
+        .hub-card:hover .card-action { background: #00f2fe; color: #000; }
 
-        .chat-input-area { padding: 14px 18px; border-top: 1px solid #1c212b; background: #0e1117; display: flex; gap: 10px; align-items: center; }
-        .chat-input { flex: 1; background: #1a202c; border: 1px solid #283347; color: #fff; padding: 12px 16px; border-radius: 10px; font-size: 0.9rem; outline: none; }
+        /* --- 2. AI KOÇ EKRANI --- */
+        #coachView { flex-direction: column; max-width: 950px; }
+        .chat-container { flex: 1; display: flex; flex-direction: column; background: #131722; border-radius: 16px; border: 1px solid #1f2738; overflow: hidden; }
+        .messages { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
+        .msg { max-width: 82%; padding: 13px 17px; border-radius: 14px; font-size: 0.92rem; line-height: 1.5; word-wrap: break-word; }
+        .msg.user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 3px; }
+        .msg.coach { align-self: flex-start; background: #1a2130; border: 1px solid #283449; border-bottom-left-radius: 3px; }
+        .msg img.preview-img { max-width: 240px; border-radius: 8px; margin-bottom: 8px; display: block; }
+        
+        .preview-box { display: none; padding: 8px 16px; background: #0d1017; align-items: center; gap: 10px; border-top: 1px solid #1c2230; }
+        .preview-box img { height: 45px; border-radius: 6px; border: 1px solid #00f2fe; }
+        .preview-box button { background: #ef4444; color: white; border: none; border-radius: 50%; width: 22px; height: 22px; cursor: pointer; }
+
+        .chat-input-area { padding: 14px 18px; border-top: 1px solid #1c2230; background: #0f121a; display: flex; gap: 10px; align-items: center; }
+        .chat-input { flex: 1; background: #181f2c; border: 1px solid #29364d; color: #fff; padding: 12px 16px; border-radius: 10px; font-size: 0.9rem; outline: none; }
         .chat-input:focus { border-color: #00f2fe; }
-        .file-label { background: #1a202c; border: 1px solid #283347; color: #00f2fe; padding: 10px 14px; border-radius: 10px; cursor: pointer; font-size: 1rem; }
+        .file-btn { background: #181f2c; border: 1px solid #29364d; color: #00f2fe; padding: 10px 14px; border-radius: 10px; cursor: pointer; font-size: 1.1rem; }
         input[type="file"] { display: none; }
-        .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 700; padding: 12px 22px; border-radius: 10px; cursor: pointer; }
+        .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 800; padding: 12px 24px; border-radius: 10px; cursor: pointer; }
 
-        /* --- 2. PROGRESSIVE OVERLOAD GÖRÜNÜMÜ --- */
-        #overloadView { gap: 20px; }
-        .overload-left { width: 38%; display: flex; flex-direction: column; gap: 16px; }
-        .overload-right { width: 62%; display: flex; flex-direction: column; gap: 16px; }
+        /* --- 3. PROGRESSIVE OVERLOAD EKRANI --- */
+        #overloadView { gap: 20px; max-width: 1250px; }
+        .overload-col-left { width: 42%; display: flex; flex-direction: column; gap: 16px; }
+        .overload-col-right { width: 58%; display: flex; flex-direction: column; gap: 16px; }
 
-        .card { background: #131720; border: 1px solid #1c212b; border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
-        .card-title { font-size: 0.95rem; font-weight: 700; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
+        .panel-card { background: #131722; border: 1px solid #1f2738; border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+        .panel-header { font-size: 1rem; font-weight: 800; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
 
-        .overload-form { display: flex; flex-direction: column; gap: 10px; }
-        .overload-form input, .overload-form select { background: #0b0d10; border: 1px solid #2b3547; color: #fff; padding: 10px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; }
-        .overload-form input:focus, .overload-form select:focus { border-color: #00f2fe; }
-        .form-row { display: flex; gap: 8px; }
-        .btn-save { background: #00f2fe; color: #000; border: none; font-weight: 700; padding: 11px; border-radius: 8px; cursor: pointer; }
+        .input-form { display: flex; flex-direction: column; gap: 10px; }
+        .input-form input, .input-form select { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 10px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; }
+        .input-form input:focus, .input-form select:focus { border-color: #00f2fe; }
+        .form-grid-row { display: flex; gap: 8px; }
+        .btn-log { background: #00f2fe; color: #000; border: none; font-weight: 800; padding: 12px; border-radius: 8px; cursor: pointer; margin-top: 4px; }
 
-        .history-box { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 8px; }
-        .history-item { display: flex; justify-content: space-between; align-items: center; background: #0b0d10; padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; border: 1px solid #1c212b; }
-        .history-item .ex-name { font-weight: 600; color: #fff; }
-        .history-item .ex-stat { color: #00f2fe; font-weight: 700; }
-        .history-item button { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.85rem; }
+        .history-list { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 8px; }
+        .log-item { display: flex; justify-content: space-between; align-items: center; background: #0a0c10; padding: 10px 14px; border-radius: 9px; font-size: 0.85rem; border: 1px solid #1c2230; }
+        .log-item .set-badge { background: #1e293b; color: #00f2fe; padding: 2px 7px; border-radius: 5px; font-weight: 700; font-size: 0.75rem; margin-right: 6px; }
+        .log-item .ex-title { font-weight: 700; color: #fff; }
+        .log-item .ex-val { color: #38bdf8; font-weight: 700; }
+        .log-item button { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.85rem; padding: 4px; }
 
-        .chart-container-box { flex: 1; min-height: 320px; position: relative; }
+        .chart-box { flex: 1; min-height: 330px; position: relative; }
 
-        @media (max-width: 900px) {
+        @media (max-width: 850px) {
             body { overflow: auto; height: auto; }
-            .navbar { flex-direction: column; height: auto; padding: 12px; gap: 10px; }
-            .main-content { overflow: visible; height: auto; }
-            .tab-view { height: auto; flex-direction: column !important; }
-            .overload-left, .overload-right { width: 100%; }
+            .hub-grid { flex-direction: column; }
+            .content-container { height: auto; overflow: visible; }
+            .view-panel { height: auto; flex-direction: column !important; }
+            .overload-col-left, .overload-col-right { width: 100%; }
             #coachView { height: 80vh; }
         }
     </style>
 </head>
 <body>
 
-    <!-- AUTH POPUP -->
+    <!-- GİRİŞ / KAYIT MODAL -->
     <div class="auth-overlay" id="authOverlay">
         <div class="auth-box">
-            <h2 id="authTitle">⚡ GİRİŞ YAP</h2>
+            <h2 id="authTitle">⚡ LOOKSMAX PRO</h2>
             <input type="text" id="authUsername" placeholder="Kullanıcı Adı" />
             <input type="password" id="authPassword" placeholder="Şifre" />
             <button id="authSubmitBtn" onclick="handleAuthSubmit()">Giriş Yap</button>
@@ -172,85 +194,116 @@ HTML_INTERFACE = """
         </div>
     </div>
 
-    <!-- ÜST NAVBAR & TABLAR -->
-    <div class="navbar">
-        <div class="nav-brand">⚡ LOOKSMAX PRO</div>
-        <div class="nav-tabs">
-            <button class="tab-btn active" id="tabCoachBtn" onclick="switchTab('coach')">💬 AI Koç</button>
-            <button class="tab-btn" id="tabOverloadBtn" onclick="switchTab('overload')">📈 Progressive Overload</button>
+    <!-- ÜST HEADER BAR -->
+    <div class="header-bar">
+        <div style="display:flex; align-items:center; gap:12px;">
+            <div class="brand" onclick="openView('hub')">⚡ LOOKSMAX HUB</div>
+            <button class="back-hub-btn" id="backHubBtn" onclick="openView('hub')">← Ana Menü</button>
         </div>
-        <div class="nav-user">
-            <div class="user-badge" id="activeUserName">Giriş Yok</div>
+        <div class="user-section">
+            <div class="user-tag" id="activeUserName">Giriş Yapılmadı</div>
             <button class="logout-btn" onclick="logout()">Çıkış</button>
         </div>
     </div>
 
-    <!-- ANA İÇERİK -->
-    <div class="main-content">
+    <!-- ANA İÇERİK PANELİ -->
+    <div class="content-container">
 
-        <!-- 1. TAB: AI KOÇ -->
-        <div class="tab-view active" id="coachView">
-            <div class="chat-container">
-                <div class="messages" id="chatBox">
-                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload koçunum. Antrenman taktikleri sorabilir, formunu ve yemek fotoğraflarını atarak makro analizi alabilirsin.</div>
+        <!-- 1. GİRİŞ SEÇİM EKRANI (DASHBOARD HUB) -->
+        <div class="view-panel active" id="hubView">
+            <div class="hub-title">
+                <h1>Modülünü Seç Kral 🦍</h1>
+                <p>Neyi yönetmek veya geliştirmek istiyorsan tıkla ve başla.</p>
+            </div>
+            <div class="hub-grid">
+                <!-- KART 1: AI KOÇ -->
+                <div class="hub-card" onclick="openView('coach')">
+                    <div>
+                        <div class="card-icon">🤖</div>
+                        <div class="card-heading">AI Koç & Vision</div>
+                        <div class="card-desc">Hipertrofi taktikleri, form kontrolü, yemek fotoğraflarından kalori/makro analizi ve fizik değerlendirmesi yap.</div>
+                    </div>
+                    <div class="card-action">Koçla Konuş →</div>
                 </div>
 
-                <div class="preview-container" id="previewContainer">
+                <!-- KART 2: PROGRESSIVE OVERLOAD -->
+                <div class="hub-card" onclick="openView('overload')">
+                    <div>
+                        <div class="card-icon">📈</div>
+                        <div class="card-heading">Progressive Overload</div>
+                        <div class="card-desc">Günün hareketlerini, setlerini ve ağırlıklarını kaydet. Gelişim grafiğiyle sınırlarını zorla.</div>
+                    </div>
+                    <div class="card-action">Overload Takip →</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. AI KOÇ EKRANI -->
+        <div class="view-panel" id="coachView">
+            <div class="chat-container">
+                <div class="messages" id="chatBox">
+                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload koçunum. Antrenman taktikleri sorabilir, formunu veya yemek fotoğraflarını atarak makro analizi alabilirsin.</div>
+                </div>
+
+                <div class="preview-box" id="previewBox">
                     <img id="imagePreview" src="" alt="Görsel" />
                     <button onclick="clearImage()">✕</button>
-                    <span style="font-size:0.75rem; color:#9ca3af;">Görsel eklendi</span>
+                    <span style="font-size:0.75rem; color:#9ca3af;">Görsel seçildi</span>
                 </div>
 
                 <div class="chat-input-area">
-                    <label class="file-label" for="imageInput" title="Fotoğraf Yükle">📷</label>
+                    <label class="file-btn" for="imageInput" title="Fotoğraf Yükle">📷</label>
                     <input type="file" id="imageInput" accept="image/*" onchange="handleImageSelect(event)" />
-                    <input type="text" class="chat-input" id="userInput" placeholder="Koça soru sor..." onkeypress="handleKey(event)" />
+                    <input type="text" class="chat-input" id="userInput" placeholder="Koça danış..." onkeypress="handleKey(event)" />
                     <button class="send-btn" id="sendBtn" onclick="sendMessage()">Gönder</button>
                 </div>
             </div>
         </div>
 
-        <!-- 2. TAB: PROGRESSIVE OVERLOAD & HAREKETLER -->
-        <div class="tab-view" id="overloadView">
-            <!-- Sol: Hareket Ekle & Günün Hareketleri -->
-            <div class="overload-left">
-                <div class="card">
-                    <div class="card-title">➕ Set Kaydet</div>
-                    <div class="overload-form">
-                        <input type="text" id="exerciseName" placeholder="Hareket Adı (Örn: Bench Press, Incline DB)" list="exerciseList" />
-                        <datalist id="exerciseList">
+        <!-- 3. PROGRESSIVE OVERLOAD EKRANI -->
+        <div class="view-panel" id="overloadView">
+            <!-- Sol Panel: Set Ekleme & Liste -->
+            <div class="overload-col-left">
+                <div class="panel-card">
+                    <div class="panel-header">➕ Yeni Set Kaydet</div>
+                    <div class="input-form">
+                        <input type="text" id="exerciseName" placeholder="Hareket Adı (Örn: Incline Dumbbell Press)" list="defaultExercises" />
+                        <datalist id="defaultExercises">
                             <option value="Bench Press">
                             <option value="Incline Dumbbell Press">
                             <option value="Squat">
                             <option value="Deadlift">
-                            <option value="Barbell Row">
+                            <option value="Chest Supported Row">
                             <option value="Overhead Press">
                             <option value="Lateral Raise">
                             <option value="Pull-up">
+                            <option value="Face Pull">
                         </datalist>
-                        <div class="form-row">
-                            <input type="number" id="exerciseWeight" placeholder="Kg" step="0.5" style="flex:1;" />
+
+                        <div class="form-grid-row">
+                            <input type="number" id="exerciseSet" placeholder="Set No" min="1" value="1" style="flex:1;" />
+                            <input type="number" id="exerciseWeight" placeholder="Kilo (kg)" step="0.5" style="flex:1.2;" />
                             <input type="number" id="exerciseReps" placeholder="Tekrar" style="flex:1;" />
                             <input type="text" id="exerciseDate" placeholder="Tarih" style="flex:1.2;" />
                         </div>
-                        <button class="btn-save" onclick="addWorkoutLog()">Seti İşle & Grafiğe Ekle</button>
+                        <button class="btn-log" onclick="addWorkoutLog()">Seti Kaydet & Grafiğe Ekle</button>
                     </div>
                 </div>
 
-                <div class="card" style="flex:1;">
-                    <div class="card-title">📋 Kayıtlı Setlerin Geçmişi</div>
-                    <div class="history-box" id="historyList"></div>
+                <div class="panel-card" style="flex:1;">
+                    <div class="panel-header">📋 Girilen Setler</div>
+                    <div class="history-list" id="historyList"></div>
                 </div>
             </div>
 
-            <!-- Sağ: Progressive Overload Grafiği -->
-            <div class="overload-right">
-                <div class="card" style="height: 100%;">
-                    <div class="card-title">
-                        <span>📊 Gelişim & Overload Eğrisi</span>
-                        <select id="chartExerciseSelect" onchange="updateChart()" style="background:#0b0d10; border:1px solid #2b3547; color:#00f2fe; padding:6px 12px; border-radius:6px; font-weight:600; outline:none;"></select>
+            <!-- Sağ Panel: Grafik -->
+            <div class="overload-col-right">
+                <div class="panel-card" style="height: 100%;">
+                    <div class="panel-header">
+                        <span>📊 Ağırlık / Hacim Grafiği</span>
+                        <select id="chartExerciseSelect" onchange="updateChart()" style="background:#0a0c10; border:1px solid #2b354d; color:#00f2fe; padding:6px 12px; border-radius:7px; font-weight:700; outline:none;"></select>
                     </div>
-                    <div class="chart-container-box">
+                    <div class="chart-box">
                         <canvas id="progressionChart"></canvas>
                     </div>
                 </div>
@@ -267,18 +320,20 @@ HTML_INTERFACE = """
 
         document.getElementById("exerciseDate").value = new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
 
-        // TAB GEÇİŞİ
-        function switchTab(tab) {
-            document.getElementById("tabCoachBtn").classList.toggle("active", tab === 'coach');
-            document.getElementById("tabOverloadBtn").classList.toggle("active", tab === 'overload');
-            document.getElementById("coachView").classList.toggle("active", tab === 'coach');
-            document.getElementById("overloadView").classList.toggle("active", tab === 'overload');
-            if (tab === 'overload') {
-                setTimeout(updateChart, 100);
+        // MODÜL / GÖRÜNÜM GEÇİŞİ
+        function openView(viewName) {
+            document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
+            const target = document.getElementById(viewName + "View");
+            if (target) target.classList.add("active");
+
+            document.getElementById("backHubBtn").style.display = (viewName === 'hub') ? 'none' : 'block';
+
+            if (viewName === 'overload') {
+                setTimeout(updateChart, 150);
             }
         }
 
-        // AUTH
+        // AUTH KONTROL
         function checkAuth() {
             if (!currentUser) {
                 document.getElementById("authOverlay").style.display = "flex";
@@ -299,7 +354,7 @@ HTML_INTERFACE = """
         async function handleAuthSubmit() {
             const u = document.getElementById("authUsername").value.trim();
             const p = document.getElementById("authPassword").value.trim();
-            if (!u || !p) return alert("Kullanıcı adı ve şifre girin!");
+            if (!u || !p) return alert("Kullanıcı adı ve şifre gir!");
 
             const endpoint = isRegisterMode ? "/register" : "/login";
             try {
@@ -309,7 +364,7 @@ HTML_INTERFACE = """
                     body: JSON.stringify({ username: u, password: p })
                 });
                 const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || "İşlem başarısız");
+                if (!res.ok) throw new Error(data.detail || "Hata oluştu");
 
                 currentUser = { id: data.user_id, username: data.username };
                 localStorage.setItem("active_user", JSON.stringify(currentUser));
@@ -325,7 +380,7 @@ HTML_INTERFACE = """
             location.reload();
         }
 
-        // WORKOUT & CHART
+        // WORKOUT LOGGING & GRAFİK
         async function loadUserWorkouts() {
             if (!currentUser) return;
             try {
@@ -335,18 +390,19 @@ HTML_INTERFACE = """
                 renderHistory();
                 updateChart();
             } catch (err) {
-                console.error("Setler yüklenemedi", err);
+                console.error("Setler alınamadı", err);
             }
         }
 
         async function addWorkoutLog() {
             if (!currentUser) return;
             const name = document.getElementById("exerciseName").value.trim();
+            const setNum = parseInt(document.getElementById("exerciseSet").value) || 1;
             const weight = parseFloat(document.getElementById("exerciseWeight").value);
             const reps = parseInt(document.getElementById("exerciseReps").value);
             const date = document.getElementById("exerciseDate").value.trim() || "Bugün";
 
-            if (!name || isNaN(weight) || isNaN(reps)) return alert("Tüm alanları eksiksiz gir kral!");
+            if (!name || isNaN(weight) || isNaN(reps)) return alert("Tüm bilgileri eksiksiz doldur kral!");
 
             try {
                 const res = await fetch("/workouts", {
@@ -355,13 +411,16 @@ HTML_INTERFACE = """
                     body: JSON.stringify({
                         user_id: currentUser.id,
                         exercise: name,
+                        set_num: setNum,
                         weight: weight,
                         reps: reps,
                         date: date
                     })
                 });
                 if (!res.ok) throw new Error("Kayıt başarısız");
-                
+
+                // Bir sonraki sete hazırla
+                document.getElementById("exerciseSet").value = setNum + 1;
                 document.getElementById("exerciseWeight").value = "";
                 document.getElementById("exerciseReps").value = "";
                 loadUserWorkouts();
@@ -407,16 +466,17 @@ HTML_INTERFACE = """
             const reversed = [...workoutLogs].reverse();
 
             if (reversed.length === 0) {
-                list.innerHTML = "<div style='color:#6b7280; font-size:0.85rem; text-align:center; padding:15px;'>Henüz set girilmedi.</div>";
+                list.innerHTML = "<div style='color:#6b7280; font-size:0.85rem; text-align:center; padding:15px;'>Henüz set kaydedilmedi.</div>";
                 return;
             }
 
             reversed.forEach(item => {
                 list.innerHTML += `
-                    <div class="history-item">
+                    <div class="log-item">
                         <div>
-                            <span class="ex-name">${item.exercise}</span>: 
-                            <span class="ex-stat">${item.weight} kg</span> × ${item.reps} tkr
+                            <span class="set-badge">${item.set_num || 1}. SET</span>
+                            <span class="ex-title">${item.exercise}</span>: 
+                            <span class="ex-val">${item.weight} kg</span> × ${item.reps} tkr
                             <span style="color:#6b7280; font-size:0.75rem; margin-left:6px;">(${item.date})</span>
                         </div>
                         <button onclick="deleteWorkout(${item.id})">Sil</button>
@@ -429,7 +489,7 @@ HTML_INTERFACE = """
             const selectedEx = document.getElementById("chartExerciseSelect").value;
             const filtered = workoutLogs.filter(item => item.exercise === selectedEx);
 
-            const labels = filtered.map(item => item.date);
+            const labels = filtered.map((item, idx) => `${item.date} (${item.set_num || idx+1}.Set)`);
             const weights = filtered.map(item => item.weight);
             const reps = filtered.map(item => item.reps);
 
@@ -471,8 +531,8 @@ HTML_INTERFACE = """
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                        x: { grid: { color: '#1c212b' }, ticks: { color: '#9ca3af' } },
-                        y: { type: 'linear', position: 'left', grid: { color: '#1c212b' }, ticks: { color: '#00f2fe' } },
+                        x: { grid: { color: '#1a2230' }, ticks: { color: '#9ca3af' } },
+                        y: { type: 'linear', position: 'left', grid: { color: '#1a2230' }, ticks: { color: '#00f2fe' } },
                         y1: { type: 'linear', position: 'right', grid: { display: false }, ticks: { color: '#f59e0b' } }
                     },
                     plugins: { legend: { labels: { color: '#e5e7eb', font: { size: 11, weight: 'bold' } } } }
@@ -491,7 +551,7 @@ HTML_INTERFACE = """
             reader.onload = function(e) {
                 selectedBase64Image = e.target.result;
                 document.getElementById("imagePreview").src = selectedBase64Image;
-                document.getElementById("previewContainer").style.display = "flex";
+                document.getElementById("previewBox").style.display = "flex";
             };
             reader.readAsDataURL(file);
         }
@@ -499,7 +559,7 @@ HTML_INTERFACE = """
         function clearImage() {
             selectedBase64Image = null;
             document.getElementById("imageInput").value = "";
-            document.getElementById("previewContainer").style.display = "none";
+            document.getElementById("previewBox").style.display = "none";
         }
 
         async function sendMessage() {
@@ -597,17 +657,17 @@ def login(auth: AuthInput):
 def get_workouts(user_id: int):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id, exercise, weight, reps, date FROM workouts WHERE user_id = ? ORDER BY id ASC", (user_id,))
+    c.execute("SELECT id, exercise, set_num, weight, reps, date FROM workouts WHERE user_id = ? ORDER BY id ASC", (user_id,))
     rows = c.fetchall()
     conn.close()
-    return [{"id": r[0], "exercise": r[1], "weight": r[2], "reps": r[3], "date": r[4]} for r in rows]
+    return [{"id": r[0], "exercise": r[1], "set_num": r[2], "weight": r[3], "reps": r[4], "date": r[5]} for r in rows]
 
 @app.post("/workouts")
 def add_workout(data: WorkoutLogInput):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO workouts (user_id, exercise, weight, reps, date) VALUES (?, ?, ?, ?, ?)",
-              (data.user_id, data.exercise, data.weight, data.reps, data.date))
+    c.execute("INSERT INTO workouts (user_id, exercise, set_num, weight, reps, date) VALUES (?, ?, ?, ?, ?, ?)",
+              (data.user_id, data.exercise, data.set_num, data.weight, data.reps, data.date))
     conn.commit()
     conn.close()
     return {"status": "success"}
@@ -629,11 +689,11 @@ def coach_dialogue(data: ChatInput):
     if data.user_id:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("SELECT exercise, weight, reps FROM workouts WHERE user_id = ? ORDER BY id DESC LIMIT 5", (data.user_id,))
+        c.execute("SELECT exercise, set_num, weight, reps FROM workouts WHERE user_id = ? ORDER BY id DESC LIMIT 6", (data.user_id,))
         recent = c.fetchall()
         conn.close()
         if recent:
-            user_context = "Kullanıcının Kayıtlı Son Setleri: " + ", ".join([f"{r[0]}: {r[1]}kg x {r[2]}" for r in recent])
+            user_context = "Kullanıcının Son Setleri: " + ", ".join([f"{r[0]} ({r[1]}.Set): {r[2]}kg x {r[3]}" for r in recent])
 
     rag_text = ""
     try:
@@ -645,14 +705,14 @@ def coach_dialogue(data: ChatInput):
 
     system_prompt = f"""
 Sen elit seviyede bir 'Looksmaxxing, Hipertrofi & Fizik Koçu'sun.
-KULLANICI VERİTABANI:
+KULLANICI SET GEÇMİŞİ:
 {user_context}
 
 KAYNAK DOKÜMAN:
 {rag_text}
 
 1. SET / PROGRESSIVE OVERLOAD DEĞERLENDİRMESİ:
-- Kullanıcının veritabanındaki son ağırlıklarına bakarak bir sonraki antrenmanda hedeflemesi gereken net kg ve tekrarı söyle.
+- Kullanıcının veritabanındaki son ağırlık ve setlerine bakarak bir sonraki antrenmanda hedeflemesi gereken net kg ve tekrarı söyle.
 2. FOTOĞRAF ANALİZİ (Varsa):
 - Yemekse: Gramaj, kalori, makro çıkar.
 - Fizikse: Tahmini yağ oranı ve eksik bölgeleri listele.
