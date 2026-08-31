@@ -11,7 +11,7 @@ from groq import Groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
 client = Groq(api_key=GROQ_API_KEY)
 
-app = FastAPI(title="Looksmax Hub & Macro Tracker")
+app = FastAPI(title="Looksmax Hub - Workout & Macro Tracker")
 
 class ChatInput(BaseModel):
     user_message: str
@@ -94,14 +94,28 @@ HTML_INTERFACE = """<!DOCTYPE html>
         .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 800; padding: 12px 24px; border-radius: 10px; cursor: pointer; }
 
         /* --- 3. PROGRESSIVE OVERLOAD EKRANI --- */
-        #overloadView { gap: 20px; max-width: 1300px; }
-        .overload-col-left { width: 44%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
-        .overload-col-right { width: 56%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
+        #overloadView { gap: 20px; max-width: 1350px; }
+        .overload-col-left { width: 46%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
+        .overload-col-right { width: 54%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
 
         .panel-card { background: #131722; border: 1px solid #1f2738; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
         .panel-header { font-size: 0.95rem; font-weight: 800; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
 
         .badge-cyan { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
+
+        /* Günler Sekmesi (Tabs) */
+        .days-tab-bar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+        .day-tab-btn { flex: 1; min-width: 48px; background: #0a0c10; border: 1px solid #1f2738; border-radius: 10px; padding: 8px 4px; color: #9ca3af; font-size: 0.75rem; font-weight: 700; cursor: pointer; text-align: center; transition: 0.2s; }
+        .day-tab-btn .tab-sub { font-size: 0.65rem; color: #6b7280; display: block; margin-top: 2px; }
+        .day-tab-btn:hover { border-color: #2b3a52; color: #fff; }
+        .day-tab-btn.active { background: #172133; border-color: #00f2fe; color: #00f2fe; }
+        .day-tab-btn.active .tab-sub { color: #38bdf8; }
+
+        /* Off Day Kartı */
+        .off-day-box { background: #0a0c10; border: 1px dashed #242f44; border-radius: 12px; padding: 36px 16px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+        .off-day-icon { font-size: 2rem; }
+        .off-day-title { font-size: 1.05rem; font-weight: 800; color: #e5e7eb; }
+        .off-day-desc { font-size: 0.78rem; color: #6b7280; max-width: 250px; line-height: 1.4; }
 
         .input-form { display: flex; flex-direction: column; gap: 10px; }
         .input-form input { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 11px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; width: 100%; }
@@ -110,16 +124,13 @@ HTML_INTERFACE = """<!DOCTYPE html>
         .form-grid-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
         .btn-log { background: #00f2fe; color: #000; border: none; font-weight: 800; padding: 12px; border-radius: 8px; cursor: pointer; margin-top: 4px; }
 
-        .history-list { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
-        .day-group { background: #0e121a; border: 1px solid #1f2738; border-radius: 12px; overflow: hidden; }
-        .day-header { background: #171e2c; padding: 8px 12px; font-size: 0.8rem; font-weight: 700; color: #00f2fe; display: flex; justify-content: space-between; }
-        .day-items { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+        .history-list { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
         
-        .log-item { display: flex; justify-content: space-between; align-items: center; background: #0a0c10; padding: 8px 12px; border-radius: 8px; font-size: 0.82rem; border: 1px solid #1c2230; }
-        .log-item .set-badge { background: #1e293b; color: #00f2fe; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 0.72rem; margin-right: 6px; }
+        .log-item { display: flex; justify-content: space-between; align-items: center; background: #0a0c10; padding: 10px 14px; border-radius: 9px; font-size: 0.85rem; border: 1px solid #1c2230; }
+        .log-item .set-badge { background: #1e293b; color: #00f2fe; padding: 2px 7px; border-radius: 5px; font-weight: 700; font-size: 0.75rem; margin-right: 6px; }
         .log-item .ex-title { font-weight: 700; color: #fff; }
         .log-item .ex-val { color: #38bdf8; font-weight: 700; }
-        .log-item button { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem; padding: 2px 4px; }
+        .log-item button { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.85rem; padding: 2px 4px; }
 
         .chart-box { flex: 1; min-height: 320px; position: relative; }
 
@@ -191,7 +202,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     <div>
                         <div class="card-icon">📈</div>
                         <div class="card-heading">Progressive Overload</div>
-                        <div class="card-desc">Set ve ağırlıklarını kaydet. Haftalık döngüyle geçmiş antrenmanlarını gün gün incele.</div>
+                        <div class="card-desc">Set ve ağırlıklarını kaydet. Gün gün sekme sekme antrenman ve dinlenme günlerini takip et.</div>
                     </div>
                     <div class="card-action">Overload Takip →</div>
                 </div>
@@ -232,6 +243,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
         <!-- 3. PROGRESSIVE OVERLOAD EKRANI -->
         <div class="view-panel" id="overloadView">
             <div class="overload-col-left">
+                <!-- Set Ekleme Kartı -->
                 <div class="panel-card">
                     <div class="panel-header">
                         <span>➕ Set Kaydet</span>
@@ -261,12 +273,18 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     </div>
                 </div>
 
+                <!-- Günlük Sekmeli Antrenman Listesi -->
                 <div class="panel-card" style="flex:1;">
                     <div class="panel-header">
-                        <span>🗓️ Bu Haftanın Antrenmanları (Pzt - Paz)</span>
-                        <span style="font-size:0.75rem; color:#9ca3af;" id="weekTotalSets">0 Set</span>
+                        <span>🗓️ Haftalık Takvim</span>
+                        <span style="font-size:0.75rem; color:#9ca3af;" id="daySetsBadge">0 Set</span>
                     </div>
-                    <div class="history-list" id="historyList"></div>
+
+                    <!-- 7 Gün Sekme Butonları -->
+                    <div class="days-tab-bar" id="daysTabBar"></div>
+
+                    <!-- Seçili Günün İçeriği -->
+                    <div class="history-list" id="dayHistoryList"></div>
                 </div>
             </div>
 
@@ -345,17 +363,40 @@ HTML_INTERFACE = """<!DOCTYPE html>
     </div>
 
     <script>
+        // HAFTALIK DÖNGÜ VE TARİH HESAPLARI
         function getMondayOfWeek(d) {
             d = new Date(d);
             var day = d.getDay(),
                 diff = d.getDate() - day + (day === 0 ? -6 : 1);
             var mon = new Date(d.setDate(diff));
             mon.setHours(0, 0, 0, 0);
-            return mon.toISOString().split('T')[0];
+            return mon;
         }
 
-        const currentWeekKey = getMondayOfWeek(new Date());
+        const mondayObj = getMondayOfWeek(new Date());
+        const currentWeekKey = mondayObj.toISOString().split('T')[0];
         const todayKey = new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+        // Haftanın 7 gününün gün isimleri ve formatlı tarihleri
+        const dayNames = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"];
+        const weekDaysData = [];
+
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(mondayObj);
+            d.setDate(mondayObj.getDate() + i);
+            const fullDate = d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            const shortDate = d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
+            weekDaysData.push({
+                index: i,
+                dayName: dayNames[i],
+                fullDate: fullDate,
+                shortDate: shortDate
+            });
+        }
+
+        // Seçili aktif gün sekmesi (Varsayılan: Bugünün günü)
+        let selectedDayIndex = weekDaysData.findIndex(item => item.fullDate === todayKey);
+        if (selectedDayIndex === -1) selectedDayIndex = 0;
 
         function getStorageUsers() {
             return JSON.parse(localStorage.getItem("app_registered_users") || "{}");
@@ -390,7 +431,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
         let dailyMeals = [];
         let chartInstance = null;
 
-        document.getElementById("exerciseDate").value = todayKey;
+        document.getElementById("exerciseDate").value = weekDaysData[selectedDayIndex].fullDate;
         document.getElementById("currentWeekDisplay").innerText = "Hafta: " + currentWeekKey;
         document.getElementById("nutriTodayDate").innerText = todayKey;
 
@@ -462,12 +503,71 @@ HTML_INTERFACE = """<!DOCTYPE html>
             location.reload();
         }
 
+        // ANTRENMAN & SEKMELİ GÜNLÜK YÖNETİMİ
         function loadUserWorkouts() {
             if (!currentUser) return;
             weeklyLogs = getUserWeeklyLogs(currentUser.username);
             populateDropdown();
-            renderWeeklyHistory();
+            renderDayTabs();
+            renderSelectedDayLogs();
             updateChart();
+        }
+
+        function renderDayTabs() {
+            const bar = document.getElementById("daysTabBar");
+            bar.innerHTML = "";
+
+            weekDaysData.forEach((d, idx) => {
+                const isActive = (idx === selectedDayIndex) ? "active" : "";
+                bar.innerHTML += `
+                    <button class="day-tab-btn ${isActive}" onclick="selectDayTab(${idx})">
+                        ${d.dayName}
+                        <span class="tab-sub">${d.shortDate}</span>
+                    </button>
+                `;
+            });
+        }
+
+        function selectDayTab(idx) {
+            selectedDayIndex = idx;
+            document.getElementById("exerciseDate").value = weekDaysData[idx].fullDate;
+            renderDayTabs();
+            renderSelectedDayLogs();
+        }
+
+        function renderSelectedDayLogs() {
+            const currentDay = weekDaysData[selectedDayIndex];
+            const list = document.getElementById("dayHistoryList");
+            list.innerHTML = "";
+
+            const dayLogs = weeklyLogs.filter(item => item.date === currentDay.fullDate);
+            document.getElementById("daySetsBadge").innerText = `${dayLogs.length} Set`;
+
+            // Eğer o gün hiç set girilmediyse -> OFF DAY
+            if (dayLogs.length === 0) {
+                list.innerHTML = `
+                    <div class="off-day-box">
+                        <div class="off-day-icon">😴</div>
+                        <div class="off-day-title">Dinlenme Günü (Off Day)</div>
+                        <div class="off-day-desc">${currentDay.fullDate} tarihinde henüz kayıtlı bir setin yok kral.</div>
+                    </div>
+                `;
+                return;
+            }
+
+            // Setleri listele
+            dayLogs.forEach(item => {
+                list.innerHTML += `
+                    <div class="log-item">
+                        <div>
+                            <span class="set-badge">${item.set_num || 1}. SET</span>
+                            <span class="ex-title">${item.exercise}</span>: 
+                            <span class="ex-val">${item.weight} kg</span> × ${item.reps} tkr
+                        </div>
+                        <button onclick="deleteWorkout(${item.id})" title="Sil">Sil</button>
+                    </div>
+                `;
+            });
         }
 
         function addWorkoutLog() {
@@ -476,7 +576,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             const setVal = document.getElementById("exerciseSet").value.trim();
             const weightVal = document.getElementById("exerciseWeight").value.trim();
             const repsVal = document.getElementById("exerciseReps").value.trim();
-            const dateVal = document.getElementById("exerciseDate").value.trim() || todayKey;
+            const dateVal = document.getElementById("exerciseDate").value.trim() || weekDaysData[selectedDayIndex].fullDate;
 
             if (!name) return alert("Lütfen hareket adını gir kral!");
             if (!weightVal || isNaN(Number(weightVal))) return alert("Lütfen ağırlığı (kg) gir kral!");
@@ -519,51 +619,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
             });
             if (unique.includes(currentSelected)) select.value = currentSelected;
             else select.value = unique[0];
-        }
-
-        function renderWeeklyHistory() {
-            const list = document.getElementById("historyList");
-            list.innerHTML = "";
-            document.getElementById("weekTotalSets").innerText = `${weeklyLogs.length} Toplam Set`;
-
-            if (weeklyLogs.length === 0) {
-                list.innerHTML = "<div style='color:#6b7280; font-size:0.85rem; text-align:center; padding:20px;'>Bu hafta henüz antrenman girilmedi. Yeni haftaya bomba gibi başla!</div>";
-                return;
-            }
-
-            const grouped = {};
-            weeklyLogs.forEach(item => {
-                if (!grouped[item.date]) grouped[item.date] = [];
-                grouped[item.date].push(item);
-            });
-
-            const sortedDates = Object.keys(grouped).reverse();
-            sortedDates.forEach(date => {
-                const sets = grouped[date];
-                let setsHtml = "";
-                sets.forEach(item => {
-                    setsHtml += `
-                        <div class="log-item">
-                            <div>
-                                <span class="set-badge">${item.set_num || 1}. SET</span>
-                                <span class="ex-title">${item.exercise}</span>: 
-                                <span class="ex-val">${item.weight} kg</span> × ${item.reps} tkr
-                            </div>
-                            <button onclick="deleteWorkout(${item.id})" title="Sil">Sil</button>
-                        </div>
-                    `;
-                });
-
-                list.innerHTML += `
-                    <div class="day-group">
-                        <div class="day-header">
-                            <span>📅 ${date}</span>
-                            <span>${sets.length} Set</span>
-                        </div>
-                        <div class="day-items">${setsHtml}</div>
-                    </div>
-                `;
-            });
         }
 
         function updateChart() {
@@ -621,6 +676,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             });
         }
 
+        // BESLENME YÖNETİMİ
         function loadUserNutrition() {
             if (!currentUser) return;
             dailyMeals = getUserDailyMeals(currentUser.username);
@@ -677,6 +733,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             renderNutritionStats();
         }
 
+        // CHAT & VISION
         let conversationHistory = [];
         let selectedBase64Image = null;
         let nutriHistory = [];
@@ -953,7 +1010,6 @@ JSON>>>
 
     detected_meal = None
     
-    # 1. Öncelik: Standart <<<JSON ... JSON>>> bloğu
     try:
         json_match = re.search(r'<<<JSON\s*(\{.*?\})\s*JSON>>>', reply_text, re.DOTALL)
         if json_match:
@@ -961,15 +1017,13 @@ JSON>>>
             detected_meal = json.loads(raw_json)
             reply_text = reply_text.replace(json_match.group(0), "").strip()
         else:
-            # 2. Öncelik: Herhangi bir süslü parantezli JSON bloğu
             brace_match = re.search(r'\{[^{}]*"calories"[^{}]*\}', reply_text, re.DOTALL)
             if brace_match:
                 detected_meal = json.loads(brace_match.group(0))
                 reply_text = reply_text.replace(brace_match.group(0), "").strip()
     except Exception as e:
-        print("JSON parse fallback devreye giriyor:", e)
+        print("JSON parse fallback:", e)
 
-    # 3. Öncelik: Regex ile metinden direkt rakamları yakala (Asla patlamama garantisi)
     if not detected_meal:
         try:
             cal = re.search(r'(\d+[\.,]?\d*)\s*(?:kcal|kalori)', reply_text, re.IGNORECASE)
