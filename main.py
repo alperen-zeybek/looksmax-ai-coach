@@ -178,7 +178,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
     <div class="content-container">
 
-        <!-- 1. MODÜL SEÇİM EKRANI -->
+        <!-- 1. GİRİŞ SEÇİM EKRANI (DASHBOARD HUB) -->
         <div class="view-panel active" id="hubView">
             <div class="hub-title">
                 <h1>Modülünü Seç Kral 🦍</h1>
@@ -987,37 +987,38 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
 @app.post("/nutrition-chat")
 def nutrition_dialogue(data: NutritionChatInput):
     system_prompt = """
-Sen dünyanın en iyi Yapay Zeka Sporcu Diyetisyenisin.
-Kullanıcının yazdığı veya fotoğrafını attığı yiyeceklerin kalorilerini ve makrolarını (Protein, Karbonhidrat, Yağ) gramajına göre doğru orantıyla hesapla.
+Sen elit seviyede bir Sporcu Diyetisyeni ve Beslenme Koçusun.
+Görevin: Kullanıcının belirttiği veya görseldeki yiyeceklerin gramajına göre kalori ve makrolarını (Protein, Karbonhidrat, Yağ) doğru orantıyla hesaplamak.
 
-ÖNEMLİ REFERANSLAR (100g bazında):
-- 100g Tavuk Kanat: ~220 kcal, 18g Protein, 0g Karb, 16g Yağ (1 kg Kanat = 2200 kcal, 180g P, 160g Y)
-- 100g Dana Bonfile/Biftek: ~150 kcal, 25g Protein, 0g Karb, 5g Yağ (1 kg Bonfile = 1500 kcal, 250g P, 50g Y)
-- 100g Tavuk Göğsü: ~120-130 kcal, 26-28g Protein, 0g Karb, 2g Yağ (1 kg Tavuk Göğsü = 1250 kcal, 260g P, 20g Y)
+Referans Değerler (100g bazında):
+- 100g Tavuk Kanat: ~220 kcal, 18g Protein, 0g Karb, 16g Yağ (1 kg / 1000g = 2200 kcal, 180g P, 160g Y)
+- 100g Dana Bonfile/Biftek: ~150 kcal, 25g Protein, 0g Karb, 5g Yağ (1 kg = 1500 kcal, 250g P, 50g Y)
+- 100g Tavuk Göğsü: ~125 kcal, 26g Protein, 0g Karb, 2g Yağ (1 kg = 1250 kcal, 260g P, 20g Y)
 - 100g Pişmiş Pirinç Pilavı: ~160 kcal, 3g Protein, 35g Karb, 1g Yağ
 - 100g Pişmiş Bulgur: ~150 kcal, 4g Protein, 30g Karb, 1g Yağ
-- 100g Ruffles / Patates Cipsi: ~535 kcal, 6g Protein, 52g Karb, 33g Yağ
+- 100g Ruffles / Cips: ~535 kcal, 6g Protein, 52g Karb, 33g Yağ
 
-ZORUNLU FORMAT:
-Yanıtında SADECE aşağıdaki JSON şemasına uyan saf bir JSON nesnesi döndür (başka hiçbir metin veya markdown olmadan):
+ZORUNLU KURAL:
+Yanıtında SADECE aşağıdaki JSON şemasına uygun geçerli bir JSON objesi döndür. Markdown backtick veya fazladan hiçbir metin yazma:
 {
-  "coach_reply": "Kullanıcıya yemeğin makro dökümünü veren motive edici kısa koç mesajı",
-  "food_name": "Öğünün kısa adı (Örn: 1000g Tavuk Kanat)",
-  "items_summary": "Tüm detaylar (Örn: 1 kg Tavuk Kanat)",
+  "coach_reply": "Afiyet olsun kral! Makroların başarıyla eklendi.",
+  "food_name": "Öğün adı (Örn: 1000g Tavuk Kanat)",
+  "items_summary": "Detaylı açıklama (Örn: 1 kg Tavuk Kanat)",
   "calories": 2200,
   "protein": 180,
   "carbs": 0,
   "fat": 160
 }
 """
+
     if data.image_base64:
         user_content = [
-            {"type": "text", "text": data.user_message or "Bu fotoğraftaki yemeği ve makrolarını hesapla."},
+            {"type": "text", "text": data.user_message or "Bu fotoğraftaki yemeğin makrolarını hesapla ve JSON döndür."},
             {"type": "image_url", "image_url": {"url": data.image_base64}}
         ]
         models_to_try = ["llama-3.2-11b-vision-preview", "llama-3.2-90b-vision-preview"]
     else:
-        user_content = data.user_message
+        user_content = f"Yediğim yemek: {data.user_message}. Lütfen makrolarını hesapla ve JSON formatında döndür."
         models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
     messages = [
@@ -1030,30 +1031,28 @@ Yanıtında SADECE aşağıdaki JSON şemasına uyan saf bir JSON nesnesi dönd�
 
     for model_name in models_to_try:
         try:
-            # Vision modellerinde response_format={"type": "json_object"} her zaman desteklenmeyebilir, bu yüzden model tipine göre çağırıyoruz
-            kwargs = {
+            req_params = {
                 "messages": messages,
                 "model": model_name,
-                "temperature": 0.1,
-                "max_tokens": 500
+                "temperature": 0.2,
+                "max_tokens": 800
             }
             if not data.image_base64:
-                kwargs["response_format"] = {"type": "json_object"}
+                req_params["response_format"] = {"type": "json_object"}
 
-            chat_completion = client.chat.completions.create(**kwargs)
+            chat_completion = client.chat.completions.create(**req_params)
             raw_content = chat_completion.choices[0].message.content.strip()
 
-            # JSON bloğunu ayıkla (Markdown backtick'lerini temizle)
-            json_match = re.search(r'\{.*\}', raw_content, re.DOTALL)
-            if json_match:
-                raw_json = json_match.group(0)
-            else:
-                raw_json = raw_content
+            raw_content = re.sub(r'^```(?:json)?\s*', '', raw_content, flags=re.IGNORECASE)
+            raw_content = re.sub(r'\s*```$', '', raw_content).strip()
 
-            parsed_json = json.loads(raw_json)
-            cal_val = float(parsed_json.get("calories", 0))
+            start_idx = raw_content.find('{')
+            end_idx = raw_content.rfind('}')
+            if start_idx != -1 and end_idx != -1:
+                json_str = raw_content[start_idx:end_idx+1]
+                parsed_json = json.loads(json_str)
 
-            if cal_val > 0:
+                cal_val = float(parsed_json.get("calories", 0))
                 detected_meal = {
                     "food_name": str(parsed_json.get("food_name", data.user_message.title())),
                     "items_summary": str(parsed_json.get("items_summary", data.user_message)),
@@ -1062,18 +1061,22 @@ Yanıtında SADECE aşağıdaki JSON şemasına uyan saf bir JSON nesnesi dönd�
                     "carbs": round(float(parsed_json.get("carbs", 0))),
                     "fat": round(float(parsed_json.get("fat", 0)))
                 }
-                reply_text = parsed_json.get("coach_reply", "")
+                reply_text = parsed_json.get("coach_reply", f"Afiyet olsun kral! {detected_meal['food_name']} kaydedildi.")
                 break
         except Exception as e:
-            print(f"[{model_name}] Nutrition Hata: {e}")
+            print(f"HATA [{model_name}]: {repr(e)}")
             continue
 
-    if not detected_meal and not reply_text:
-        reply_text = "Makrolar hesaplanırken bir hata oluştu kral, lütfen tekrar dene."
+    if not detected_meal:
+        return {
+            "user_message": data.user_message,
+            "coach_reply": "Makrolar hesaplanamadı kral, girdiğin yemeği kontrol edip tekrar dene.",
+            "detected_meal": None
+        }
 
     return {
         "user_message": data.user_message,
-        "coach_reply": reply_text or (f"Afiyet olsun! {detected_meal['food_name']} başarıyla kaydedildi." if detected_meal else "Öğün kaydedilemedi."),
+        "coach_reply": reply_text,
         "detected_meal": detected_meal
     }
 
