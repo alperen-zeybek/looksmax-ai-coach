@@ -301,7 +301,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Aklına gelen her yemeği yazabilirsin (örn: <i>"kanat", "1 kg bonfile", "2 lahmacun", "105g ruffles"</i>); otomatik hesaplayıp seçtiğin güne eklerim.</div>
+                        <div class="msg coach">Afiyet olsun kral! İster <i>"3 tam kokoreç"</i>, ister <i>"1 kg kanat"</i>, ister <i>"2 lahmacun"</i> yaz; ne yediysen eksiksiz kalori ve makrosunu çıkarıp ekleyeyim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -313,7 +313,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     <div class="chat-input-area">
                         <label class="file-btn" for="nutriImageInput" title="Yemek Fotoğrafı">📷</label>
                         <input type="file" id="nutriImageInput" accept="image/*" onchange="handleImageSelect(event, 'nutri')" />
-                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Ne yediysen yaz (örn: kanat, pilav, pide...)" onkeypress="handleKey(event, 'nutri')" />
+                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Ne yediysen yaz (örn: 3 tam kokoreç, 1 kg kanat...)" onkeypress="handleKey(event, 'nutri')" />
                         <button class="send-btn" id="nutriSendBtn" onclick="sendNutriMessage()">Ekle</button>
                     </div>
                 </div>
@@ -992,26 +992,36 @@ def nutrition_dialogue(data: NutritionChatInput):
     start_time = time.time()
     
     system_prompt = """
-Sen dünyanın en kapsamlı besin ve makro veri tabanına sahip Yapay Zeka Sporcu Diyetisyenisin.
+Sen dünyanın en tecrübeli Yapay Zeka Sporcu Diyetisyeni ve Makro Hesaplayıcısısın.
 
 GÖREVİN:
-Kullanıcı ne yazarsa yazsın (örn: "kanat", "1 kg bonfile", "2 lahmacun", "iskender", "1 dilim cheesecake", "200g yulaf", "sütlaç", "atom tost");
-1. O yiyeceğin standart ortalama porsiyon/gramajını ve makrolarını GERÇEKÇİ şekilde tahmin et. (Gram belirtilmediyse standart 1 porsiyon üzerinden hesapla, örn: "kanat" -> 1 porsiyon/250g tavuk kanat ~500 kcal, 45g protein, 35g yağ).
-2. SADECE VE SADECE aşağıdaki JSON formatında yanıt dön:
+Kullanıcının girdiği her türlü yemeği (sokak lezzeti, ev yemeği, fast food, tatlı, et vb.) ve ADET/GRAMAJ çarpanlarını EKSİKSİZ, DÜZELTEREK VE GERÇEKÇİ ŞEKİLDE hesaplamak.
 
+ÇOK ÖNEMLİ REFERANS BİLGİLERİ VE ÇARPAN MATEMATİĞİ:
+- 1 Tam Ekmek Kokoreç: ~950 kcal, ~35g Protein, ~85g Karb, ~50g Yağ
+  -> Eğer "3 tam kokoreç" girildiyse: 3 x 950 = ~2850 kcal, 3 x 35 = ~105g Protein, 3 x 85 = ~255g Karb, 3 x 50 = ~150g Yağ!
+- 1 Yarım Ekmek Kokoreç: ~500 kcal, ~20g Protein, ~45g Karb, ~25g Yağ
+- 1 kg Tavuk Kanat: ~2200 kcal, ~180g Protein, 0g Karb, ~160g Yağ
+- 1 kg Dana Bonfile / Biftek: ~1500 kcal, ~250g Protein, 0g Karb, ~50g Yağ
+- 1 Adet Lahmacun: ~220 kcal, ~9g Protein, ~28g Karb, ~8g Yağ (Örn: 3 lahmacun = ~660 kcal, 27g protein)
+- 1 Porsiyon İskender: ~900 kcal, ~40g Protein, ~65g Karb, ~55g Yağ
+- 1 Porsiyon Tantuni Dürüm: ~420 kcal, ~20g Protein, ~40g Karb, ~20g Yağ
+
+KURAL:
+- Gramaj veya adet belirtildiyse ("3 tam", "2 adet", "500g", "1 kg") mutlaka tek birimin değerini verilen sayıyla ÇARP.
+- Yazım hatalarını otomatik düzelt ("kanaat" -> Tavuk Kanat vb.).
+- Kesinlikle boş bırakma.
+
+SADECE ŞU JSON FORMATINI DÖNDÜR:
 {
-  "coach_reply": "Kullanıcıya yediği yemeğin makro dökümünü veren motive edici kısa sporcu koçu mesajı",
-  "food_name": "Yemeğin adı (Örn: 1 Porsiyon Tavuk Kanat)",
-  "items_summary": "Tüm detay (Örn: 1 Porsiyon Tavuk Kanat (~250g))",
-  "calories": 520,
-  "protein": 46,
-  "carbs": 0,
-  "fat": 38
+  "coach_reply": "Samimi ve net sporcu koçu dökümü",
+  "food_name": "Öğün Adı ve Adedi (Örn: 3 Tam Kokoreç)",
+  "items_summary": "Detaylı döküm (Örn: 3 Adet Tam Ekmek Kokoreç)",
+  "calories": 2850,
+  "protein": 105,
+  "carbs": 255,
+  "fat": 150
 }
-
-ÖNEMLİ KURAL:
-- "calories", "protein", "carbs", "fat" alanları MUTLAKA 0'dan büyük tam sayı olmalıdır.
-- Başka hiçbir açıklama, markdown veya metin ekleme, SADECE saf JSON dön.
 """
 
     messages = [
@@ -1022,7 +1032,6 @@ Kullanıcı ne yazarsa yazsın (örn: "kanat", "1 kg bonfile", "2 lahmacun", "is
     detected_meal = None
     reply_text = None
 
-    # Güçlü model listesi (biri çökerse diğeri anında devralır)
     models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
     for model_name in models_to_try:
@@ -1031,7 +1040,7 @@ Kullanıcı ne yazarsa yazsın (örn: "kanat", "1 kg bonfile", "2 lahmacun", "is
                 messages=messages,
                 model=model_name,
                 temperature=0.1,
-                max_tokens=500,
+                max_tokens=600,
                 response_format={"type": "json_object"}
             )
             raw_content = chat_completion.choices[0].message.content
@@ -1053,27 +1062,12 @@ Kullanıcı ne yazarsa yazsın (örn: "kanat", "1 kg bonfile", "2 lahmacun", "is
             print(f"[{model_name}] Hata: {e}")
             continue
 
-    # Hiçbir model cevap vermezse bile kullanıcıyı boş bırakmayan akıllı jenerik tahminci
-    if not detected_meal:
-        detected_meal = {
-            "food_name": data.user_message.title()[:30],
-            "items_summary": data.user_message,
-            "calories": 450,
-            "protein": 25,
-            "carbs": 40,
-            "fat": 18
-        }
-        reply_text = f"Öğünün analiz edildi kral: **{detected_meal['food_name']}** ortalama değerleriyle listene işlendi!"
-
-    if not reply_text:
-        reply_text = f"Afiyet olsun kral! Girdiğin **{detected_meal['items_summary']}** başarıyla listene eklendi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
-
-    elapsed = round(time.time() - start_time, 2)
-    print(f"--> [LOG] Nutrition Yaniti: {elapsed}sn | Eklenen: {detected_meal['food_name']} ({detected_meal['calories']} kcal)")
+    if not reply_text and detected_meal:
+        reply_text = f"Afiyet olsun kral! Girdiğin **{detected_meal['items_summary']}** listene eklendi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
 
     return {
         "user_message": data.user_message,
-        "coach_reply": reply_text,
+        "coach_reply": reply_text or "Öğünün işlendi kral!",
         "detected_meal": detected_meal
     }
 
