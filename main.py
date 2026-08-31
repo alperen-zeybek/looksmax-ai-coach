@@ -148,7 +148,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
 </head>
 <body>
 
-    <!-- GİRİŞ / KAYIT MODAL -->
     <div class="auth-overlay" id="authOverlay">
         <div class="auth-box">
             <h2 id="authTitle">⚡ LOOKSMAX PRO</h2>
@@ -159,7 +158,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- ÜST HEADER BAR -->
     <div class="header-bar">
         <div style="display:flex; align-items:center; gap:12px;">
             <div class="brand" onclick="openView('hub')">⚡ LOOKSMAX HUB</div>
@@ -171,7 +169,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- ANA İÇERİK PANELİ -->
     <div class="content-container">
 
         <!-- 1. GİRİŞ SEÇİM EKRANI (DASHBOARD HUB) -->
@@ -181,7 +178,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 <p>Neyi yönetmek veya geliştirmek istiyorsan tıkla ve başla.</p>
             </div>
             <div class="hub-grid">
-                <!-- KART 1: AI KOÇ -->
                 <div class="hub-card" onclick="openView('coach')">
                     <div>
                         <div class="card-icon">🤖</div>
@@ -191,7 +187,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     <div class="card-action">Koçla Konuş →</div>
                 </div>
 
-                <!-- KART 2: PROGRESSIVE OVERLOAD -->
                 <div class="hub-card" onclick="openView('overload')">
                     <div>
                         <div class="card-icon">📈</div>
@@ -201,7 +196,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     <div class="card-action">Overload Takip →</div>
                 </div>
 
-                <!-- KART 3: GÜNLÜK BESLENME -->
                 <div class="hub-card" onclick="openView('nutrition')">
                     <div>
                         <div class="card-icon">🥗</div>
@@ -291,11 +285,10 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         <!-- 4. GÜNLÜK BESLENME EKRANI -->
         <div class="view-panel" id="nutritionView">
-            <!-- Sol Panel: Beslenme AI Asistanı -->
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"4 tam buğday ekmeği, 2 yumurta"</i>) veya tabağının fotoğrafını at; anında makroları çıkarıp günlüğüne ekleyeyim.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen tek tek veya topluca yaz (örn: <i>"200g pirinç, 300g tavuk, 20g zeytinyağı"</i>) ya da fotoğrafını at; makrolarını çıkarıp otomatik günlüğe ekleyeyim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -313,7 +306,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- Sağ Panel: Günlük Makro Kartları & Yenenler Listesi -->
             <div class="overload-col-right">
                 <div class="panel-card">
                     <div class="panel-header">
@@ -372,7 +364,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
             localStorage.setItem("app_registered_users", JSON.stringify(users));
         }
 
-        // Antrenman Verileri
         function getUserWeeklyLogs(username) {
             const allWeeks = JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
             return allWeeks[currentWeekKey] || [];
@@ -383,7 +374,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
             localStorage.setItem("user_weeks_" + username, JSON.stringify(allWeeks));
         }
 
-        // Günlük Beslenme Verileri (Her gün ayrı tutulur)
         function getUserDailyMeals(username) {
             const allDays = JSON.parse(localStorage.getItem("user_nutrition_" + username) || "{}");
             return allDays[todayKey] || [];
@@ -472,7 +462,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
             location.reload();
         }
 
-        // ANTRENMAN FONKSİYONLARI
         function loadUserWorkouts() {
             if (!currentUser) return;
             weeklyLogs = getUserWeeklyLogs(currentUser.username);
@@ -632,7 +621,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
             });
         }
 
-        // BESLENME YÖNETİMİ
         function loadUserNutrition() {
             if (!currentUser) return;
             dailyMeals = getUserDailyMeals(currentUser.username);
@@ -666,10 +654,10 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 `;
             });
 
-            document.getElementById("totCalories").innerText = cal + " kcal";
-            document.getElementById("totProtein").innerText = pro + "g";
-            document.getElementById("totCarbs").innerText = carb + "g";
-            document.getElementById("totFat").innerText = fat + "g";
+            document.getElementById("totCalories").innerText = Math.round(cal) + " kcal";
+            document.getElementById("totProtein").innerText = Math.round(pro) + "g";
+            document.getElementById("totCarbs").innerText = Math.round(carb) + "g";
+            document.getElementById("totFat").innerText = Math.round(fat) + "g";
 
             if (dailyMeals.length === 0) {
                 list.innerHTML = "<div style='color:#6b7280; font-size:0.85rem; text-align:center; padding:20px;'>Bugün henüz bir şey kaydedilmedi.</div>";
@@ -689,7 +677,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
             renderNutritionStats();
         }
 
-        // GÖRSEL & CHAT YÖNETİMİ
         let conversationHistory = [];
         let selectedBase64Image = null;
         let nutriHistory = [];
@@ -764,8 +751,8 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     })
                 });
                 const data = await response.json();
-                let replyFormatted = data.coach_reply.replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
-                document.getElementById(loadingId).innerHTML = replyFormatted;
+                let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
+                document.getElementById(loadingId).innerHTML = replyFormatted || "Yanıt alındı.";
 
                 conversationHistory.push({ role: "user", content: currentText });
                 conversationHistory.push({ role: "assistant", content: data.coach_reply });
@@ -818,17 +805,17 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 });
                 const data = await response.json();
                 
-                let replyFormatted = data.coach_reply.replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
-                document.getElementById(loadingId).innerHTML = replyFormatted;
+                let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
+                document.getElementById(loadingId).innerHTML = replyFormatted || "Makrolar hesaplandı ve eklendi!";
 
                 if (data.detected_meal && data.detected_meal.calories > 0) {
                     const newMeal = {
                         id: Date.now(),
-                        food_name: data.detected_meal.food_name || "Öğün",
-                        calories: data.detected_meal.calories || 0,
-                        protein: data.detected_meal.protein || 0,
-                        carbs: data.detected_meal.carbs || 0,
-                        fat: data.detected_meal.fat || 0
+                        food_name: data.detected_meal.food_name || (currentText.substring(0, 30) + "..."),
+                        calories: Math.round(data.detected_meal.calories || 0),
+                        protein: Math.round(data.detected_meal.protein || 0),
+                        carbs: Math.round(data.detected_meal.carbs || 0),
+                        fat: Math.round(data.detected_meal.fat || 0)
                     };
                     dailyMeals.push(newMeal);
                     saveUserDailyMeals(currentUser.username, dailyMeals);
@@ -900,7 +887,7 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
     for model_name in available_models:
         try:
             chat_completion = client.chat.completions.create(
-                messages=messages, model=model_name, temperature=0.4, max_tokens=500,
+                messages=messages, model=model_name, temperature=0.4, max_tokens=600,
             )
             reply_text = chat_completion.choices[0].message.content
             break
@@ -924,17 +911,11 @@ Sen uzman bir 'Sporcu Beslenme & Makro Koçu'sun.
 Kullanıcının bugünkü kayıtlı öğünleri: {data.daily_summary if data.daily_summary else 'Henüz öğün girilmedi.'}
 
 GÖREVİN:
-1. Kullanıcının yazdığı veya görseldeki yemeklerin toplam Kalori, Protein, Karbonhidrat ve Yağ (Gram cinsinden) değerlerini en gerçekçi şekilde tahmin et.
-2. Samimi, motive edici ve sporcu dilinde kısa bir açıklama yap.
-3. YANITININ EN SONUNA mutlaka şu JSON formatını iliştir:
+1. Kullanıcının yazdığı veya görseldeki TÜM besinlerin tek tek ve TOPLAM Kalori (kcal), Protein (g), Karbonhidrat (g), Yağ (g) değerlerini doğru ve gerçekçi hesapla.
+2. Sporcu dilinde kısa ve motive edici bir döküm sun.
+3. YANITININ EN SON SATIRINA mutlaka ve istisnasız aşağıdaki JSON formatını ekle (Tüm toplam değerleri tek bir JSON nesnesi olarak ver):
 <<<JSON
-{{
-  "food_name": "Öğünün kısa adı (örn: 4 Dilim Ekmek, 2 Yumurta)",
-  "calories": 420,
-  "protein": 24,
-  "carbs": 52,
-  "fat": 12
-}}
+{{"food_name": "Kısa Öğün Özeti", "calories": 1850, "protein": 110, "carbs": 210, "fat": 45}}
 JSON>>>
 """
 
@@ -960,7 +941,7 @@ JSON>>>
     for model_name in available_models:
         try:
             chat_completion = client.chat.completions.create(
-                messages=messages, model=model_name, temperature=0.3, max_tokens=500,
+                messages=messages, model=model_name, temperature=0.2, max_tokens=700,
             )
             reply_text = chat_completion.choices[0].message.content
             break
@@ -971,13 +952,41 @@ JSON>>>
         reply_text = "Makro hesaplanamadı kral."
 
     detected_meal = None
+    
+    # 1. Öncelik: Standart <<<JSON ... JSON>>> bloğu
     try:
         json_match = re.search(r'<<<JSON\s*(\{.*?\})\s*JSON>>>', reply_text, re.DOTALL)
         if json_match:
-            detected_meal = json.loads(json_match.group(1))
+            raw_json = json_match.group(1).replace("\n", " ").strip()
+            detected_meal = json.loads(raw_json)
             reply_text = reply_text.replace(json_match.group(0), "").strip()
+        else:
+            # 2. Öncelik: Herhangi bir süslü parantezli JSON bloğu
+            brace_match = re.search(r'\{[^{}]*"calories"[^{}]*\}', reply_text, re.DOTALL)
+            if brace_match:
+                detected_meal = json.loads(brace_match.group(0))
+                reply_text = reply_text.replace(brace_match.group(0), "").strip()
     except Exception as e:
-        print("JSON parse hatasi:", e)
+        print("JSON parse fallback devreye giriyor:", e)
+
+    # 3. Öncelik: Regex ile metinden direkt rakamları yakala (Asla patlamama garantisi)
+    if not detected_meal:
+        try:
+            cal = re.search(r'(\d+[\.,]?\d*)\s*(?:kcal|kalori)', reply_text, re.IGNORECASE)
+            pro = re.search(r'(\d+[\.,]?\d*)\s*g?\s*protein', reply_text, re.IGNORECASE)
+            carb = re.search(r'(\d+[\.,]?\d*)\s*g?\s*karb', reply_text, re.IGNORECASE)
+            fat = re.search(r'(\d+[\.,]?\d*)\s*g?\s*yağ', reply_text, re.IGNORECASE)
+            
+            if cal:
+                detected_meal = {
+                    "food_name": "Toplu Öğün",
+                    "calories": float(cal.group(1).replace(",", ".")),
+                    "protein": float(pro.group(1).replace(",", ".")) if pro else 0,
+                    "carbs": float(carb.group(1).replace(",", ".")) if carb else 0,
+                    "fat": float(fat.group(1).replace(",", ".")) if fat else 0
+                }
+        except Exception as ex:
+            print("Regex fallback hatası:", ex)
 
     elapsed = round(time.time() - start_time, 2)
     print(f"--> [LOG] Nutrition Yaniti: {elapsed}sn")
