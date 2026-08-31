@@ -301,7 +301,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Ne yediysen tek tek veya topluca yaz (örn: <i>"220g tavuk, 70g bulgur"</i> ya da <i>"1 laviva"</i>) ya da fotoğrafını at; seçtiğin güne ekleyeyim.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"1 kg bonfile"</i>, <i>"200g pirinç, 300g tavuk"</i> ya da <i>"1 laviva"</i>); seçtiğin güne hemen ekleyeyim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -939,6 +939,16 @@ HTML_INTERFACE = """<!DOCTYPE html>
 </html>
 """
 
+def parse_weight_in_grams(pattern: str, text: str):
+    match = re.search(pattern, text)
+    if not match:
+        return None
+    val = float(match.group(1).replace(",", "."))
+    unit = match.group(2) if len(match.groups()) > 1 and match.group(2) else "g"
+    if unit in ["kg", "kilo", "kilogram"]:
+        return val * 1000.0
+    return val
+
 def calculate_fallback_macros(text: str):
     t = text.lower()
     total_cal = 0
@@ -947,43 +957,52 @@ def calculate_fallback_macros(text: str):
     total_fat = 0
     items_found = []
 
-    m_chick = re.search(r'(\d+)\s*g?\s*(?:tavuk|chicken|göğüs|izgara tavuk|ızgara tavuk)', t)
-    if m_chick:
-        g = float(m_chick.group(1))
-        total_cal += g * 1.30
-        total_pro += g * 0.28
-        total_fat += g * 0.02
-        items_found.append(f"{int(g)}g Tavuk")
+    # 1. Bonfile / Biftek / Kırmızı Et / Antrikot / Kıyma
+    g_beef = parse_weight_in_grams(r'(\d+(?:[.,]\d+)?)\s*(kg|kilo|kilogram|g|gr|gram)?\s*(?:bonfile|biftek|dana eti|kırmızı et|antrikot|kıyma|köfte)', t)
+    if g_beef:
+        total_cal += g_beef * 1.50
+        total_pro += g_beef * 0.25
+        total_fat += g_beef * 0.05
+        items_found.append(f"{int(g_beef)}g Bonfile/Et")
 
-    m_bulgur = re.search(r'(\d+)\s*g?\s*(?:bulgur|bulgur pilavı|bulgur pilavi)', t)
-    if m_bulgur:
-        g = float(m_bulgur.group(1))
-        total_cal += g * 1.50
-        total_pro += g * 0.04
-        total_carb += g * 0.30
-        total_fat += g * 0.01
-        items_found.append(f"{int(g)}g Bulgur")
+    # 2. Tavuk Göğsü / Izgara Tavuk
+    g_chick = parse_weight_in_grams(r'(\d+(?:[.,]\d+)?)\s*(kg|kilo|kilogram|g|gr|gram)?\s*(?:tavuk|chicken|göğüs|izgara tavuk|ızgara tavuk)', t)
+    if g_chick:
+        total_cal += g_chick * 1.30
+        total_pro += g_chick * 0.28
+        total_fat += g_chick * 0.02
+        items_found.append(f"{int(g_chick)}g Tavuk")
 
-    m_rice = re.search(r'(\d+)\s*g?\s*(?:pirinç|pilav|rice)', t)
-    if m_rice and not m_bulgur:
-        g = float(m_rice.group(1))
-        total_cal += g * 1.60
-        total_pro += g * 0.03
-        total_carb += g * 0.35
-        total_fat += g * 0.01
-        items_found.append(f"{int(g)}g Pirinç")
+    # 3. Bulgur
+    g_bulgur = parse_weight_in_grams(r'(\d+(?:[.,]\d+)?)\s*(kg|kilo|kilogram|g|gr|gram)?\s*(?:bulgur|bulgur pilavı|bulgur pilavi)', t)
+    if g_bulgur:
+        total_cal += g_bulgur * 1.50
+        total_pro += g_bulgur * 0.04
+        total_carb += g_bulgur * 0.30
+        total_fat += g_bulgur * 0.01
+        items_found.append(f"{int(g_bulgur)}g Bulgur")
 
-    m_chips = re.search(r'(\d+)\s*g?\s*(?:ruffles|cips|doritos|lays|patates cipsi|ketçaplı ruffles)', t)
-    if m_chips:
-        g = float(m_chips.group(1))
-        if g < 10:
-            g = 105.0 if g == 5 else 50.0
-        total_cal += g * 5.35
-        total_pro += g * 0.06
-        total_carb += g * 0.52
-        total_fat += g * 0.33
-        items_found.append(f"{int(g)}g Ruffles/Cips")
+    # 4. Pirinç
+    g_rice = parse_weight_in_grams(r'(\d+(?:[.,]\d+)?)\s*(kg|kilo|kilogram|g|gr|gram)?\s*(?:pirinç|pilav|rice)', t)
+    if g_rice and not g_bulgur:
+        total_cal += g_rice * 1.60
+        total_pro += g_rice * 0.03
+        total_carb += g_rice * 0.35
+        total_fat += g_rice * 0.01
+        items_found.append(f"{int(g_rice)}g Pirinç")
 
+    # 5. Cips / Ruffles
+    g_chips = parse_weight_in_grams(r'(\d+(?:[.,]\d+)?)\s*(kg|kilo|kilogram|g|gr|gram)?\s*(?:ruffles|cips|doritos|lays|patates cipsi|ketçaplı ruffles)', t)
+    if g_chips:
+        if g_chips < 10:
+            g_chips = 105.0 if g_chips == 5 else 50.0
+        total_cal += g_chips * 5.35
+        total_pro += g_chips * 0.06
+        total_carb += g_chips * 0.52
+        total_fat += g_chips * 0.33
+        items_found.append(f"{int(g_chips)}g Ruffles/Cips")
+
+    # 6. Tırnak Pide
     m_pide = re.search(r'(\d+)\s*(?:adet|tane)?\s*(?:tırnak pide|tirnak pide|pide|tırnak)', t)
     if m_pide:
         count = float(m_pide.group(1))
@@ -993,6 +1012,7 @@ def calculate_fallback_macros(text: str):
         total_fat += count * 1.0
         items_found.append(f"{int(count)} Tırnak Pide")
 
+    # 7. Lavaş
     m_lavas = re.search(r'(\d+)\s*(?:adet|tane)?\s*(?:lavaş|lavas|ince lavaş|tam buğday lavaş)', t)
     if m_lavas:
         count = float(m_lavas.group(1))
@@ -1002,6 +1022,7 @@ def calculate_fallback_macros(text: str):
         total_fat += count * 2.0
         items_found.append(f"{int(count)} Lavaş")
 
+    # 8. Laviva / Çikolata
     m_snack = re.search(r'(\d+)?\s*(?:laviva|çikolata|bisküvi|gofret)', t)
     if m_snack:
         count = float(m_snack.group(1)) if m_snack.group(1) else 1.0
@@ -1010,6 +1031,15 @@ def calculate_fallback_macros(text: str):
         total_carb += count * 22
         total_fat += count * 9
         items_found.append(f"{int(count)} Laviva/Çikolata")
+
+    # 9. Yumurta
+    m_egg = re.search(r'(\d+)\s*(?:adet|tane)?\s*(?:yumurta|egg)', t)
+    if m_egg:
+        count = float(m_egg.group(1))
+        total_cal += count * 72
+        total_pro += count * 6.3
+        total_fat += count * 5.0
+        items_found.append(f"{int(count)} Yumurta")
 
     if total_cal > 0:
         summary_title = ", ".join(items_found[:2]) + ("..." if len(items_found) > 2 else "")
@@ -1068,31 +1098,32 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
 def nutrition_dialogue(data: NutritionChatInput):
     start_time = time.time()
     
-    # Standart sporcu besin referansları prompt'a sabitlendi:
     system_prompt = """
-Sen uzman bir Sporcu Beslenme Koçusun.
-GÖREVİN: Kullanıcının girdiği besinlerin kalori ve makrolarını GERÇEK VE MANTIKLI değerlerle hesaplamak.
+Sen profesyonel bir Sporcu Beslenme ve Makro Koçusun.
+GÖREVİN: Kullanıcının girdiği besinlerin kalori ve makrolarını GERÇEK değerlerle hesaplamak.
 
-TEMEL REFERANSLAR (Asla saçmalama!):
-- 100g Tavuk Göğsü: ~130 kcal, ~28g Protein, 0g Karb, ~2g Yağ (220g tavuk = ~62g Protein)
+TEMEL REFERANSLAR (100g için):
+- 100g Dana Bonfile / Biftek: ~150 kcal, ~25g Protein, 0g Karb, ~5g Yağ (1 kg / 1000g Bonfile = ~1500 kcal, ~250g Protein, ~50g Yağ)
+- 100g Tavuk Göğsü: ~130 kcal, ~28g Protein, 0g Karb, ~2g Yağ (1 kg Tavuk = ~1300 kcal, ~280g Protein)
 - 100g Pişmiş Bulgur: ~150 kcal, ~4g Protein, ~30g Karb, ~1g Yağ
-- 100g Patates Cipsi / Ruffles: ~530 kcal, ~6g Protein, ~52g Karb, ~33g Yağ
-- 1 Adet Küçük Tırnak Pide / Garnitür: ~130 kcal, ~4g Protein, ~26g Karb, ~1g Yağ
-- 1 Adet İnce Lavaş: ~160 kcal, ~4g Protein, ~31g Karb, ~2g Yağ
+- 100g Pişmiş Pirinç Pilavı: ~160 kcal, ~3g Protein, ~35g Karb, ~1g Yağ
+- 100g Ruffles / Cips: ~535 kcal, ~6g Protein, ~52g Karb, ~33g Yağ
+- 1 Adet Tırnak Pide: ~130 kcal, ~4.5g Protein, ~26g Karb, ~1g Yağ
+- 1 Adet İnce Lavaş: ~160 kcal, ~4.5g Protein, ~31g Karb, ~2g Yağ
 - 1 Adet Laviva: ~180 kcal, ~2.5g Protein, ~22g Karb, ~9g Yağ
+- 1 Adet Yumurta: ~72 kcal, ~6.3g Protein, ~5g Yağ
 
-ASLA 200g-300g'dan fazla protein sallama! 
-Tüm öğünün toplam protein değeri genellikle 40g - 90g arasındadır.
+Önemli Kural: Kilogram (kg/kilo) girildiğinde 1000 gram üzerinden doğru orantı yap.
 
 Yanıtını SADECE şu JSON yapısında ver:
 {
-  "coach_reply": "Samimi ve net sporcu koçu dökümü.",
-  "food_name": "Öğün Başlığı (Örn: Tavuk, Bulgur, Pide & Ruffles)",
-  "items_summary": "Tüm besinler (Örn: 220g Tavuk, 70g Bulgur, 2 Pide, 1 Lavaş, 105g Ruffles)",
-  "calories": 1450,
-  "protein": 75,
-  "carbs": 165,
-  "fat": 42
+  "coach_reply": "Sporcu koçu değerlendirmesi ve makro dökümü.",
+  "food_name": "Öğün Adı (Örn: 1kg Bonfile)",
+  "items_summary": "Tüm besinler (Örn: 1000g Bonfile)",
+  "calories": 1500,
+  "protein": 250,
+  "carbs": 0,
+  "fat": 50
 }
 """
 
@@ -1114,28 +1145,26 @@ Yanıtını SADECE şu JSON yapısında ver:
         )
         raw_content = chat_completion.choices[0].message.content
         parsed_json = json.loads(raw_content)
-        
-        # Mantık Filtresi: Protein 200g'dan büyükse model halüsinasyon görmüştür, düzelt
-        pro_val = float(parsed_json.get("protein", 0))
-        if pro_val > 200:
-            parsed_json = calculate_fallback_macros(data.user_message) or parsed_json
 
-        detected_meal = {
-            "food_name": parsed_json.get("food_name", "Öğün"),
-            "items_summary": parsed_json.get("items_summary", data.user_message),
-            "calories": round(float(parsed_json.get("calories", 0))),
-            "protein": round(float(parsed_json.get("protein", 0))),
-            "carbs": round(float(parsed_json.get("carbs", 0))),
-            "fat": round(float(parsed_json.get("fat", 0)))
-        }
-        reply_text = parsed_json.get("coach_reply", "")
+        if float(parsed_json.get("calories", 0)) > 0:
+            detected_meal = {
+                "food_name": parsed_json.get("food_name", "Öğün"),
+                "items_summary": parsed_json.get("items_summary", data.user_message),
+                "calories": round(float(parsed_json.get("calories", 0))),
+                "protein": round(float(parsed_json.get("protein", 0))),
+                "carbs": round(float(parsed_json.get("carbs", 0))),
+                "fat": round(float(parsed_json.get("fat", 0)))
+            }
+            reply_text = parsed_json.get("coach_reply", "")
     except Exception as e:
-        print(f"Beslenme Analiz Hatasi: {e}")
+        print(f"Beslenme LLM Hatasi: {e}")
+
+    if not detected_meal:
         detected_meal = calculate_fallback_macros(data.user_message)
 
     if not reply_text:
         if detected_meal:
-            reply_text = f"Afiyet olsun kral! Girdiğin öğün (**{detected_meal['items_summary']}**) kaydedildi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
+            reply_text = f"Afiyet olsun kral! Girdiğin öğün (**{detected_meal['items_summary']}**) listene eklendi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
         else:
             reply_text = "Öğünün kaydedildi kral!"
 
