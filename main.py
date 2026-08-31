@@ -301,7 +301,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Ne yediysen tek tek veya topluca yaz (örn: <i>"200g pirinç, 300g tavuk, 20g zeytinyağı"</i>) ya da fotoğrafını at; seçtiğin güne makroları ekleyeyim.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen tek tek veya topluca yaz (örn: <i>"200g pirinç, 300g tavuk, 20g zeytinyağı, 1 laviva"</i>) ya da fotoğrafını at; seçtiğin güne makroları ekleyeyim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -1114,19 +1114,13 @@ def nutrition_dialogue(data: NutritionChatInput):
 Sen uzman bir 'Sporcu Beslenme & Makro Koçu'sun.
 Kullanıcının seçili gündeki kayıtlı öğünleri: {data.daily_summary if data.daily_summary else 'Henüz öğün girilmedi.'}
 
-ÖNEMLİ REFERANS BİLGİLERİ (100g için):
-- Çiğ Tavuk Göğsü / Pişmiş Tavuk: 100g ~ 125-165 kcal, 25-31g Protein, 0g Karb, 1-3g Yağ (300g tavuk = ~80g protein!)
-- Çiğ Pirinç: 100g ~ 360 kcal, 7g Protein, 78g Karb, 1g Yağ. (200g pirinç = ~156g karb, ~720 kcal)
-- Zeytinyağı: 10g ~ 90 kcal, 10g Yağ. (20g zeytinyağı = 180 kcal, 20g Yağ)
-- Yumurta (1 adet): ~70 kcal, 6g Protein, 5g Yağ.
-
 GÖREVİN:
-1. Kullanıcının yazdığı TÜM besinlerin tek tek ve TOPLAM Kalori, Protein, Karbonhidrat, Yağ değerlerini doğru hesapla.
+1. Kullanıcının yazdığı TÜM besinlerin (tavuk, pilav, atıştırmalık, tatlı, çikolata vs.) tek tek ve TOPLAM Kalori, Protein, Karbonhidrat, Yağ değerlerini doğru hesapla.
 2. Kesinlikle <think> düşünce etiketi üretme.
 3. Sporcu dilinde motive edici net bir döküm sun.
-4. YANITININ EN SON SATIRINA mutlaka ve istisnasız aşağıdaki JSON formatını ekle (Tüm toplam değerleri tek bir JSON nesnesi olarak ver):
+4. YANITININ EN SONUNA mutlaka ve istisnasız aşağıdaki JSON formatını ekle. Metinde hesapladığın TÜM besinlerin GENEL TOPLAMINI bu tek nesne içine yaz:
 <<<JSON
-{{"food_name": "Öğün Başlığı", "items_summary": "200g Pirinç, 300g Tavuk, 20g Zeytinyağı", "calories": 1150, "protein": 80, "carbs": 160, "fat": 25}}
+{{"food_name": "Girilen Besinlerin Özeti", "items_summary": "Tüm besinler ve gramajları", "calories": 1520, "protein": 110, "carbs": 180, "fat": 35}}
 JSON>>>
 """
 
@@ -1159,26 +1153,47 @@ JSON>>>
 
     if reply_text:
         reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
-        try:
-            json_match = re.search(r'<<<JSON\s*(\{.*?\})\s*JSON>>>', reply_text, re.DOTALL)
-            if json_match:
+        
+        # 1. Öncelik: <<<JSON ... JSON>>> bloğunu ayıkla
+        json_match = re.search(r'<<<JSON\s*(\{.*?\})\s*JSON>>>', reply_text, re.DOTALL)
+        if json_match:
+            try:
                 raw_json = json_match.group(1).replace("\n", " ").strip()
                 detected_meal = json.loads(raw_json)
                 reply_text = reply_text.replace(json_match.group(0), "").strip()
-            else:
-                brace_match = re.search(r'\{[^{}]*"calories"[^{}]*\}', reply_text, re.DOTALL)
-                if brace_match:
-                    detected_meal = json.loads(brace_match.group(0))
-                    reply_text = reply_text.replace(brace_match.group(0), "").strip()
-        except Exception:
-            pass
+            except Exception:
+                pass
+        
+        # 2. Öncelik: Standart Markdown ```json ... ``` bloğunu yakala
+        if not detected_meal:
+            md_json = re.search(r'```json\s*(\{.*?\})\s*```', reply_text, re.DOTALL)
+            if md_json:
+                try:
+                    detected_meal = json.loads(md_json.group(1).replace("\n", " ").strip())
+                    reply_text = reply_text.replace(md_json.group(0), "").strip()
+                except Exception:
+                    pass
 
+        # 3. Öncelik: Metin içindeki herhangi bir geçerli JSON nesnesini bul
+        if not detected_meal:
+            all_objs = re.findall(r'\{[^{}]*\}', reply_text, re.DOTALL)
+            for obj in reversed(all_objs):
+                try:
+                    parsed = json.loads(obj)
+                    if "calories" in parsed and float(parsed["calories"]) > 0:
+                        detected_meal = parsed
+                        reply_text = reply_text.replace(obj, "").strip()
+                        break
+                except Exception:
+                    continue
+
+    # LLM tamamen yanıtsız kalırsa regex tabanlı fallback devreye girer
     if not detected_meal:
         detected_meal = calculate_fallback_macros(data.user_message)
 
     if not reply_text:
         if detected_meal:
-            reply_text = f"Afiyet olsun kral! Öğünün başarıyla analiz edildi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ** günlüğüne işlendi!"
+            reply_text = f"Afiyet olsun kral! Öğünün başarıyla analiz edildi: **{detected_meal.get('calories', 0)} kcal | {detected_meal.get('protein', 0)}g Protein | {detected_meal.get('carbs', 0)}g Karb | {detected_meal.get('fat', 0)}g Yağ** günlüğüne işlendi!"
         else:
             reply_text = "Öğünün kaydedildi kral, makrolarını dengeli tutmaya devam et!"
 
