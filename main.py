@@ -442,6 +442,9 @@ HTML_INTERFACE = """<!DOCTYPE html>
             if (viewName === 'overload') {
                 setTimeout(updateChart, 150);
             }
+            if (viewName === 'nutrition') {
+                renderSelectedDayNutrition();
+            }
         }
 
         function checkAuth() {
@@ -719,10 +722,10 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 `;
             } else {
                 dayMeals.forEach(meal => {
-                    cal += (meal.calories || 0);
-                    pro += (meal.protein || 0);
-                    carb += (meal.carbs || 0);
-                    fat += (meal.fat || 0);
+                    cal += parseFloat(meal.calories || 0);
+                    pro += parseFloat(meal.protein || 0);
+                    carb += parseFloat(meal.carbs || 0);
+                    fat += parseFloat(meal.fat || 0);
 
                     const itemsSub = meal.items_summary ? `<div class="meal-items-subtext">🍽️ ${meal.items_summary}</div>` : '';
 
@@ -732,10 +735,10 @@ HTML_INTERFACE = """<!DOCTYPE html>
                                 <div>
                                     <span class="ex-title">${meal.food_name}</span>
                                     <div style="font-size:0.75rem; color:#9ca3af; margin-top:2px;">
-                                        <span class="macro-c-cal">${meal.calories} kcal</span> | 
-                                        <span class="macro-c-pro">P: ${meal.protein}g</span> | 
-                                        <span class="macro-c-carb">K: ${meal.carbs}g</span> | 
-                                        <span class="macro-c-fat">Y: ${meal.fat}g</span>
+                                        <span class="macro-c-cal">${Math.round(meal.calories)} kcal</span> | 
+                                        <span class="macro-c-pro">P: ${Math.round(meal.protein)}g</span> | 
+                                        <span class="macro-c-carb">K: ${Math.round(meal.carbs)}g</span> | 
+                                        <span class="macro-c-fat">Y: ${Math.round(meal.fat)}g</span>
                                     </div>
                                 </div>
                                 <button onclick="deleteMeal(${meal.id})">Sil</button>
@@ -903,15 +906,15 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
                 document.getElementById(loadingId).innerHTML = replyFormatted || "Makrolar hesaplandı ve eklendi!";
 
-                if (data.detected_meal && data.detected_meal.calories > 0) {
+                if (data.detected_meal && Number(data.detected_meal.calories) > 0) {
                     const newMeal = {
                         id: Date.now(),
                         food_name: data.detected_meal.food_name || "Öğün",
                         items_summary: data.detected_meal.items_summary || currentText,
-                        calories: Math.round(data.detected_meal.calories || 0),
-                        protein: Math.round(data.detected_meal.protein || 0),
-                        carbs: Math.round(data.detected_meal.carbs || 0),
-                        fat: Math.round(data.detected_meal.fat || 0)
+                        calories: Math.round(Number(data.detected_meal.calories) || 0),
+                        protein: Math.round(Number(data.detected_meal.protein) || 0),
+                        carbs: Math.round(Number(data.detected_meal.carbs) || 0),
+                        fat: Math.round(Number(data.detected_meal.fat) || 0)
                     };
 
                     if (!weeklyNutrition[currentDay.fullDate]) {
@@ -1041,6 +1044,16 @@ def calculate_fallback_macros(text: str):
         total_fat += count * 1.5
         items_found.append(f"{int(count)} Ölçek Protein Tozu")
 
+    # Laviva / Atıştırmalık Fallback
+    m_snack = re.search(r'(\d+)?\s*(?:laviva|çikolata|bisküvi|gofret)', t)
+    if m_snack:
+        count = float(m_snack.group(1)) if m_snack.group(1) else 1.0
+        total_cal += count * 180
+        total_pro += count * 2.5
+        total_carb += count * 22
+        total_fat += count * 9
+        items_found.append(f"{int(count)} Adet Atıştırmalık/Laviva")
+
     if total_cal > 0:
         summary_title = ", ".join(items_found[:2]) + ("..." if len(items_found) > 2 else "")
         return {
@@ -1115,10 +1128,10 @@ Sen uzman bir 'Sporcu Beslenme & Makro Koçu'sun.
 Kullanıcının seçili gündeki kayıtlı öğünleri: {data.daily_summary if data.daily_summary else 'Henüz öğün girilmedi.'}
 
 GÖREVİN:
-1. Kullanıcının yazdığı TÜM besinlerin (tavuk, pilav, atıştırmalık, tatlı, çikolata vs.) tek tek ve TOPLAM Kalori, Protein, Karbonhidrat, Yağ değerlerini doğru hesapla.
+1. Kullanıcının yazdığı TÜM besinlerin (tavuk, pilav, atıştırmalık, tatlı, çikolata, meyve vb.) tek tek ve TOPLAM Kalori, Protein, Karbonhidrat, Yağ değerlerini doğru hesapla.
 2. Kesinlikle <think> düşünce etiketi üretme.
 3. Sporcu dilinde motive edici net bir döküm sun.
-4. YANITININ EN SONUNA mutlaka ve istisnasız aşağıdaki JSON formatını ekle. Metinde hesapladığın TÜM besinlerin GENEL TOPLAMINI bu tek nesne içine yaz:
+4. YANITININ EN SONUNA mutlaka ve istisnasız aşağıdaki JSON formatını ekle. Metinde hesapladığın TÜM besinlerin GENEL TOPLAMINI bu tek nesne içine sayısal olarak yaz:
 <<<JSON
 {{"food_name": "Girilen Besinlerin Özeti", "items_summary": "Tüm besinler ve gramajları", "calories": 1520, "protein": 110, "carbs": 180, "fat": 35}}
 JSON>>>
@@ -1187,7 +1200,7 @@ JSON>>>
                 except Exception:
                     continue
 
-    # LLM tamamen yanıtsız kalırsa regex tabanlı fallback devreye girer
+    # Model JSON üretemezse fallback devreye girer
     if not detected_meal:
         detected_meal = calculate_fallback_macros(data.user_message)
 
