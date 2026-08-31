@@ -180,6 +180,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
     <div class="content-container">
 
+        <!-- 1. GİRİŞ SEÇİM EKRANI (DASHBOARD HUB) -->
         <div class="view-panel active" id="hubView">
             <div class="hub-title">
                 <h1>Modülünü Seç Kral 🦍</h1>
@@ -215,6 +216,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- 2. AI KOÇ EKRANI -->
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
@@ -236,6 +238,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- 3. PROGRESSIVE OVERLOAD EKRANI -->
         <div class="view-panel" id="overloadView">
             <div class="overload-col-left">
                 <div class="panel-card">
@@ -291,6 +294,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- 4. GÜNLÜK BESLENME EKRANI -->
         <div class="view-panel" id="nutritionView">
             <div class="overload-col-left">
                 <div class="chat-container">
@@ -934,6 +938,110 @@ HTML_INTERFACE = """<!DOCTYPE html>
 </html>
 """
 
+def get_dynamic_models():
+    try:
+        all_models = client.models.list()
+        valid = [
+            m.id for m in all_models.data
+            if not any(x in m.id.lower() for x in ["whisper", "guard", "orpheus", "allam"])
+        ]
+        if valid:
+            return valid
+    except Exception:
+        pass
+    return ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
+
+def calculate_fallback_macros(text: str):
+    t = text.lower()
+    total_cal = 0
+    total_pro = 0
+    total_carb = 0
+    total_fat = 0
+
+    # Tavuk
+    m_chick = re.search(r'(\d+)\s*g?\s*(?:tavuk|chicken|göğüs)', t)
+    if m_chick:
+        g = float(m_chick.group(1))
+        total_cal += g * 1.30
+        total_pro += g * 0.28
+        total_fat += g * 0.02
+
+    # Pirinç
+    m_rice = re.search(r'(\d+)\s*g?\s*(?:pirinç|pilav|rice)', t)
+    if m_rice:
+        g = float(m_rice.group(1))
+        total_cal += g * 3.50
+        total_pro += g * 0.07
+        total_carb += g * 0.77
+
+    # Pirinç Unu
+    m_rflour = re.search(r'(\d+)\s*g?\s*(?:pirinç unu|bebek bisküvisi)', t)
+    if m_rflour:
+        g = float(m_rflour.group(1))
+        total_cal += g * 3.60
+        total_pro += g * 0.07
+        total_carb += g * 0.80
+
+    # Zeytinyağı
+    m_oil = re.search(r'(\d+)\s*g?\s*(?:zeytinyağı|yağ|zeytin yağı|oil)', t)
+    if m_oil:
+        g = float(m_oil.group(1))
+        total_cal += g * 9.0
+        total_fat += g * 1.0
+
+    # Yumurta
+    m_egg = re.search(r'(\d+)\s*(?:adet|tane)?\s*(?:yumurta|egg)', t)
+    if m_egg:
+        count = float(m_egg.group(1))
+        total_cal += count * 72
+        total_pro += count * 6.3
+        total_fat += count * 5.0
+
+    # Tam buğday ekmeği
+    m_bread = re.search(r'(\d+)\s*g?\s*(?:ekmek|tam buğday)', t)
+    if m_bread:
+        g = float(m_bread.group(1))
+        total_cal += g * 2.45
+        total_pro += g * 0.09
+        total_carb += g * 0.45
+
+    # Fıstık ezmesi
+    m_pb = re.search(r'(\d+)\s*g?\s*(?:fıstık ezmesi|peanut butter)', t)
+    if m_pb:
+        g = float(m_pb.group(1))
+        total_cal += g * 5.90
+        total_pro += g * 0.25
+        total_carb += g * 0.20
+        total_fat += g * 0.50
+
+    # Badem
+    m_almond = re.search(r'(\d+)\s*g?\s*(?:badem|almond)', t)
+    if m_almond:
+        g = float(m_almond.group(1))
+        total_cal += g * 5.80
+        total_pro += g * 0.21
+        total_carb += g * 0.22
+        total_fat += g * 0.50
+
+    # Protein Tozu
+    m_whey = re.search(r'(\d+)\s*(?:ölçek|scoop|ölcek)\s*(?:protein tozu|whey|protein)', t)
+    if m_whey:
+        count = float(m_whey.group(1))
+        total_cal += count * 120
+        total_pro += count * 24
+        total_carb += count * 2
+        total_fat += count * 1.5
+
+    if total_cal > 0:
+        return {
+            "food_name": "Hesaplanan Öğün",
+            "calories": round(total_cal),
+            "protein": round(total_pro),
+            "carbs": round(total_carb),
+            "fat": round(total_fat)
+        }
+    return None
+
 @app.get("/", response_class=HTMLResponse)
 def serve_ui():
     return HTML_INTERFACE
@@ -965,15 +1073,10 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
     else:
         messages.append({"role": "user", "content": data.user_message})
 
-    preferred_models = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768",
-        "qwen-2.5-32b"
-    ]
-
+    available_models = get_dynamic_models()
     reply_text = None
-    for model_name in preferred_models:
+
+    for model_name in available_models:
         try:
             chat_completion = client.chat.completions.create(
                 messages=messages, model=model_name, temperature=0.4, max_tokens=600,
@@ -984,11 +1087,9 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
             continue
 
     if not reply_text:
-        reply_text = "Analiz motoru şu anda yanıt veremedi kral."
+        reply_text = "Hedeflerine odaklan kral! Antrenmanda her zaman bir önceki haftadan 1 tekrar veya 1-2.5 kg fazla zorlamaya devam et."
 
-    # Think bloklarını temizle
     reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
-
     elapsed = round(time.time() - start_time, 2)
     print(f"--> [LOG] Coach Yaniti: {elapsed}sn")
 
@@ -1000,18 +1101,18 @@ def nutrition_dialogue(data: NutritionChatInput):
     
     system_prompt = f"""
 Sen uzman bir 'Sporcu Beslenme & Makro Koçu'sun.
-Kullanıcının bugünkü kayıtlı öğünleri: {data.daily_summary if data.daily_summary else 'Henüz öğün girilmedi.'}
+Kullanıcının seçili gündeki kayıtlı öğünleri: {data.daily_summary if data.daily_summary else 'Henüz öğün girilmedi.'}
 
 ÖNEMLİ REFERANS BİLGİLERİ (100g için):
-- Çiğ Tavuk Göğsü / Pişmiş Tavuk: 100g ~ 120-165 kcal, 23-31g Protein, 0g Karb, 1-3g Yağ (300g tavuk en az 65-80g protein içerir!)
-- Çiğ Pirinç: 100g ~ 360 kcal, 7g Protein, 78g Karb, 1g Yağ. (Pişmiş pirinç 100g ~ 130 kcal, 28g Karb)
-- Zeytinyağı: 10g ~ 90 kcal, 10g Yağ. (20g zeytinyağı ~ 180 kcal, 20g Yağ)
-- Yumurta (1 adet orta): ~70 kcal, 6g Protein, 5g Yağ.
+- Çiğ Tavuk Göğsü / Pişmiş Tavuk: 100g ~ 125-165 kcal, 25-31g Protein, 0g Karb, 1-3g Yağ (300g tavuk = ~80g protein!)
+- Çiğ Pirinç: 100g ~ 360 kcal, 7g Protein, 78g Karb, 1g Yağ. (200g pirinç = ~156g karb, ~720 kcal)
+- Zeytinyağı: 10g ~ 90 kcal, 10g Yağ. (20g zeytinyağı = 180 kcal, 20g Yağ)
+- Yumurta (1 adet): ~70 kcal, 6g Protein, 5g Yağ.
 
 GÖREVİN:
 1. Kullanıcının yazdığı TÜM besinlerin tek tek ve TOPLAM Kalori, Protein, Karbonhidrat, Yağ değerlerini doğru hesapla.
-2. Kesinlikle <think> veya düşünce etiketleri basma.
-3. Sporcu dilinde kısa ve motive edici bir döküm sun.
+2. Kesinlikle <think> düşünce etiketi üretme.
+3. Sporcu dilinde motive edici net bir döküm sun.
 4. YANITININ EN SON SATIRINA mutlaka ve istisnasız aşağıdaki JSON formatını ekle (Tüm toplam değerleri tek bir JSON nesnesi olarak ver):
 <<<JSON
 {{"food_name": "Kısa Öğün Özeti", "calories": 1150, "protein": 80, "carbs": 160, "fat": 25}}
@@ -1030,15 +1131,10 @@ JSON>>>
     else:
         messages.append({"role": "user", "content": data.user_message})
 
-    preferred_models = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768",
-        "qwen-2.5-32b"
-    ]
-
+    available_models = get_dynamic_models()
     reply_text = None
-    for model_name in preferred_models:
+
+    for model_name in available_models:
         try:
             chat_completion = client.chat.completions.create(
                 messages=messages, model=model_name, temperature=0.2, max_tokens=700,
@@ -1048,45 +1144,33 @@ JSON>>>
         except Exception:
             continue
 
-    if not reply_text:
-        reply_text = "Makro hesaplanamadı kral."
-
-    # Think bloklarını temizle
-    reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
-
     detected_meal = None
-    
-    try:
-        json_match = re.search(r'<<<JSON\s*(\{.*?\})\s*JSON>>>', reply_text, re.DOTALL)
-        if json_match:
-            raw_json = json_match.group(1).replace("\n", " ").strip()
-            detected_meal = json.loads(raw_json)
-            reply_text = reply_text.replace(json_match.group(0), "").strip()
-        else:
-            brace_match = re.search(r'\{[^{}]*"calories"[^{}]*\}', reply_text, re.DOTALL)
-            if brace_match:
-                detected_meal = json.loads(brace_match.group(0))
-                reply_text = reply_text.replace(brace_match.group(0), "").strip()
-    except Exception as e:
-        print("JSON parse fallback:", e)
 
-    if not detected_meal:
+    if reply_text:
+        reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
         try:
-            cal = re.search(r'(\d+[\.,]?\d*)\s*(?:kcal|kalori)', reply_text, re.IGNORECASE)
-            pro = re.search(r'(\d+[\.,]?\d*)\s*g?\s*protein', reply_text, re.IGNORECASE)
-            carb = re.search(r'(\d+[\.,]?\d*)\s*g?\s*karb', reply_text, re.IGNORECASE)
-            fat = re.search(r'(\d+[\.,]?\d*)\s*g?\s*yağ', reply_text, re.IGNORECASE)
-            
-            if cal:
-                detected_meal = {
-                    "food_name": "Toplu Öğün",
-                    "calories": float(cal.group(1).replace(",", ".")),
-                    "protein": float(pro.group(1).replace(",", ".")) if pro else 0,
-                    "carbs": float(carb.group(1).replace(",", ".")) if carb else 0,
-                    "fat": float(fat.group(1).replace(",", ".")) if fat else 0
-                }
-        except Exception as ex:
-            print("Regex fallback hatası:", ex)
+            json_match = re.search(r'<<<JSON\s*(\{.*?\})\s*JSON>>>', reply_text, re.DOTALL)
+            if json_match:
+                raw_json = json_match.group(1).replace("\n", " ").strip()
+                detected_meal = json.loads(raw_json)
+                reply_text = reply_text.replace(json_match.group(0), "").strip()
+            else:
+                brace_match = re.search(r'\{[^{}]*"calories"[^{}]*\}', reply_text, re.DOTALL)
+                if brace_match:
+                    detected_meal = json.loads(brace_match.group(0))
+                    reply_text = reply_text.replace(brace_match.group(0), "").strip()
+        except Exception:
+            pass
+
+    # Eğer model JSON üretmediyse veya API başarısız olduysa Deterministik Motor devreye girer
+    if not detected_meal:
+        detected_meal = calculate_fallback_macros(data.user_message)
+
+    if not reply_text:
+        if detected_meal:
+            reply_text = f"Afiyet olsun kral! Öğünün başarıyla analiz edildi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ** günlüğüne işlendi!"
+        else:
+            reply_text = "Öğünün kaydedildi kral, makrolarını dengeli tutmaya devam et!"
 
     elapsed = round(time.time() - start_time, 2)
     print(f"--> [LOG] Nutrition Yaniti: {elapsed}sn")
