@@ -364,13 +364,26 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         function addWorkoutLog() {
             if (!currentUser) return;
+            
             const name = document.getElementById("exerciseName").value.trim();
-            const setNum = parseInt(document.getElementById("exerciseSet").value) || 1;
-            const weight = parseFloat(document.getElementById("exerciseWeight").value);
-            const reps = parseInt(document.getElementById("exerciseReps").value);
-            const date = document.getElementById("exerciseDate").value.trim() || todayStr;
+            const setVal = document.getElementById("exerciseSet").value.trim();
+            const weightVal = document.getElementById("exerciseWeight").value.trim();
+            const repsVal = document.getElementById("exerciseReps").value.trim();
+            const dateVal = document.getElementById("exerciseDate").value.trim() || todayStr;
 
-            if (!name || isNaN(weight) || isNaN(reps)) return alert("Tüm bilgileri eksiksiz doldur kral!");
+            if (!name) {
+                return alert("Lütfen hareket adını gir kral!");
+            }
+            if (!weightVal || isNaN(Number(weightVal))) {
+                return alert("Lütfen ağırlığı (kg) sayı olarak gir kral!");
+            }
+            if (!repsVal || isNaN(Number(repsVal))) {
+                return alert("Lütfen tekrar sayısını gir kral!");
+            }
+
+            const setNum = parseInt(setVal, 10) || 1;
+            const weight = parseFloat(weightVal);
+            const reps = parseInt(repsVal, 10);
 
             const newLog = {
                 id: Date.now(),
@@ -378,15 +391,17 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 set_num: setNum,
                 weight: weight,
                 reps: reps,
-                date: date
+                date: dateVal
             };
 
             weeklyLogs.push(newLog);
             saveUserWeeklyLogs(currentUser.username, weeklyLogs);
 
+            // Bir sonraki set için hazırla
             document.getElementById("exerciseSet").value = setNum + 1;
             document.getElementById("exerciseWeight").value = "";
             document.getElementById("exerciseReps").value = "";
+            
             loadUserWorkouts();
         }
 
