@@ -40,7 +40,7 @@ HTML_INTERFACE = """
         .auth-toggle { font-size: 0.8rem; color: #9ca3af; text-align: center; cursor: pointer; }
         .auth-toggle b { color: #00f2fe; }
 
-        /* Üst Bar */
+        /* Üst Header Bar */
         .header-bar { height: 60px; background: #0f121a; border-bottom: 1px solid #1c2230; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; }
         .brand { font-size: 1.15rem; font-weight: 800; color: #00f2fe; display: flex; align-items: center; gap: 8px; cursor: pointer; }
         .back-hub-btn { background: #1a202c; color: #00f2fe; border: 1px solid #28334a; padding: 6px 14px; border-radius: 8px; font-size: 0.8rem; font-weight: 700; cursor: pointer; display: none; }
@@ -49,7 +49,7 @@ HTML_INTERFACE = """
         .user-tag { font-size: 0.8rem; background: #161c26; padding: 6px 12px; border-radius: 8px; color: #10b981; border: 1px solid #263245; }
         .logout-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem; font-weight: 600; }
 
-        /* Ana İçerik */
+        /* Ana İçerik Taşıyıcı */
         .content-container { flex: 1; display: flex; justify-content: center; align-items: center; overflow: hidden; position: relative; }
         .view-panel { display: none; width: 100%; height: 100%; padding: 20px; }
         .view-panel.active { display: flex; }
@@ -90,27 +90,34 @@ HTML_INTERFACE = """
         .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 800; padding: 12px 24px; border-radius: 10px; cursor: pointer; }
 
         /* --- 3. PROGRESSIVE OVERLOAD EKRANI --- */
-        #overloadView { gap: 20px; max-width: 1250px; }
-        .overload-col-left { width: 42%; display: flex; flex-direction: column; gap: 16px; }
-        .overload-col-right { width: 58%; display: flex; flex-direction: column; gap: 16px; }
+        #overloadView { gap: 20px; max-width: 1300px; }
+        .overload-col-left { width: 44%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
+        .overload-col-right { width: 56%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
 
-        .panel-card { background: #131722; border: 1px solid #1f2738; border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
-        .panel-header { font-size: 1rem; font-weight: 800; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
+        .panel-card { background: #131722; border: 1px solid #1f2738; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+        .panel-header { font-size: 0.95rem; font-weight: 800; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
+
+        .week-badge { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
 
         .input-form { display: flex; flex-direction: column; gap: 10px; }
         .input-form input, .input-form select { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 10px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; }
         .input-form input:focus, .input-form select:focus { border-color: #00f2fe; }
         .form-grid-row { display: flex; gap: 8px; }
-        .btn-log { background: #00f2fe; color: #000; border: none; font-weight: 800; padding: 12px; border-radius: 8px; cursor: pointer; margin-top: 4px; }
+        .btn-log { background: #00f2fe; color: #000; border: none; font-weight: 800; padding: 11px; border-radius: 8px; cursor: pointer; margin-top: 2px; }
 
-        .history-list { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 8px; }
-        .log-item { display: flex; justify-content: space-between; align-items: center; background: #0a0c10; padding: 10px 14px; border-radius: 9px; font-size: 0.85rem; border: 1px solid #1c2230; }
-        .log-item .set-badge { background: #1e293b; color: #00f2fe; padding: 2px 7px; border-radius: 5px; font-weight: 700; font-size: 0.75rem; margin-right: 6px; }
+        /* Gün Gün Gruplanmış Antrenman Listesi */
+        .history-list { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+        .day-group { background: #0e121a; border: 1px solid #1f2738; border-radius: 12px; overflow: hidden; }
+        .day-header { background: #171e2c; padding: 8px 12px; font-size: 0.8rem; font-weight: 700; color: #00f2fe; display: flex; justify-content: space-between; }
+        .day-items { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+        
+        .log-item { display: flex; justify-content: space-between; align-items: center; background: #0a0c10; padding: 8px 12px; border-radius: 8px; font-size: 0.82rem; border: 1px solid #1c2230; }
+        .log-item .set-badge { background: #1e293b; color: #00f2fe; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 0.72rem; margin-right: 6px; }
         .log-item .ex-title { font-weight: 700; color: #fff; }
         .log-item .ex-val { color: #38bdf8; font-weight: 700; }
-        .log-item button { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.85rem; padding: 4px; }
+        .log-item button { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem; padding: 2px 4px; }
 
-        .chart-box { flex: 1; min-height: 330px; position: relative; }
+        .chart-box { flex: 1; min-height: 320px; position: relative; }
 
         @media (max-width: 850px) {
             body { overflow: auto; height: auto; }
@@ -124,7 +131,6 @@ HTML_INTERFACE = """
 </head>
 <body>
 
-    <!-- GİRİŞ / KAYIT MODAL -->
     <div class="auth-overlay" id="authOverlay">
         <div class="auth-box">
             <h2 id="authTitle">⚡ LOOKSMAX PRO</h2>
@@ -135,7 +141,6 @@ HTML_INTERFACE = """
         </div>
     </div>
 
-    <!-- ÜST HEADER BAR -->
     <div class="header-bar">
         <div style="display:flex; align-items:center; gap:12px;">
             <div class="brand" onclick="openView('hub')">⚡ LOOKSMAX HUB</div>
@@ -147,17 +152,14 @@ HTML_INTERFACE = """
         </div>
     </div>
 
-    <!-- ANA İÇERİK PANELİ -->
     <div class="content-container">
 
-        <!-- 1. GİRİŞ SEÇİM EKRANI (DASHBOARD HUB) -->
         <div class="view-panel active" id="hubView">
             <div class="hub-title">
                 <h1>Modülünü Seç Kral 🦍</h1>
                 <p>Neyi yönetmek veya geliştirmek istiyorsan tıkla ve başla.</p>
             </div>
             <div class="hub-grid">
-                <!-- KART 1: AI KOÇ -->
                 <div class="hub-card" onclick="openView('coach')">
                     <div>
                         <div class="card-icon">🤖</div>
@@ -167,19 +169,17 @@ HTML_INTERFACE = """
                     <div class="card-action">Koçla Konuş →</div>
                 </div>
 
-                <!-- KART 2: PROGRESSIVE OVERLOAD -->
                 <div class="hub-card" onclick="openView('overload')">
                     <div>
                         <div class="card-icon">📈</div>
                         <div class="card-heading">Progressive Overload</div>
-                        <div class="card-desc">Günün hareketlerini, setlerini ve ağırlıklarını kaydet. Gelişim grafiğiyle sınırlarını zorla.</div>
+                        <div class="card-desc">Günün hareketlerini, setlerini ve ağırlıklarını kaydet. Haftalık döngüyle geçmiş antrenmanlarını gün gün incele.</div>
                     </div>
                     <div class="card-action">Overload Takip →</div>
                 </div>
             </div>
         </div>
 
-        <!-- 2. AI KOÇ EKRANI -->
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
@@ -201,12 +201,13 @@ HTML_INTERFACE = """
             </div>
         </div>
 
-        <!-- 3. PROGRESSIVE OVERLOAD EKRANI -->
         <div class="view-panel" id="overloadView">
-            <!-- Sol Panel: Set Ekleme & Liste -->
             <div class="overload-col-left">
                 <div class="panel-card">
-                    <div class="panel-header">➕ Yeni Set Kaydet</div>
+                    <div class="panel-header">
+                        <span>➕ Set Kaydet</span>
+                        <span class="week-badge" id="currentWeekDisplay">Haftalık Döngü</span>
+                    </div>
                     <div class="input-form">
                         <input type="text" id="exerciseName" placeholder="Hareket Adı (Örn: Incline Dumbbell Press)" list="defaultExercises" />
                         <datalist id="defaultExercises">
@@ -227,21 +228,23 @@ HTML_INTERFACE = """
                             <input type="number" id="exerciseReps" placeholder="Tekrar" style="flex:1;" />
                             <input type="text" id="exerciseDate" placeholder="Tarih" style="flex:1.2;" />
                         </div>
-                        <button class="btn-log" onclick="addWorkoutLog()">Seti Kaydet & Grafiğe Ekle</button>
+                        <button class="btn-log" onclick="addWorkoutLog()">Seti Kaydet</button>
                     </div>
                 </div>
 
                 <div class="panel-card" style="flex:1;">
-                    <div class="panel-header">📋 Girilen Setler</div>
+                    <div class="panel-header">
+                        <span>🗓️ Bu Haftanın Antrenmanları (Pzt - Paz)</span>
+                        <span style="font-size:0.75rem; color:#9ca3af;" id="weekTotalSets">0 Set</span>
+                    </div>
                     <div class="history-list" id="historyList"></div>
                 </div>
             </div>
 
-            <!-- Sağ Panel: Grafik -->
             <div class="overload-col-right">
                 <div class="panel-card" style="height: 100%;">
                     <div class="panel-header">
-                        <span>📊 Ağırlık / Hacim Grafiği</span>
+                        <span>📊 Hareket Gelişim Grafiği</span>
                         <select id="chartExerciseSelect" onchange="updateChart()" style="background:#0a0c10; border:1px solid #2b354d; color:#00f2fe; padding:6px 12px; border-radius:7px; font-weight:700; outline:none;"></select>
                     </div>
                     <div class="chart-box">
@@ -254,7 +257,18 @@ HTML_INTERFACE = """
     </div>
 
     <script>
-        // KALICI LOCAL STORAGE YÖNETİMİ (Kullanıcılar & Antrenmanlar Asla Silinmez)
+        // HAFTALIK DÖNGÜ VE PAZARTESİ TESPİTİ
+        function getMondayOfWeek(d) {
+            d = new Date(d);
+            var day = d.getDay(),
+                diff = d.getDate() - day + (day === 0 ? -6 : 1); // Pazartesi = 1
+            var mon = new Date(d.setDate(diff));
+            mon.setHours(0, 0, 0, 0);
+            return mon.toISOString().split('T')[0];
+        }
+
+        const currentWeekKey = getMondayOfWeek(new Date());
+
         function getStorageUsers() {
             return JSON.parse(localStorage.getItem("app_registered_users") || "{}");
         }
@@ -262,19 +276,27 @@ HTML_INTERFACE = """
             localStorage.setItem("app_registered_users", JSON.stringify(users));
         }
 
-        function getUserLogs(username) {
-            return JSON.parse(localStorage.getItem("workout_logs_" + username) || "[]");
+        // Kullanıcının sadece bu haftaki kayıtlarını al/kaydet
+        function getUserWeeklyLogs(username) {
+            const allWeeks = JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
+            return allWeeks[currentWeekKey] || [];
         }
-        function saveUserLogs(username, logs) {
-            localStorage.setItem("workout_logs_" + username, JSON.stringify(logs));
+
+        function saveUserWeeklyLogs(username, logs) {
+            const allWeeks = JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
+            allWeeks[currentWeekKey] = logs;
+            localStorage.setItem("user_weeks_" + username, JSON.stringify(allWeeks));
         }
 
         let currentUser = JSON.parse(localStorage.getItem("active_user") || "null");
         let isRegisterMode = false;
-        let workoutLogs = [];
+        let weeklyLogs = [];
         let chartInstance = null;
 
-        document.getElementById("exerciseDate").value = new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
+        // Varsayılan bugünün tarihi (Örn: 31.08.2026)
+        const todayStr = new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        document.getElementById("exerciseDate").value = todayStr;
+        document.getElementById("currentWeekDisplay").innerText = "Hafta: " + currentWeekKey;
 
         // MODÜL GEÇİŞİ
         function openView(viewName) {
@@ -289,7 +311,7 @@ HTML_INTERFACE = """
             }
         }
 
-        // KALICI AUTH
+        // AUTH
         function checkAuth() {
             if (!currentUser) {
                 document.getElementById("authOverlay").style.display = "flex";
@@ -323,7 +345,6 @@ HTML_INTERFACE = """
                 checkAuth();
             } else {
                 if (!allUsers[u] || allUsers[u] !== p) {
-                    // İlk defa geliyorsa otomatik oluştur kolaylığı
                     if (Object.keys(allUsers).length === 0 || !allUsers[u]) {
                         allUsers[u] = p;
                         saveStorageUsers(allUsers);
@@ -346,12 +367,12 @@ HTML_INTERFACE = """
             location.reload();
         }
 
-        // SET & PROGRESSIVE OVERLOAD
+        // SET & HAFTALIK GÜNLÜK YÖNETİMİ
         function loadUserWorkouts() {
             if (!currentUser) return;
-            workoutLogs = getUserLogs(currentUser.username);
+            weeklyLogs = getUserWeeklyLogs(currentUser.username);
             populateDropdown();
-            renderHistory();
+            renderWeeklyHistory();
             updateChart();
         }
 
@@ -361,7 +382,7 @@ HTML_INTERFACE = """
             const setNum = parseInt(document.getElementById("exerciseSet").value) || 1;
             const weight = parseFloat(document.getElementById("exerciseWeight").value);
             const reps = parseInt(document.getElementById("exerciseReps").value);
-            const date = document.getElementById("exerciseDate").value.trim() || "Bugün";
+            const date = document.getElementById("exerciseDate").value.trim() || todayStr;
 
             if (!name || isNaN(weight) || isNaN(reps)) return alert("Tüm bilgileri eksiksiz doldur kral!");
 
@@ -374,8 +395,8 @@ HTML_INTERFACE = """
                 date: date
             };
 
-            workoutLogs.push(newLog);
-            saveUserLogs(currentUser.username, workoutLogs);
+            weeklyLogs.push(newLog);
+            saveUserWeeklyLogs(currentUser.username, weeklyLogs);
 
             document.getElementById("exerciseSet").value = setNum + 1;
             document.getElementById("exerciseWeight").value = "";
@@ -384,15 +405,15 @@ HTML_INTERFACE = """
         }
 
         function deleteWorkout(id) {
-            workoutLogs = workoutLogs.filter(item => item.id !== id);
-            saveUserLogs(currentUser.username, workoutLogs);
+            weeklyLogs = weeklyLogs.filter(item => item.id !== id);
+            saveUserWeeklyLogs(currentUser.username, weeklyLogs);
             loadUserWorkouts();
         }
 
         function populateDropdown() {
             const select = document.getElementById("chartExerciseSelect");
             const currentSelected = select.value;
-            const unique = [...new Set(workoutLogs.map(item => item.exercise))];
+            const unique = [...new Set(weeklyLogs.map(item => item.exercise))];
 
             select.innerHTML = "";
             if (unique.length === 0) {
@@ -411,26 +432,51 @@ HTML_INTERFACE = """
             else select.value = unique[0];
         }
 
-        function renderHistory() {
+        // GÜN GÜN GRUPLAYARAK LİSTELEME
+        function renderWeeklyHistory() {
             const list = document.getElementById("historyList");
             list.innerHTML = "";
-            const reversed = [...workoutLogs].reverse();
+            document.getElementById("weekTotalSets").innerText = `${weeklyLogs.length} Toplam Set`;
 
-            if (reversed.length === 0) {
-                list.innerHTML = "<div style='color:#6b7280; font-size:0.85rem; text-align:center; padding:15px;'>Henüz set kaydedilmedi.</div>";
+            if (weeklyLogs.length === 0) {
+                list.innerHTML = "<div style='color:#6b7280; font-size:0.85rem; text-align:center; padding:20px;'>Bu hafta henüz antrenman girilmedi. Yeni haftaya bomba gibi başla!</div>";
                 return;
             }
 
-            reversed.forEach(item => {
-                list.innerHTML += `
-                    <div class="log-item">
-                        <div>
-                            <span class="set-badge">${item.set_num || 1}. SET</span>
-                            <span class="ex-title">${item.exercise}</span>: 
-                            <span class="ex-val">${item.weight} kg</span> × ${item.reps} tkr
-                            <span style="color:#6b7280; font-size:0.75rem; margin-left:6px;">(${item.date})</span>
+            // Tarihe göre grupla (En yeni gün en üstte)
+            const grouped = {};
+            weeklyLogs.forEach(item => {
+                if (!grouped[item.date]) grouped[item.date] = [];
+                grouped[item.date].push(item);
+            });
+
+            const sortedDates = Object.keys(grouped).reverse();
+
+            sortedDates.forEach(date => {
+                const sets = grouped[date];
+                let setsHtml = "";
+                sets.forEach(item => {
+                    setsHtml += `
+                        <div class="log-item">
+                            <div>
+                                <span class="set-badge">${item.set_num || 1}. SET</span>
+                                <span class="ex-title">${item.exercise}</span>: 
+                                <span class="ex-val">${item.weight} kg</span> × ${item.reps} tkr
+                            </div>
+                            <button onclick="deleteWorkout(${item.id})" title="Sil">Sil</button>
                         </div>
-                        <button onclick="deleteWorkout(${item.id})">Sil</button>
+                    `;
+                });
+
+                list.innerHTML += `
+                    <div class="day-group">
+                        <div class="day-header">
+                            <span>📅 ${date}</span>
+                            <span>${sets.length} Set</span>
+                        </div>
+                        <div class="day-items">
+                            ${setsHtml}
+                        </div>
                     </div>
                 `;
             });
@@ -438,7 +484,7 @@ HTML_INTERFACE = """
 
         function updateChart() {
             const selectedEx = document.getElementById("chartExerciseSelect").value;
-            const filtered = workoutLogs.filter(item => item.exercise === selectedEx);
+            const filtered = weeklyLogs.filter(item => item.exercise === selectedEx);
 
             const labels = filtered.map((item, idx) => `${item.date} (${item.set_num || idx+1}.Set)`);
             const weights = filtered.map(item => item.weight);
@@ -538,7 +584,7 @@ HTML_INTERFACE = """
             chatBox.innerHTML += `<div class="msg coach" id="${loadingId}"><i>Analiz ediliyor...</i></div>`;
             chatBox.scrollTop = chatBox.scrollHeight;
 
-            const lastSets = workoutLogs.slice(-5).map(s => `${s.exercise} (${s.set_num}.Set): ${s.weight}kg x ${s.reps}`).join(", ");
+            const lastSets = weeklyLogs.slice(-6).map(s => `${s.exercise} (${s.set_num}.Set, ${s.date}): ${s.weight}kg x ${s.reps}`).join(", ");
 
             try {
                 const response = await fetch("/chat", {
@@ -583,15 +629,15 @@ def serve_ui():
 def coach_dialogue(data: ChatInput):
     start_time = time.time()
     
-    user_context = f"Kullanıcının Son Setleri: {data.workout_summary}" if data.workout_summary else "Henüz set kaydedilmedi."
+    user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
 
     system_prompt = f"""
 Sen elit seviyede bir 'Looksmaxxing, Hipertrofi & Fizik Koçu'sun.
-KULLANICI SET GEÇMİŞİ:
+KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
 {user_context}
 
 1. SET / PROGRESSIVE OVERLOAD DEĞERLENDİRMESİ:
-- Kullanıcının son ağırlık ve setlerine bakarak bir sonraki antrenmanda hedeflemesi gereken net kg ve tekrarı söyle.
+- Kullanıcının bu haftaki ağırlık ve setlerine bakarak bir sonraki idmanda hedeflemesi gereken net kg ve tekrarı söyle.
 2. FOTOĞRAF ANALİZİ (Varsa):
 - Yemekse: Gramaj, kalori, makro çıkar.
 - Fizikse: Tahmini yağ oranı ve eksik bölgeleri listele.
@@ -638,14 +684,4 @@ KULLANICI SET GEÇMİŞİ:
         reply_text = "Analiz motoru şu anda yanıt veremedi kral."
 
     elapsed = round(time.time() - start_time, 2)
-    print(f"--> [LOG] Yanıt üretildi: {elapsed}sn")
-
-    return {
-        "user_message": data.user_message,
-        "coach_reply": reply_text
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    print(f"--> [LOG]
