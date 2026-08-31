@@ -1,5 +1,4 @@
 import os
-import time
 import json
 import re
 import logging
@@ -29,14 +28,14 @@ class NutritionChatInput(BaseModel):
     daily_summary: Optional[str] = ""
     history: List[dict] = []
 
-HTML_INTERFACE = """<!DOCTYPE html>
+HTML_INTERFACE = r"""<!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Looksmax Hub - Antrenman & Beslenme</title>
-    <link href="[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap)" rel="stylesheet">
-    <script src="[https://cdn.jsdelivr.net/npm/chart.js](https://cdn.jsdelivr.net/npm/chart.js)"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
         body { background-color: #0b0d12; color: #e5e7eb; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -662,4 +661,456 @@ HTML_INTERFACE = """<!DOCTYPE html>
                         {
                             label: 'Tekrar',
                             data: reps,
-                            borderColor: '#f59
+                            borderColor: '#f59e0b',
+                            backgroundColor: 'transparent',
+                            borderWidth: 2,
+                            borderDash: [5, 5],
+                            yAxisID: 'y1',
+                            tension: 0.35,
+                            pointBackgroundColor: '#f59e0b',
+                            pointRadius: 4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { grid: { color: '#1a2230' }, ticks: { color: '#9ca3af' } },
+                        y: { type: 'linear', position: 'left', grid: { color: '#1a2230' }, ticks: { color: '#00f2fe' } },
+                        y1: { type: 'linear', position: 'right', grid: { display: false }, ticks: { color: '#f59e0b' } }
+                    },
+                    plugins: { legend: { labels: { color: '#e5e7eb', font: { size: 11, weight: 'bold' } } } }
+                }
+            });
+        }
+
+        // ================= BESLENME YÖNETİMİ =================
+        function loadUserNutrition() {
+            if (!currentUser) return;
+            weeklyNutrition = getUserWeeklyNutrition(currentUser.username);
+            renderNutriDayTabs();
+            renderSelectedDayNutrition();
+        }
+
+        function renderNutriDayTabs() {
+            const bar = document.getElementById("nutriDaysTabBar");
+            if (!bar) return;
+            bar.innerHTML = "";
+
+            weekDaysData.forEach((d, idx) => {
+                const isActive = (idx === selectedNutriDayIdx) ? "active" : "";
+                bar.innerHTML += `
+                    <button class="day-tab-btn ${isActive}" onclick="selectNutriDayTab(${idx})">
+                        ${d.dayName}
+                        <span class="tab-sub">${d.shortDate}</span>
+                    </button>
+                `;
+            });
+        }
+
+        function selectNutriDayTab(idx) {
+            selectedNutriDayIdx = idx;
+            renderNutriDayTabs();
+            renderSelectedDayNutrition();
+        }
+
+        function renderSelectedDayNutrition() {
+            const currentDay = weekDaysData[selectedNutriDayIdx];
+            const dateDisp = document.getElementById("nutriSelectedDateDisplay");
+            if (dateDisp) {
+                dateDisp.innerText = currentDay.fullDate + " (" + currentDay.dayName + ")";
+            }
+
+            const dayMeals = weeklyNutrition[currentDay.fullDate] || [];
+            let cal = 0, pro = 0, carb = 0, fat = 0;
+            const list = document.getElementById("mealsList");
+            if (!list) return;
+            list.innerHTML = "";
+
+            if (dayMeals.length === 0) {
+                list.innerHTML = `
+                    <div class="empty-day-box">
+                        <div class="empty-day-icon">🍽️</div>
+                        <div class="empty-day-title">Öğün Girilmedi</div>
+                        <div class="empty-day-desc">${currentDay.fullDate} tarihi için henüz yemek kaydedilmedi.</div>
+                    </div>
+                `;
+            } else {
+                dayMeals.forEach(meal => {
+                    cal += parseFloat(meal.calories || 0);
+                    pro += parseFloat(meal.protein || 0);
+                    carb += parseFloat(meal.carbs || 0);
+                    fat += parseFloat(meal.fat || 0);
+
+                    const subHtml = meal.items_summary ? `<div class="meal-items-subtext">🍽️ ${meal.items_summary}</div>` : '';
+
+                    list.innerHTML += `
+                        <div class="log-item" style="flex-direction:column; align-items:flex-start; gap:6px;">
+                            <div style="display:flex; justify-content:space-between; width:100%; align-items:center;">
+                                <div>
+                                    <span class="ex-title">${meal.food_name}</span>
+                                    <div style="font-size:0.75rem; color:#9ca3af; margin-top:2px;">
+                                        <span class="macro-c-cal">${Math.round(meal.calories)} kcal</span> | 
+                                        <span class="macro-c-pro">P: ${Math.round(meal.protein)}g</span> | 
+                                        <span class="macro-c-carb">K: ${Math.round(meal.carbs)}g</span> | 
+                                        <span class="macro-c-fat">Y: ${Math.round(meal.fat)}g</span>
+                                    </div>
+                                </div>
+                                <button onclick="deleteMeal(${meal.id})">Sil</button>
+                            </div>
+                            ${subHtml}
+                        </div>
+                    `;
+                });
+            }
+
+            document.getElementById("totCalories").innerText = Math.round(cal) + " kcal";
+            document.getElementById("totProtein").innerText = Math.round(pro) + "g";
+            document.getElementById("totCarbs").innerText = Math.round(carb) + "g";
+            document.getElementById("totFat").innerText = Math.round(fat) + "g";
+        }
+
+        function deleteMeal(id) {
+            const currentDay = weekDaysData[selectedNutriDayIdx];
+            if (!weeklyNutrition[currentDay.fullDate]) return;
+            weeklyNutrition[currentDay.fullDate] = weeklyNutrition[currentDay.fullDate].filter(m => m.id !== id);
+            saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
+            renderSelectedDayNutrition();
+        }
+
+        function clearSelectedDayMeals() {
+            const currentDay = weekDaysData[selectedNutriDayIdx];
+            if (!confirm(currentDay.fullDate + " tarihindeki tüm öğünleri sıfırlamak istiyor musun?")) return;
+            weeklyNutrition[currentDay.fullDate] = [];
+            saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
+            renderSelectedDayNutrition();
+        }
+
+        // ================= CHAT & VISION =================
+        let conversationHistory = [];
+        let selectedBase64Image = null;
+        let nutriSelectedImage = null;
+
+        function handleImageSelect(event, type) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                if (type === 'coach') {
+                    selectedBase64Image = e.target.result;
+                    document.getElementById("imagePreview").src = selectedBase64Image;
+                    document.getElementById("previewBox").style.display = "flex";
+                } else {
+                    nutriSelectedImage = e.target.result;
+                    document.getElementById("nutriImagePreview").src = nutriSelectedImage;
+                    document.getElementById("nutriPreviewBox").style.display = "flex";
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function clearImage() {
+            selectedBase64Image = null;
+            document.getElementById("imageInput").value = "";
+            document.getElementById("previewBox").style.display = "none";
+        }
+
+        function clearNutriImage() {
+            nutriSelectedImage = null;
+            document.getElementById("nutriImageInput").value = "";
+            document.getElementById("nutriPreviewBox").style.display = "none";
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById("userInput");
+            const btn = document.getElementById("sendBtn");
+            const chatBox = document.getElementById("chatBox");
+            const text = input.value.trim();
+            
+            if (!text && !selectedBase64Image) return;
+
+            let userHtml = "";
+            if (selectedBase64Image) userHtml += `<img src="${selectedBase64Image}" class="preview-img" />`;
+            userHtml += `<span>${text || "Fotoğraf analizi"}</span>`;
+
+            chatBox.innerHTML += `<div class="msg user">${userHtml}</div>`;
+            const currentImg = selectedBase64Image;
+            const currentText = text || "Bu fotoğrafı analiz et.";
+
+            input.value = "";
+            clearImage();
+            btn.disabled = true;
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            const loadingId = "load-" + Date.now();
+            chatBox.innerHTML += `<div class="msg coach" id="${loadingId}"><i>Analiz ediliyor...</i></div>`;
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            const lastSets = weeklyLogs.slice(-6).map(s => `${s.exercise} (${s.set_num}.Set, ${s.date}): ${s.weight}kg x ${s.reps}`).join(", ");
+
+            try {
+                const response = await fetch("/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        user_message: currentText,
+                        workout_summary: lastSets,
+                        image_base64: currentImg,
+                        history: conversationHistory
+                    })
+                });
+                const data = await response.json();
+                let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
+                document.getElementById(loadingId).innerHTML = replyFormatted || "Yanıt alındı.";
+
+                conversationHistory.push({ role: "user", content: currentText });
+                conversationHistory.push({ role: "assistant", content: data.coach_reply });
+                if (conversationHistory.length > 8) conversationHistory = conversationHistory.slice(-8);
+            } catch (err) {
+                document.getElementById(loadingId).innerText = "Hata oluştu kral.";
+            } finally {
+                btn.disabled = false;
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
+        }
+
+        async function sendNutriMessage() {
+            const input = document.getElementById("nutriUserInput");
+            const btn = document.getElementById("nutriSendBtn");
+            const chatBox = document.getElementById("nutriChatBox");
+            const text = input.value.trim();
+
+            if (!text && !nutriSelectedImage) return;
+
+            const targetDateStr = weekDaysData[selectedNutriDayIdx].fullDate;
+
+            let userHtml = "";
+            if (nutriSelectedImage) userHtml += `<img src="${nutriSelectedImage}" class="preview-img" />`;
+            userHtml += `<span>${text || "Yemek analizi"}</span>`;
+
+            chatBox.innerHTML += `<div class="msg user">${userHtml}</div>`;
+            const currentImg = nutriSelectedImage;
+            const currentText = text || "Bu yemeğin makrolarını hesapla ve ekle.";
+
+            input.value = "";
+            clearNutriImage();
+            btn.disabled = true;
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            const loadingId = "load-nutri-" + Date.now();
+            chatBox.innerHTML += `<div class="msg coach" id="${loadingId}"><i>Makrolar hesaplanıyor...</i></div>`;
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            try {
+                const response = await fetch("/nutrition-chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        user_message: currentText,
+                        image_base64: currentImg
+                    })
+                });
+                const data = await response.json();
+
+                let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
+                document.getElementById(loadingId).innerHTML = replyFormatted || "Yanıt alındı.";
+
+                if (data.detected_meal && Number(data.detected_meal.calories) > 0) {
+                    const newMeal = {
+                        id: Date.now() + Math.floor(Math.random() * 1000),
+                        food_name: data.detected_meal.food_name || "Öğün",
+                        items_summary: data.detected_meal.items_summary || currentText,
+                        calories: Math.round(Number(data.detected_meal.calories) || 0),
+                        protein: Math.round(Number(data.detected_meal.protein) || 0),
+                        carbs: Math.round(Number(data.detected_meal.carbs) || 0),
+                        fat: Math.round(Number(data.detected_meal.fat) || 0)
+                    };
+
+                    if (!weeklyNutrition[targetDateStr]) {
+                        weeklyNutrition[targetDateStr] = [];
+                    }
+                    weeklyNutrition[targetDateStr] = [...weeklyNutrition[targetDateStr], newMeal];
+                    saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
+                    renderSelectedDayNutrition();
+                }
+            } catch (err) {
+                document.getElementById(loadingId).innerText = "Hata oluştu kral, tekrar dener misin?";
+            } finally {
+                btn.disabled = false;
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
+        }
+
+        function handleKey(e, type) {
+            if (e.key === "Enter") {
+                if (type === 'coach') sendMessage();
+                else sendNutriMessage();
+            }
+        }
+
+        checkAuth();
+    </script>
+</body>
+</html>
+"""
+
+@app.get("/", response_class=HTMLResponse)
+def serve_ui():
+    return HTML_INTERFACE
+
+@app.post("/chat")
+def coach_dialogue(data: ChatInput):
+    user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
+
+    system_prompt = f"""
+Sen elit seviyede bir 'Looksmaxxing, Hipertrofi & Fizik Koçu'sun.
+KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
+{user_context}
+
+1. SET / PROGRESSIVE OVERLOAD DEĞERLENDİRMESİ:
+- Kullanıcının bu haftaki ağırlık ve setlerine bakarak bir sonraki idmanda hedeflemesi gereken net kg ve tekrarı söyle.
+"""
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in data.history:
+        messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+
+    if data.image_base64:
+        messages.append({"role": "user", "content": [
+            {"type": "text", "text": data.user_message},
+            {"type": "image_url", "image_url": {"url": data.image_base64}}
+        ]})
+    else:
+        messages.append({"role": "user", "content": data.user_message})
+
+    reply_text = None
+    for m in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+        try:
+            chat_completion = client.chat.completions.create(
+                messages=messages, model=m, temperature=0.4, max_tokens=600,
+            )
+            reply_text = chat_completion.choices[0].message.content
+            if reply_text:
+                break
+        except Exception as e:
+            logger.warning(f"[/chat] model {m} failed: {e}")
+            continue
+
+    if not reply_text:
+        reply_text = "Hedeflerine odaklan kral! Antrenmanda her zaman bir önceki haftadan 1 tekrar veya 1-2.5 kg fazla zorlamaya devam et."
+
+    reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
+    return {"user_message": data.user_message, "coach_reply": reply_text}
+
+
+NUTRITION_SYSTEM_PROMPT = """
+Sen uzman bir Spor Diyetisyeni ve Besin Değeri Hesaplama Motorusun.
+Görevin, kullanıcının yazdığı yiyecekleri analiz edip TEK bir JSON nesnesi olarak döndürmektir.
+
+ÇOK ÖNEMLİ HESAPLAMA KURALLARI:
+1. Kullanıcının girdiği miktarı (gram, kg, adet, porsiyon) doğru orantıyla hesapla:
+   - "1 kg kanat" -> 1000g tavuk kanat: ~2200 kcal, ~180g protein, 0g karb, ~160g yağ
+   - "3 tam kokoreç" -> 3 x 950 kcal: ~2850 kcal, ~114g protein, ~255g karb, ~150g yağ
+   - "220g tavuk, 70g bulgur, 1 laviva" -> ~720 kcal, ~75g protein, ~70g karb, ~12g yağ
+2. Başka hiçbir metin veya açıklama ekleme. SADECE aşağıdaki JSON şemasını döndür:
+
+{
+  "coach_reply": "Kullanıcıya motive edici kısa sporcu koçu dökümü",
+  "food_name": "Öğünün kısa adı (Örn: 1 Kg Tavuk Kanat)",
+  "items_summary": "Her öğenin detaylı dökümü",
+  "calories": 2200,
+  "protein": 180,
+  "carbs": 0,
+  "fat": 160
+}
+"""
+
+def extract_clean_json(text: str):
+    """Hem saf JSON hem de Markdown json bloklarını hatasız ayrıştırır."""
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    
+    match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            pass
+            
+    match_brace = re.search(r'\{[^{}]*"calories"[^{}]*\}', text, re.DOTALL)
+    if match_brace:
+        try:
+            return json.loads(match_brace.group(0))
+        except Exception:
+            pass
+            
+    return None
+
+@app.post("/nutrition-chat")
+def nutrition_dialogue(data: NutritionChatInput):
+    messages = [
+        {"role": "system", "content": NUTRITION_SYSTEM_PROMPT},
+        {"role": "user", "content": f"Hesapla: {data.user_message}"}
+    ]
+
+    detected_meal = None
+    reply_text = None
+    last_error = None
+
+    for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+        try:
+            chat_completion = client.chat.completions.create(
+                messages=messages,
+                model=model_name,
+                temperature=0.1,
+                max_tokens=600,
+                response_format={"type": "json_object"}
+            )
+            raw_content = chat_completion.choices[0].message.content
+            parsed_json = extract_clean_json(raw_content)
+
+            if parsed_json and float(parsed_json.get("calories", 0)) > 0:
+                detected_meal = {
+                    "food_name": str(parsed_json.get("food_name", data.user_message.title())),
+                    "items_summary": str(parsed_json.get("items_summary", data.user_message)),
+                    "calories": round(float(parsed_json.get("calories", 0))),
+                    "protein": round(float(parsed_json.get("protein", 0))),
+                    "carbs": round(float(parsed_json.get("carbs", 0))),
+                    "fat": round(float(parsed_json.get("fat", 0)))
+                }
+                reply_text = str(parsed_json.get("coach_reply", ""))
+                break
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"[/nutrition-chat] model {model_name} failed: {e}")
+            continue
+
+    if not detected_meal:
+        logger.error(f"[/nutrition-chat] Tum modeller basarisiz oldu: {last_error}")
+        return {
+            "user_message": data.user_message,
+            "coach_reply": "Bu öğün hesaplanırken anlık bir bağlantı hatası oluştu kral, lütfen tekrar bas.",
+            "detected_meal": None
+        }
+
+    if not reply_text:
+        reply_text = (
+            f"Afiyet olsun kral! Girdiğin **{detected_meal['items_summary']}** listene eklendi: "
+            f"**{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | "
+            f"{detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
+        )
+
+    return {
+        "user_message": data.user_message,
+        "coach_reply": reply_text,
+        "detected_meal": detected_meal
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
