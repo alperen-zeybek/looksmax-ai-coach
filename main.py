@@ -2,14 +2,22 @@ import os
 import time
 import json
 import re
+import logging
 from typing import List, Optional
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from groq import Groq
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
-client = Groq(api_key=GROQ_API_KEY)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("looksmax-hub")
+
+# GÜVENLİK NOTU: API key'i asla kod içine gömme. Sadece ortam değişkeninden oku.
+# Terminal / hosting panelinde:  export GROQ_API_KEY="gsk_..."
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    logger.warning("GROQ_API_KEY tanımlı değil! /nutrition-chat ve /chat endpoint'leri çalışmayacak.")
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 app = FastAPI(title="Looksmax Hub - Workout & Macro Tracker")
 
@@ -902,13 +910,14 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     })
                 });
                 const data = await response.json();
-                
-                let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
-                document.getElementById(loadingId).innerHTML = replyFormatted || "Makrolar hesaplandı ve eklendi!";
 
+                let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
+                document.getElementById(loadingId).innerHTML = replyFormatted || "Yanıt alındı.";
+
+                // Backend başarısız olursa detected_meal null döner -> hiçbir uydurma veri eklenmez.
                 if (data.detected_meal && Number(data.detected_meal.calories) > 0) {
                     const newMeal = {
-                        id: Date.now(),
+                        id: Date.now() + Math.floor(Math.random() * 1000),
                         food_name: data.detected_meal.food_name || "Öğün",
                         items_summary: data.detected_meal.items_summary || currentText,
                         calories: Math.round(Number(data.detected_meal.calories) || 0),
@@ -920,12 +929,13 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     if (!weeklyNutrition[targetDateStr]) {
                         weeklyNutrition[targetDateStr] = [];
                     }
-                    weeklyNutrition[targetDateStr].push(newMeal);
+                    // Yeni öğün her zaman listenin SONUNA eklenir; mevcut öğünler asla değiştirilmez/katlanmaz.
+                    weeklyNutrition[targetDateStr] = [...weeklyNutrition[targetDateStr], newMeal];
                     saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
                     renderSelectedDayNutrition();
                 }
             } catch (err) {
-                document.getElementById(loadingId).innerText = "Hata oluştu kral.";
+                document.getElementById(loadingId).innerText = "Hata oluştu kral, tekrar dener misin?";
             } finally {
                 btn.disabled = false;
                 chatBox.scrollTop = chatBox.scrollHeight;
@@ -951,6 +961,9 @@ def serve_ui():
 
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
+    if client is None:
+        return {"user_message": data.user_message, "coach_reply": "Sunucu tarafında GROQ_API_KEY tanımlı değil, koç şu an cevap veremiyor."}
+
     user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
 
     system_prompt = f"""
@@ -982,49 +995,87 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
             reply_text = chat_completion.choices[0].message.content
             if reply_text:
                 break
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[/chat] model {m} failed: {e}")
             continue
 
     if not reply_text:
-        reply_text = "Hedeflerine odaklan kral! Antrenmanda her zaman bir önceki haftadan 1 tekrar veya 1-2.5 kg fazla zorlamaya devam et."
+        reply_text = "Şu an modele ulaşamadım kral, birazdan tekrar dener misin? (Sunucu loglarını kontrol et.)"
 
     reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
     return {"user_message": data.user_message, "coach_reply": reply_text}
 
-@app.post("/nutrition-chat")
-def nutrition_dialogue(data: NutritionChatInput):
-    system_prompt = """
-Sen dünyanın en iyi Yapay Zeka Sporcu Diyetisyeni ve Besin Analiz Uzmanısın.
 
-GÖREVİN:
-Kullanıcının yazdığı her türlü yemeği (örn: "1 kokoreç", "3 tam kokoreç", "1 kg kanat", "2 lahmacun", "1 tabak makarna") analiz edip tam makro değerlerini çıkarmak.
+NUTRITION_SYSTEM_PROMPT = """
+Sen uzman bir Spor Diyetisyeni ve Besin Değeri Hesaplama Motorusun. Görevin, kullanıcının tek bir mesajda yazdığı bir veya birden fazla yiyeceği (gram, kilogram, adet, tam/yarım/çeyrek, porsiyon, dilim, tabak vb. HANGİ birim olursa olsun) analiz edip TEK bir öğün için TOPLAM makro değerlerini üretmek.
 
-REFERANSLAR:
-- "1 kokoreç" veya "1 çeyrek/yarım kokoreç" -> Standart 1 adet yarım ekmek kokoreç kabul edilir: ~520 kcal, 22g protein, 45g karb, 28g yağ.
-- "1 tam kokoreç" -> ~950 kcal, 38g protein, 85g karb, 50g yağ.
-- "1 kg tavuk kanat" -> ~2200 kcal, 180g protein, 0g karb, 160g yağ.
-- "1 kg bonfile" -> ~1500 kcal, 250g protein, 0g karb, 50g yağ.
-- "1 porsiyon lahmacun" -> ~220 kcal, 9g protein, 28g karb, 8g yağ.
+HESAPLAMA KURALLARI (KESİNLİKLE UYGULA):
+1. Mesajdaki HER besin öğesini ve miktarını tek tek ayır. Örnek: "220g tavuk, 70g bulgur, 1 laviva" -> 3 ayrı öğe.
+2. Her öğe için STANDART 100 GRAM (pişmiş/tüketime hazır hal) başına veya STANDART 1 ADET/PORSİYON başına kalori, protein, karbonhidrat ve yağ değerini kendi beslenme bilgine ve aşağıdaki referans tabloya göre belirle.
+3. Kullanıcının belirttiği GERÇEK miktara göre ORANTISAL olarak çarp:
+   - Gram/kg belirtilmişse: sonuç = (100g_değeri / 100) * girilen_gram_miktarı  (1 kg = 1000 g olarak çevir)
+   - Adet / tam / porsiyon / dilim belirtilmişse: sonuç = 1_adet_değeri * belirtilen_adet_sayısı
+4. Mesajda birden fazla besin varsa, her birinin hesapladığın değerlerini TOPLA. calories/protein/carbs/fat alanlarına bu TOPLAMI yaz — tek bir JSON, tek bir öğün olarak dön.
+5. Asla sabit/şablon bir değer (ör. her zaman aynı sayı) döndürme; her girdi için miktara göre YENİDEN hesapla.
+6. items_summary alanına her öğeyi ayrı ayrı miktarı ve o öğenin kendi kalorisiyle virgülle ayırarak yaz.
 
-ZORUNLU FORMAT (SADECE bu JSON yapısını döndür):
+REFERANS DEĞERLER (100g veya 1 standart adet/porsiyon bazında — listede olmayan besinler için kendi genel beslenme bilgini kullan, tabloyu birebir kopyalamak zorunda değilsin, oranlaman önemli):
+- Tavuk kanat (pişmiş, 100g): ~220 kcal, 18g protein, 0g karbonhidrat, 16g yağ  (=> 1 kg ≈ 2200 kcal / 180g P / 0g K / 160g Y)
+- Tavuk göğüs (pişmiş, 100g): ~165 kcal, 31g protein, 0g karbonhidrat, 3.6g yağ
+- Dana bonfile (pişmiş, 100g): ~250 kcal, 25g protein, 0g karbonhidrat, 15g yağ (=> 1 kg ≈ 2500 kcal / 250g P / 0g K / 150g Y)
+- Bulgur pilavı (pişmiş, 100g): ~110 kcal, 4g protein, 23g karbonhidrat, 1g yağ
+- Pirinç pilavı (pişmiş, 100g): ~130 kcal, 2.5g protein, 28g karbonhidrat, 1.5g yağ
+- Lavaş / laviva (1 standart adet, ~90-100g): ~280 kcal, 9g protein, 55g karbonhidrat, 2g yağ
+- Kokoreç (yarım ekmek / standart 1 porsiyon): ~520 kcal, 22g protein, 45g karbonhidrat, 28g yağ
+- Kokoreç (1 TAM porsiyon/ekmek, yarımın ~1.8 katı): ~950 kcal, 38g protein, 85g karbonhidrat, 50g yağ
+- Lahmacun (1 standart adet): ~220 kcal, 9g protein, 28g karbonhidrat, 8g yağ
+- Yumurta (1 adet, büyük boy, haşlanmış/sahanda): ~90 kcal, 7g protein, 1g karbonhidrat, 6g yağ
+- Beyaz ekmek (1 dilim, ~25g): ~65 kcal, 2g protein, 13g karbonhidrat, 1g yağ
+
+ÖRNEK HESAPLAMA (bu mantığı her zaman uygula):
+Girdi: "220g tavuk, 70g bulgur, 1 laviva"
+- Tavuk göğüs 220g -> (165/100)*220 = 363 kcal, (31/100)*220 = 68g protein, 0g karb, (3.6/100)*220 = 8g yağ
+- Bulgur 70g -> (110/100)*70 = 77 kcal, (4/100)*70 = 3g protein, (23/100)*70 = 16g karb, (1/100)*70 = 1g yağ
+- Laviva 1 adet -> 280 kcal, 9g protein, 55g karb, 2g yağ
+TOPLAM (JSON'a yazılacak): calories=720, protein=80, carbs=71, fat=11
+
+Girdi: "1 kg kanat"
+TOPLAM: calories=2200, protein=180, carbs=0, fat=160
+
+Girdi: "3 tam kokoreç"
+TOPLAM: calories=2850, protein=114, carbs=255, fat=150
+
+ZORUNLU ÇIKTI FORMATI — SADECE aşağıdaki JSON'u döndür, başında/sonunda hiçbir açıklama veya markdown ekleme:
 {
-  "coach_reply": "Kullanıcıya yediği yemeğin makro dökümünü veren motive edici kısa sporcu koçu mesajı",
-  "food_name": "Öğünün kısa adı (Örn: 1 Adet Kokoreç)",
-  "items_summary": "Detaylı döküm (Örn: 1 Porsiyon / Yarım Ekmek Kokoreç)",
-  "calories": 520,
-  "protein": 22,
-  "carbs": 45,
-  "fat": 28
+  "coach_reply": "Kullanıcıya kısa, motive edici bir sporcu koçu mesajı; girilen yemeğin toplam kalori/protein/karb/yağ değerlerini de içersin",
+  "food_name": "Öğünün kısa adı (Örn: '220g Tavuk + Bulgur + Laviva' ya da '1 Kg Kanat')",
+  "items_summary": "Her öğenin miktarı ve tahmini kalorisiyle virgülle ayrılmış kısa dökümü",
+  "calories": <toplam sayı, sadece rakam>,
+  "protein": <toplam sayı, sadece rakam>,
+  "carbs": <toplam sayı, sadece rakam>,
+  "fat": <toplam sayı, sadece rakam>
 }
 """
 
+
+@app.post("/nutrition-chat")
+def nutrition_dialogue(data: NutritionChatInput):
+    if client is None:
+        return {
+            "user_message": data.user_message,
+            "coach_reply": "Sunucu tarafında GROQ_API_KEY tanımlı değil. Lütfen ortam değişkenini ayarlayıp sunucuyu yeniden başlat.",
+            "detected_meal": None
+        }
+
+    user_content = data.user_message
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": data.user_message}
+        {"role": "system", "content": NUTRITION_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content}
     ]
 
     detected_meal = None
     reply_text = None
+    last_error = None
 
     for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
         try:
@@ -1032,39 +1083,53 @@ ZORUNLU FORMAT (SADECE bu JSON yapısını döndür):
                 messages=messages,
                 model=model_name,
                 temperature=0.1,
-                max_tokens=500,
+                max_tokens=600,
                 response_format={"type": "json_object"}
             )
             raw_content = chat_completion.choices[0].message.content
             parsed_json = json.loads(raw_content)
 
             cal_val = float(parsed_json.get("calories", 0))
+            pro_val = float(parsed_json.get("protein", 0))
+            carb_val = float(parsed_json.get("carbs", 0))
+            fat_val = float(parsed_json.get("fat", 0))
+
             if cal_val > 0:
                 detected_meal = {
                     "food_name": parsed_json.get("food_name", data.user_message.title()),
                     "items_summary": parsed_json.get("items_summary", data.user_message),
                     "calories": round(cal_val),
-                    "protein": round(float(parsed_json.get("protein", 0))),
-                    "carbs": round(float(parsed_json.get("carbs", 0))),
-                    "fat": round(float(parsed_json.get("fat", 0)))
+                    "protein": round(pro_val),
+                    "carbs": round(carb_val),
+                    "fat": round(fat_val)
                 }
                 reply_text = parsed_json.get("coach_reply", "")
                 break
-        except Exception:
+            else:
+                last_error = f"model {model_name} 0 kcal döndürdü, tekrar deneniyor"
+                logger.warning(f"[/nutrition-chat] {last_error}")
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"[/nutrition-chat] model {model_name} failed: {e}")
             continue
 
+    # ESKİ DAVRANIŞ: her hata durumunda sabit 25g/520kcal fallback basıyordu.
+    # YENİ DAVRANIŞ: hiçbir uydurma veri üretilmez; kullanıcı dürüstçe bilgilendirilir
+    # ve frontend zaten detected_meal null ise listeye hiçbir şey eklemez.
     if not detected_meal:
-        detected_meal = {
-            "food_name": data.user_message.title(),
-            "items_summary": data.user_message,
-            "calories": 520,
-            "protein": 25,
-            "carbs": 45,
-            "fat": 25
+        logger.error(f"[/nutrition-chat] Tüm modeller başarısız oldu. Son hata: {last_error}")
+        return {
+            "user_message": data.user_message,
+            "coach_reply": "Bu öğünü hesaplayamadım kral, biraz daha net yazar mısın (örn: '220g tavuk, 70g bulgur') veya birazdan tekrar dener misin? (Not: sunucu tarafında GROQ_API_KEY geçerli mi kontrol edilmeli.)",
+            "detected_meal": None
         }
 
     if not reply_text:
-        reply_text = f"Afiyet olsun kral! Girdiğin **{detected_meal['items_summary']}** listene eklendi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
+        reply_text = (
+            f"Afiyet olsun kral! Girdiğin **{detected_meal['items_summary']}** listene eklendi: "
+            f"**{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | "
+            f"{detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
+        )
 
     return {
         "user_message": data.user_message,
