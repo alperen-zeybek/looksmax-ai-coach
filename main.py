@@ -301,7 +301,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Ne yediysen tek tek veya topluca yaz (örn: <i>"220g tavuk, 70g bulgur"</i> veya sonradan <i>"1 laviva"</i>) ya da fotoğrafını at; seçtiğin güne yeni öğün olarak ekleyeyim.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen tek tek veya topluca yaz (örn: <i>"220g tavuk, 70g bulgur"</i> ya da <i>"1 laviva"</i>) ya da fotoğrafını at; seçtiğin güne ekleyeyim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -774,7 +774,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
         // ================= CHAT & VISION =================
         let conversationHistory = [];
         let selectedBase64Image = null;
-        let nutriHistory = [];
         let nutriSelectedImage = null;
 
         function handleImageSelect(event, type) {
@@ -887,18 +886,13 @@ HTML_INTERFACE = """<!DOCTYPE html>
             chatBox.innerHTML += `<div class="msg coach" id="${loadingId}"><i>Makrolar hesaplanıyor...</i></div>`;
             chatBox.scrollTop = chatBox.scrollHeight;
 
-            const dayMeals = weeklyNutrition[currentDay.fullDate] || [];
-            const mealSummary = dayMeals.map(m => `${m.food_name} (${m.calories} kcal)`).join(", ");
-
             try {
                 const response = await fetch("/nutrition-chat", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         user_message: currentText,
-                        daily_summary: mealSummary,
-                        image_base64: currentImg,
-                        history: nutriHistory
+                        image_base64: currentImg
                     })
                 });
                 const data = await response.json();
@@ -924,10 +918,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
                     renderSelectedDayNutrition();
                 }
-
-                nutriHistory.push({ role: "user", content: currentText });
-                nutriHistory.push({ role: "assistant", content: data.coach_reply });
-                if (nutriHistory.length > 8) nutriHistory = nutriHistory.slice(-8);
             } catch (err) {
                 document.getElementById(loadingId).innerText = "Hata oluştu kral.";
             } finally {
@@ -949,19 +939,6 @@ HTML_INTERFACE = """<!DOCTYPE html>
 </html>
 """
 
-def get_dynamic_models():
-    try:
-        all_models = client.models.list()
-        valid = [
-            m.id for m in all_models.data
-            if not any(x in m.id.lower() for x in ["whisper", "guard", "orpheus", "allam"])
-        ]
-        if valid:
-            return valid
-    except Exception:
-        pass
-    return ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"]
-
 def calculate_fallback_macros(text: str):
     t = text.lower()
     total_cal = 0
@@ -970,7 +947,6 @@ def calculate_fallback_macros(text: str):
     total_fat = 0
     items_found = []
 
-    # 1. Tavuk
     m_chick = re.search(r'(\d+)\s*g?\s*(?:tavuk|chicken|göğüs|izgara tavuk|ızgara tavuk)', t)
     if m_chick:
         g = float(m_chick.group(1))
@@ -979,7 +955,6 @@ def calculate_fallback_macros(text: str):
         total_fat += g * 0.02
         items_found.append(f"{int(g)}g Tavuk")
 
-    # 2. Bulgur
     m_bulgur = re.search(r'(\d+)\s*g?\s*(?:bulgur|bulgur pilavı|bulgur pilavi)', t)
     if m_bulgur:
         g = float(m_bulgur.group(1))
@@ -989,7 +964,6 @@ def calculate_fallback_macros(text: str):
         total_fat += g * 0.01
         items_found.append(f"{int(g)}g Bulgur")
 
-    # 3. Pirinç
     m_rice = re.search(r'(\d+)\s*g?\s*(?:pirinç|pilav|rice)', t)
     if m_rice and not m_bulgur:
         g = float(m_rice.group(1))
@@ -999,7 +973,6 @@ def calculate_fallback_macros(text: str):
         total_fat += g * 0.01
         items_found.append(f"{int(g)}g Pirinç")
 
-    # 4. Cips / Ruffles
     m_chips = re.search(r'(\d+)\s*g?\s*(?:ruffles|cips|doritos|lays|patates cipsi|ketçaplı ruffles)', t)
     if m_chips:
         g = float(m_chips.group(1))
@@ -1011,7 +984,6 @@ def calculate_fallback_macros(text: str):
         total_fat += g * 0.33
         items_found.append(f"{int(g)}g Ruffles/Cips")
 
-    # 5. Tırnak Pide
     m_pide = re.search(r'(\d+)\s*(?:adet|tane)?\s*(?:tırnak pide|tirnak pide|pide|tırnak)', t)
     if m_pide:
         count = float(m_pide.group(1))
@@ -1021,7 +993,6 @@ def calculate_fallback_macros(text: str):
         total_fat += count * 1.0
         items_found.append(f"{int(count)} Tırnak Pide")
 
-    # 6. Lavaş
     m_lavas = re.search(r'(\d+)\s*(?:adet|tane)?\s*(?:lavaş|lavas|ince lavaş|tam buğday lavaş)', t)
     if m_lavas:
         count = float(m_lavas.group(1))
@@ -1031,34 +1002,6 @@ def calculate_fallback_macros(text: str):
         total_fat += count * 2.0
         items_found.append(f"{int(count)} Lavaş")
 
-    # 7. Ekmek
-    m_bread = re.search(r'(\d+)\s*g?\s*(?:ekmek|tam buğday ekmek)', t)
-    if m_bread:
-        g = float(m_bread.group(1))
-        total_cal += g * 2.45
-        total_pro += g * 0.09
-        total_carb += g * 0.45
-        total_fat += g * 0.01
-        items_found.append(f"{int(g)}g Ekmek")
-
-    # 8. Zeytinyağı
-    m_oil = re.search(r'(\d+)\s*g?\s*(?:zeytinyağı|yağ|zeytin yağı|oil)', t)
-    if m_oil:
-        g = float(m_oil.group(1))
-        total_cal += g * 9.0
-        total_fat += g * 1.0
-        items_found.append(f"{int(g)}g Zeytinyağı")
-
-    # 9. Yumurta
-    m_egg = re.search(r'(\d+)\s*(?:adet|tane)?\s*(?:yumurta|egg)', t)
-    if m_egg:
-        count = float(m_egg.group(1))
-        total_cal += count * 72
-        total_pro += count * 6.3
-        total_fat += count * 5.0
-        items_found.append(f"{int(count)} Yumurta")
-
-    # 10. Laviva / Çikolata
     m_snack = re.search(r'(\d+)?\s*(?:laviva|çikolata|bisküvi|gofret)', t)
     if m_snack:
         count = float(m_snack.group(1)) if m_snack.group(1) else 1.0
@@ -1096,8 +1039,6 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
 
 1. SET / PROGRESSIVE OVERLOAD DEĞERLENDİRMESİ:
 - Kullanıcının bu haftaki ağırlık ve setlerine bakarak bir sonraki idmanda hedeflemesi gereken net kg ve tekrarı söyle.
-2. FOTOĞRAF ANALİZİ (Varsa):
-- Fizikse: Tahmini yağ oranı ve eksik bölgeleri listele.
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
@@ -1111,111 +1052,92 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
     else:
         messages.append({"role": "user", "content": data.user_message})
 
-    available_models = get_dynamic_models()
     reply_text = None
-
-    for model_name in available_models:
-        try:
-            chat_completion = client.chat.completions.create(
-                messages=messages, model=model_name, temperature=0.4, max_tokens=600,
-            )
-            reply_text = chat_completion.choices[0].message.content
-            break
-        except Exception:
-            continue
-
-    if not reply_text:
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=messages, model="llama-3.3-70b-versatile", temperature=0.4, max_tokens=600,
+        )
+        reply_text = chat_completion.choices[0].message.content
+    except Exception:
         reply_text = "Hedeflerine odaklan kral! Antrenmanda her zaman bir önceki haftadan 1 tekrar veya 1-2.5 kg fazla zorlamaya devam et."
 
     reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
-    elapsed = round(time.time() - start_time, 2)
-    print(f"--> [LOG] Coach Yaniti: {elapsed}sn")
-
     return {"user_message": data.user_message, "coach_reply": reply_text}
 
 @app.post("/nutrition-chat")
 def nutrition_dialogue(data: NutritionChatInput):
     start_time = time.time()
     
-    # Modele sadece ve sadece SON mesajı hesaplaması kesin olarak emrediliyor
-    system_prompt = f"""
-Sen uzman bir Sporcu Beslenme ve Makro Koçusun.
+    # Standart sporcu besin referansları prompt'a sabitlendi:
+    system_prompt = """
+Sen uzman bir Sporcu Beslenme Koçusun.
+GÖREVİN: Kullanıcının girdiği besinlerin kalori ve makrolarını GERÇEK VE MANTIKLI değerlerle hesaplamak.
 
-KRİTİK VE DEĞİŞMEZ KURAL:
-1. SADECE VE SADECE kullanıcının SON mesajındaki ({data.user_message}) yiyeceklerin makrolarını ve kalorisini hesapla.
-2. Sohbet geçmişindeki (history) veya önceki öğünlerdeki besinleri ASLA bu yeni hesaba DAHİL ETME, onları tekrar toplama! Bu bağımsız tekil bir öğün kaydıdır.
-3. Örneğin kullanıcı sadece "1 tane laviva" yazdıysa, sadece o 1 lavivanın (~180 kcal, 2.5g protein, 22g karb, 9g yağ) değerlerini dön.
+TEMEL REFERANSLAR (Asla saçmalama!):
+- 100g Tavuk Göğsü: ~130 kcal, ~28g Protein, 0g Karb, ~2g Yağ (220g tavuk = ~62g Protein)
+- 100g Pişmiş Bulgur: ~150 kcal, ~4g Protein, ~30g Karb, ~1g Yağ
+- 100g Patates Cipsi / Ruffles: ~530 kcal, ~6g Protein, ~52g Karb, ~33g Yağ
+- 1 Adet Küçük Tırnak Pide / Garnitür: ~130 kcal, ~4g Protein, ~26g Karb, ~1g Yağ
+- 1 Adet İnce Lavaş: ~160 kcal, ~4g Protein, ~31g Karb, ~2g Yağ
+- 1 Adet Laviva: ~180 kcal, ~2.5g Protein, ~22g Karb, ~9g Yağ
 
-GÖREVİN:
-Yanıtını SADECE ve SADECE aşağıdaki JSON formatında döndür:
-{{
-  "coach_reply": "Kullanıcıya sadece şu an girdiği yeni besini değerlendiren kısa ve motive edici sporcu koçu mesajı",
-  "food_name": "Şu an girilen besinin kısa adı (örn: 1 Adet Laviva veya Tavuk & Bulgur)",
-  "items_summary": "Şu an girilen besinlerin özeti (örn: 1 Adet Laviva)",
-  "calories": 180,
-  "protein": 2,
-  "carbs": 22,
-  "fat": 9
-}}
+ASLA 200g-300g'dan fazla protein sallama! 
+Tüm öğünün toplam protein değeri genellikle 40g - 90g arasındadır.
 
-Önemli: "calories", "protein", "carbs", "fat" alanları SADECE son mesajdaki besinlerin toplamı olmalı ve sadece TAM SAYI içermelidir.
+Yanıtını SADECE şu JSON yapısında ver:
+{
+  "coach_reply": "Samimi ve net sporcu koçu dökümü.",
+  "food_name": "Öğün Başlığı (Örn: Tavuk, Bulgur, Pide & Ruffles)",
+  "items_summary": "Tüm besinler (Örn: 220g Tavuk, 70g Bulgur, 2 Pide, 1 Lavaş, 105g Ruffles)",
+  "calories": 1450,
+  "protein": 75,
+  "carbs": 165,
+  "fat": 42
+}
 """
 
-    messages = [{"role": "system", "content": system_prompt}]
-    for msg in data.history:
-        messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": data.user_message}
+    ]
 
-    if data.image_base64:
-        messages.append({"role": "user", "content": [
-            {"type": "text", "text": data.user_message},
-            {"type": "image_url", "image_url": {"url": data.image_base64}}
-        ]})
-    else:
-        messages.append({"role": "user", "content": data.user_message})
-
-    available_models = get_dynamic_models()
     detected_meal = None
     reply_text = None
 
-    for model_name in available_models:
-        try:
-            chat_completion = client.chat.completions.create(
-                messages=messages,
-                model=model_name,
-                temperature=0.1,
-                max_tokens=800,
-                response_format={"type": "json_object"}
-            )
-            raw_content = chat_completion.choices[0].message.content
-            parsed_json = json.loads(raw_content)
-            
-            if "calories" in parsed_json and float(parsed_json["calories"]) > 0:
-                detected_meal = {
-                    "food_name": parsed_json.get("food_name", "Öğün"),
-                    "items_summary": parsed_json.get("items_summary", data.user_message),
-                    "calories": round(float(parsed_json.get("calories", 0))),
-                    "protein": round(float(parsed_json.get("protein", 0))),
-                    "carbs": round(float(parsed_json.get("carbs", 0))),
-                    "fat": round(float(parsed_json.get("fat", 0)))
-                }
-                reply_text = parsed_json.get("coach_reply", "")
-                break
-        except Exception as e:
-            print(f"Model {model_name} denemesi hatasi: {e}")
-            continue
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=messages,
+            model="llama-3.3-70b-versatile",
+            temperature=0.1,
+            max_tokens=600,
+            response_format={"type": "json_object"}
+        )
+        raw_content = chat_completion.choices[0].message.content
+        parsed_json = json.loads(raw_content)
+        
+        # Mantık Filtresi: Protein 200g'dan büyükse model halüsinasyon görmüştür, düzelt
+        pro_val = float(parsed_json.get("protein", 0))
+        if pro_val > 200:
+            parsed_json = calculate_fallback_macros(data.user_message) or parsed_json
 
-    # Model JSON üretemezse sadece son mesaja regex uygulanır
-    if not detected_meal:
+        detected_meal = {
+            "food_name": parsed_json.get("food_name", "Öğün"),
+            "items_summary": parsed_json.get("items_summary", data.user_message),
+            "calories": round(float(parsed_json.get("calories", 0))),
+            "protein": round(float(parsed_json.get("protein", 0))),
+            "carbs": round(float(parsed_json.get("carbs", 0))),
+            "fat": round(float(parsed_json.get("fat", 0)))
+        }
+        reply_text = parsed_json.get("coach_reply", "")
+    except Exception as e:
+        print(f"Beslenme Analiz Hatasi: {e}")
         detected_meal = calculate_fallback_macros(data.user_message)
 
     if not reply_text:
         if detected_meal:
-            reply_text = f"Afiyet olsun kral! Girdiğin öğün (**{detected_meal['items_summary']}**) listene eklendi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
+            reply_text = f"Afiyet olsun kral! Girdiğin öğün (**{detected_meal['items_summary']}**) kaydedildi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
         else:
-            reply_text = "Öğünün kaydedildi kral, makrolarını dengeli tutmaya devam et!"
-
-    elapsed = round(time.time() - start_time, 2)
-    print(f"--> [LOG] Nutrition Yaniti: {elapsed}sn | Eklenen Cal: {detected_meal.get('calories') if detected_meal else 0}")
+            reply_text = "Öğünün kaydedildi kral!"
 
     return {
         "user_message": data.user_message,
