@@ -2,15 +2,11 @@ import os
 import time
 import json
 import re
-import logging
 from typing import List, Optional
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from groq import Groq
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("looksmax-hub")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
 client = Groq(api_key=GROQ_API_KEY)
@@ -29,7 +25,7 @@ class NutritionChatInput(BaseModel):
     daily_summary: Optional[str] = ""
     history: List[dict] = []
 
-HTML_INTERFACE = r"""<!DOCTYPE html>
+HTML_INTERFACE = """<!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
@@ -305,7 +301,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"1 kg kanat"</i>, <i>"3 tam kokoreç"</i>, <i>"220g tavuk, 70g bulgur"</i>); anında sağdaki günlüğüne işlensin.</div>
+                        <div class="msg coach">Afiyet olsun kral! Aklına gelen her yemeği yazabilirsin (örn: <i>"1 kg kanat", "1 kg bonfile", "2 lahmacun", "105g ruffles"</i>); seçtiğin güne eklerim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -317,7 +313,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <div class="chat-input-area">
                         <label class="file-btn" for="nutriImageInput" title="Yemek Fotoğrafı">📷</label>
                         <input type="file" id="nutriImageInput" accept="image/*" onchange="handleImageSelect(event, 'nutri')" />
-                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Ne yediysen yaz (örn: 1 kg kanat, 3 tam kokoreç...)" onkeypress="handleKey(event, 'nutri')" />
+                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Ne yediysen yaz (örn: 1 kg kanat, 200g pilav...)" onkeypress="handleKey(event, 'nutri')" />
                         <button class="send-btn" id="nutriSendBtn" onclick="sendNutriMessage()">Ekle</button>
                     </div>
                 </div>
@@ -447,7 +443,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 setTimeout(updateChart, 150);
             }
             if (viewName === 'nutrition') {
-                renderNutriDayTabs();
                 renderSelectedDayNutrition();
             }
         }
@@ -520,7 +515,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
         function renderWorkoutDayTabs() {
             const bar = document.getElementById("workoutDaysTabBar");
-            if (!bar) return;
             bar.innerHTML = "";
 
             weekDaysData.forEach((d, idx) => {
@@ -544,7 +538,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         function renderSelectedWorkoutDayLogs() {
             const currentDay = weekDaysData[selectedWorkoutDayIdx];
             const list = document.getElementById("dayHistoryList");
-            if (!list) return;
             list.innerHTML = "";
 
             const dayLogs = weeklyLogs.filter(item => item.date === currentDay.fullDate);
@@ -608,7 +601,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
         function populateDropdown() {
             const select = document.getElementById("chartExerciseSelect");
-            if (!select) return;
             const currentSelected = select.value;
             const unique = [...new Set(weeklyLogs.map(item => item.exercise))];
 
@@ -628,18 +620,14 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         }
 
         function updateChart() {
-            const select = document.getElementById("chartExerciseSelect");
-            if (!select) return;
-            const selectedEx = select.value;
+            const selectedEx = document.getElementById("chartExerciseSelect").value;
             const filtered = weeklyLogs.filter(item => item.exercise === selectedEx);
 
             const labels = filtered.map((item, idx) => `${item.date} (${item.set_num || idx+1}.Set)`);
             const weights = filtered.map(item => item.weight);
             const reps = filtered.map(item => item.reps);
 
-            const canvas = document.getElementById('progressionChart');
-            if (!canvas) return;
-            const ctx = canvas.getContext('2d');
+            const ctx = document.getElementById('progressionChart').getContext('2d');
             if (chartInstance) chartInstance.destroy();
 
             chartInstance = new Chart(ctx, {
@@ -696,7 +684,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
         function renderNutriDayTabs() {
             const bar = document.getElementById("nutriDaysTabBar");
-            if (!bar) return;
             bar.innerHTML = "";
 
             weekDaysData.forEach((d, idx) => {
@@ -718,15 +705,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
         function renderSelectedDayNutrition() {
             const currentDay = weekDaysData[selectedNutriDayIdx];
-            const dateDisp = document.getElementById("nutriSelectedDateDisplay");
-            if (dateDisp) {
-                dateDisp.innerText = currentDay.fullDate + " (" + currentDay.dayName + ")";
-            }
+            document.getElementById("nutriSelectedDateDisplay").innerText = currentDay.fullDate + " (" + currentDay.dayName + ")";
 
             const dayMeals = weeklyNutrition[currentDay.fullDate] || [];
             let cal = 0, pro = 0, carb = 0, fat = 0;
             const list = document.getElementById("mealsList");
-            if (!list) return;
             list.innerHTML = "";
 
             if (dayMeals.length === 0) {
@@ -744,7 +727,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     carb += parseFloat(meal.carbs || 0);
                     fat += parseFloat(meal.fat || 0);
 
-                    const subHtml = meal.items_summary ? `<div class="meal-items-subtext">🍽️ ${meal.items_summary}</div>` : '';
+                    const itemsSub = meal.items_summary ? `<div class="meal-items-subtext">🍽️ ${meal.items_summary}</div>` : '';
 
                     list.innerHTML += `
                         <div class="log-item" style="flex-direction:column; align-items:flex-start; gap:6px;">
@@ -760,7 +743,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                                 </div>
                                 <button onclick="deleteMeal(${meal.id})">Sil</button>
                             </div>
-                            ${subHtml}
+                            ${itemsSub}
                         </div>
                     `;
                 });
@@ -884,7 +867,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             if (!text && !nutriSelectedImage) return;
 
-            const targetDateStr = weekDaysData[selectedNutriDayIdx].fullDate;
+            const currentDay = weekDaysData[selectedNutriDayIdx];
 
             let userHtml = "";
             if (nutriSelectedImage) userHtml += `<img src="${nutriSelectedImage}" class="preview-img" />`;
@@ -913,13 +896,13 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     })
                 });
                 const data = await response.json();
-
+                
                 let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
-                document.getElementById(loadingId).innerHTML = replyFormatted || "Yanıt alındı.";
+                document.getElementById(loadingId).innerHTML = replyFormatted || "Makrolar hesaplandı ve eklendi!";
 
                 if (data.detected_meal && Number(data.detected_meal.calories) > 0) {
                     const newMeal = {
-                        id: Date.now() + Math.floor(Math.random() * 1000),
+                        id: Date.now(),
                         food_name: data.detected_meal.food_name || "Öğün",
                         items_summary: data.detected_meal.items_summary || currentText,
                         calories: Math.round(Number(data.detected_meal.calories) || 0),
@@ -928,15 +911,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         fat: Math.round(Number(data.detected_meal.fat) || 0)
                     };
 
-                    if (!weeklyNutrition[targetDateStr]) {
-                        weeklyNutrition[targetDateStr] = [];
+                    if (!weeklyNutrition[currentDay.fullDate]) {
+                        weeklyNutrition[currentDay.fullDate] = [];
                     }
-                    weeklyNutrition[targetDateStr] = [...weeklyNutrition[targetDateStr], newMeal];
+                    weeklyNutrition[currentDay.fullDate].push(newMeal);
                     saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
                     renderSelectedDayNutrition();
                 }
             } catch (err) {
-                document.getElementById(loadingId).innerText = "Hata oluştu kral, tekrar dener misin?";
+                document.getElementById(loadingId).innerText = "Hata oluştu kral.";
             } finally {
                 btn.disabled = false;
                 chatBox.scrollTop = chatBox.scrollHeight;
@@ -962,6 +945,7 @@ def serve_ui():
 
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
+    start_time = time.time()
     user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
 
     system_prompt = f"""
@@ -985,7 +969,8 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
         messages.append({"role": "user", "content": data.user_message})
 
     reply_text = None
-    for m in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+    fallback_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+    for m in fallback_models:
         try:
             chat_completion = client.chat.completions.create(
                 messages=messages, model=m, temperature=0.4, max_tokens=600,
@@ -993,8 +978,7 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
             reply_text = chat_completion.choices[0].message.content
             if reply_text:
                 break
-        except Exception as e:
-            logger.warning(f"[/chat] model {m} failed: {e}")
+        except Exception:
             continue
 
     if not reply_text:
@@ -1003,26 +987,84 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
     reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
     return {"user_message": data.user_message, "coach_reply": reply_text}
 
+@app.post("/nutrition-chat")
+def nutrition_dialogue(data: NutritionChatInput):
+    start_time = time.time()
+    
+    system_prompt = """
+Sen dünyanın en iyi Yapay Zeka Sporcu Diyetisyenisin.
 
-NUTRITION_SYSTEM_PROMPT = """
-Sen uzman bir Spor Diyetisyeni ve Besin Değeri Hesaplama Motorusun.
-Görevin, kullanıcının yazdığı yiyecekleri analiz edip TEK bir JSON nesnesi olarak döndürmektir.
+ÖNEMLİ KURALLAR:
+1. Kullanıcının yazım hatalarını düzelterek yorumla ("kanaat" -> Tavuk Kanat, "biftek/et" -> Dana Eti, "pide" -> Tırnak Pide vb.).
+2. GRAMAJ / KİLO HESABI (100g baz alınarak doğru orantı kurulmalı):
+   - 100g Tavuk Kanat: ~220 kcal, ~18g Protein, 0g Karb, ~16g Yağ (1 kg / 1000g Kanat = ~2200 kcal, ~180g Protein, ~160g Yağ)
+   - 100g Dana Bonfile / Biftek: ~150 kcal, ~25g Protein, 0g Karb, ~5g Yağ (1 kg Bonfile = ~1500 kcal, ~250g Protein, ~50g Yağ)
+   - 100g Tavuk Göğsü: ~130 kcal, ~28g Protein, 0g Karb, ~2g Yağ (1 kg Tavuk = ~1300 kcal, ~280g Protein)
+   - 100g Pişmiş Bulgur: ~150 kcal, ~4g Protein, ~30g Karb, ~1g Yağ
+   - 100g Pişmiş Pirinç Pilavı: ~160 kcal, ~3g Protein, ~35g Karb, ~1g Yağ
+   - 100g Patates Cipsi / Ruffles: ~535 kcal, ~6g Protein, ~52g Karb, ~33g Yağ
+3. Kilogram (kg/kilo) girilirse mutlaka 1000g ile çarpıp toplam değerleri yaz.
+4. SADECE aşağıdaki saf JSON formatını döndür:
 
-ÇOK ÖNEMLİ HESAPLAMA VE JSON KURALLARI:
-1. Yanıtın SADECE geçerli bir JSON objesi olmalıdır.
-2. Kullanıcının girdiği miktarı (gram, kg, adet, porsiyon) doğru orantıyla hesapla:
-   - "1 kg kanat" -> 1000g tavuk kanat: ~2200 kcal, ~180g protein, 0g karb, ~160g yağ
-   - "3 tam kokoreç" -> 3 x 950 kcal: ~2850 kcal, ~114g protein, ~255g karb, ~150g yağ
-   - "220g tavuk, 70g bulgur, 1 laviva" -> ~720 kcal, ~75g protein, ~70g karb, ~12g yağ
-3. SADECE aşağıdaki JSON şemasını döndür:
-
-```json
 {
-  "coach_reply": "Kullanıcıya motive edici kısa sporcu koçu dökümü",
-  "food_name": "Öğünün kısa adı (Örn: 1 Kg Tavuk Kanat)",
-  "items_summary": "Her öğenin detaylı dökümü",
+  "coach_reply": "Kullanıcıya girdiği yemeğin doğru gramaj ve makro dökümünü veren motive edici sporcu koçu mesajı",
+  "food_name": "Öğünün kısa adı (Örn: 1000g Tavuk Kanat)",
+  "items_summary": "Tüm detaylar (Örn: 1 kg Tavuk Kanat)",
   "calories": 2200,
   "protein": 180,
   "carbs": 0,
   "fat": 160
 }
+"""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": data.user_message}
+    ]
+
+    detected_meal = None
+    reply_text = None
+
+    models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+
+    for model_name in models_to_try:
+        try:
+            chat_completion = client.chat.completions.create(
+                messages=messages,
+                model=model_name,
+                temperature=0.1,
+                max_tokens=500,
+                response_format={"type": "json_object"}
+            )
+            raw_content = chat_completion.choices[0].message.content
+            parsed_json = json.loads(raw_content)
+
+            cal_val = float(parsed_json.get("calories", 0))
+            if cal_val > 0:
+                detected_meal = {
+                    "food_name": parsed_json.get("food_name", data.user_message.title()),
+                    "items_summary": parsed_json.get("items_summary", data.user_message),
+                    "calories": round(cal_val),
+                    "protein": round(float(parsed_json.get("protein", 0))),
+                    "carbs": round(float(parsed_json.get("carbs", 0))),
+                    "fat": round(float(parsed_json.get("fat", 0)))
+                }
+                reply_text = parsed_json.get("coach_reply", "")
+                break
+        except Exception as e:
+            print(f"[{model_name}] Hata: {e}")
+            continue
+
+    if not reply_text and detected_meal:
+        reply_text = f"Afiyet olsun kral! Girdiğin **{detected_meal['items_summary']}** listene eklendi: **{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | {detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
+
+    return {
+        "user_message": data.user_message,
+        "coach_reply": reply_text or "Öğünün işlendi kral!",
+        "detected_meal": detected_meal
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
