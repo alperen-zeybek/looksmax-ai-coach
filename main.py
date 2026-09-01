@@ -6,7 +6,7 @@ import urllib.request
 import urllib.parse
 import logging
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from groq import Groq
@@ -17,7 +17,7 @@ logger = logging.getLogger("looksmax-hub")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-app = FastAPI(title="Looksmax Hub - Workout, Macro & Multi-Phase Tracker")
+app = FastAPI(title="Looksmax Hub - Workout, Macro, Health & Recovery Engine")
 
 # ================= 1. NUTRITION ENGINE =================
 DB_FILE = os.path.join(os.path.dirname(__file__), "foods_db.json")
@@ -228,12 +228,56 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
         }
     return None
 
-# ================= 2. FASTAPI SCHEMAS & ROUTES =================
+# ================= 2. RECOVERY & HEALTH ALGORİTMASI =================
+def compute_recovery_score(sleep_hours: float, hrv: float, resting_hr: float) -> Dict[str, Any]:
+    """
+    Biyometrik Recovery / Toparlanma Skoru (0 - 100):
+    - Uyku (Ağırlık: %40) -> 8 saat ideal
+    - HRV (Ağırlık: %35) -> Yüksek HRV = Güçlü Parasempatik / Düşük Stres
+    - Dinlenik Nabız (Ağırlık: %25) -> Düşük Nabız = İyi Kardiyovasküler Durum
+    """
+    # 1. Uyku Puanı (0 - 40)
+    sleep_score = min(40.0, (sleep_hours / 8.0) * 40.0)
+
+    # 2. HRV Puanı (0 - 35) (50-100 ms arası tipik genç sporcu bandı)
+    hrv_score = min(35.0, (hrv / 75.0) * 35.0)
+
+    # 3. Dinlenik Nabız Puanı (0 - 25) (50-60 bpm arası ideal)
+    rhr_score = 25.0
+    if resting_hr > 60:
+        rhr_score = max(5.0, 25.0 - (resting_hr - 60) * 0.8)
+    elif resting_hr < 45:
+        rhr_score = 25.0
+
+    total_score = round(min(100.0, max(10.0, sleep_score + hrv_score + rhr_score)))
+
+    if total_score >= 80:
+        status = "Optimal Toparlanma 🔥"
+        cns_advice = "Merkezi sinir sistemin zirvede. Bugün PR deneyebilir, ağır bileşik hareketlerde tükenişe (RPE 9.5-10) gidebilirsin."
+        badge_color = "#10b981"
+    elif total_score >= 60:
+        status = "Orta / Yeterli Toparlanma ⚡"
+        cns_advice = "Vücut antrenmana hazır ancak aşırı zorlama. Setlerde 1 tekrar cepte bırak (RIR 1)."
+        badge_color = "#00f2fe"
+    else:
+        status = "Yetersiz Toparlanma / Yüksek Stres ⚠️"
+        cns_advice = "Otonom sinir sistemin yorgun. Ağır PR denemesi yapma; form odaklı kal veya kardiyo/deload yap."
+        badge_color = "#ef4444"
+
+    return {
+        "recovery_score": total_score,
+        "status": status,
+        "cns_advice": cns_advice,
+        "badge_color": badge_color
+    }
+
+# ================= 3. SCHEMAS & API ENDPOINTS =================
 class ChatInput(BaseModel):
     user_message: str
     image_base64: Optional[str] = None
     workout_summary: Optional[str] = ""
     user_profile_summary: Optional[str] = ""
+    health_summary: Optional[str] = ""
     history: List[dict] = []
 
 class NutritionChatInput(BaseModel):
@@ -242,12 +286,23 @@ class NutritionChatInput(BaseModel):
     daily_summary: Optional[str] = ""
     history: List[dict] = []
 
+class HealthSyncInput(BaseModel):
+    username: str
+    date: str  # DD.MM.YYYY
+    sleep_hours: float
+    deep_sleep_hours: Optional[float] = 0.0
+    hrv_ms: float
+    resting_hr: float
+    avg_workout_hr: Optional[float] = None
+    max_workout_hr: Optional[float] = None
+    steps: Optional[int] = 0
+
 HTML_INTERFACE = r"""<!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Looksmax Hub - Antrenman, Beslenme & Çoklu Before/After</title>
+    <title>Looksmax Hub - Workout, Macro, Health & Recovery</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -276,19 +331,49 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .view-panel.active { display: flex; }
 
         /* --- 1. MODÜL SEÇİM EKRANI (HUB) --- */
-        #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 28px; }
+        #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 24px; }
         .hub-title { text-align: center; }
-        .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
+        .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 4px; }
         .hub-title p { font-size: 0.95rem; color: #9ca3af; }
         
-        .hub-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; max-width: 1200px; width: 100%; justify-content: center; }
-        .hub-card { background: #131722; border: 1px solid #222c3f; border-radius: 20px; padding: 26px 20px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 8px 24px rgba(0,0,0,0.4); text-align: left; }
+        .hub-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; max-width: 1350px; width: 100%; justify-content: center; }
+        .hub-card { background: #131722; border: 1px solid #222c3f; border-radius: 18px; padding: 22px 18px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 8px 24px rgba(0,0,0,0.4); text-align: left; }
         .hub-card:hover { transform: translateY(-6px); border-color: #00f2fe; box-shadow: 0 12px 35px rgba(0,242,254,0.22); }
-        .card-icon { font-size: 2.1rem; margin-bottom: 12px; }
-        .card-heading { font-size: 1.15rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
-        .card-desc { font-size: 0.78rem; color: #9ca3af; line-height: 1.45; margin-bottom: 16px; }
-        .card-action { align-self: flex-start; background: #1a2232; color: #00f2fe; border: 1px solid #2d3b54; padding: 8px 14px; border-radius: 9px; font-weight: 700; font-size: 0.78rem; transition: 0.2s; }
+        .card-icon { font-size: 2rem; margin-bottom: 10px; }
+        .card-heading { font-size: 1.1rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
+        .card-desc { font-size: 0.75rem; color: #9ca3af; line-height: 1.4; margin-bottom: 14px; }
+        .card-action { align-self: flex-start; background: #1a2232; color: #00f2fe; border: 1px solid #2d3b54; padding: 7px 12px; border-radius: 8px; font-weight: 700; font-size: 0.75rem; transition: 0.2s; }
         .hub-card:hover .card-action { background: #00f2fe; color: #000; }
+
+        /* --- ORTAK PANEL STİLLERİ --- */
+        .panel-card { background: #131722; border: 1px solid #1f2738; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+        .panel-header { font-size: 0.95rem; font-weight: 800; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
+        .badge-cyan { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
+        .badge-green { font-size: 0.75rem; background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
+        
+        .overload-col-left { width: 45%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
+        .overload-col-right { width: 55%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
+
+        .input-form { display: flex; flex-direction: column; gap: 10px; }
+        .input-form input, .input-form select { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 11px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; width: 100%; }
+        .input-form input:focus, .input-form select:focus { border-color: #00f2fe; }
+        .form-grid-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
+        .form-grid-3x1 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; width: 100%; }
+        .btn-log { background: #00f2fe; color: #000; border: none; font-weight: 800; padding: 12px; border-radius: 8px; cursor: pointer; margin-top: 4px; }
+
+        .days-tab-bar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+        .day-tab-btn { flex: 1; min-width: 48px; background: #0a0c10; border: 1px solid #1f2738; border-radius: 10px; padding: 8px 4px; color: #9ca3af; font-size: 0.75rem; font-weight: 700; cursor: pointer; text-align: center; transition: 0.2s; }
+        .day-tab-btn .tab-sub { font-size: 0.65rem; color: #6b7280; display: block; margin-top: 2px; }
+        .day-tab-btn:hover { border-color: #2b3a52; color: #fff; }
+        .day-tab-btn.active { background: #172133; border-color: #00f2fe; color: #00f2fe; }
+        .day-tab-btn.active .tab-sub { color: #38bdf8; }
+
+        .history-list { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
+        .log-item { display: flex; justify-content: space-between; align-items: center; background: #0a0c10; padding: 10px 14px; border-radius: 9px; font-size: 0.85rem; border: 1px solid #1c2230; }
+        .log-item .set-badge { background: #1e293b; color: #00f2fe; padding: 2px 7px; border-radius: 5px; font-weight: 700; font-size: 0.75rem; margin-right: 6px; }
+        .log-item .ex-title { font-weight: 700; color: #fff; }
+        .log-item .ex-val { color: #38bdf8; font-weight: 700; }
+        .log-item button { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.85rem; padding: 2px 4px; }
 
         /* --- 2. AI KOÇ EKRANI --- */
         #coachView { flex-direction: column; max-width: 950px; }
@@ -310,76 +395,39 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         input[type="file"] { display: none; }
         .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 800; padding: 12px 24px; border-radius: 10px; cursor: pointer; }
 
-        /* --- 3. PROGRESSIVE OVERLOAD EKRANI --- */
-        #overloadView { gap: 20px; max-width: 1350px; }
-        .overload-col-left { width: 46%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
-        .overload-col-right { width: 54%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
-
-        .panel-card { background: #131722; border: 1px solid #1f2738; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
-        .panel-header { font-size: 0.95rem; font-weight: 800; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
-        .badge-cyan { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
-
-        .days-tab-bar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
-        .day-tab-btn { flex: 1; min-width: 48px; background: #0a0c10; border: 1px solid #1f2738; border-radius: 10px; padding: 8px 4px; color: #9ca3af; font-size: 0.75rem; font-weight: 700; cursor: pointer; text-align: center; transition: 0.2s; }
-        .day-tab-btn .tab-sub { font-size: 0.65rem; color: #6b7280; display: block; margin-top: 2px; }
-        .day-tab-btn:hover { border-color: #2b3a52; color: #fff; }
-        .day-tab-btn.active { background: #172133; border-color: #00f2fe; color: #00f2fe; }
-        .day-tab-btn.active .tab-sub { color: #38bdf8; }
-
-        .empty-day-box { background: #0a0c10; border: 1px dashed #242f44; border-radius: 12px; padding: 36px 16px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
-        .empty-day-icon { font-size: 2rem; }
-        .empty-day-title { font-size: 1.05rem; font-weight: 800; color: #e5e7eb; }
-        .empty-day-desc { font-size: 0.78rem; color: #6b7280; max-width: 250px; line-height: 1.4; }
-
-        .input-form { display: flex; flex-direction: column; gap: 10px; }
-        .input-form input, .input-form select { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 11px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; width: 100%; }
-        .input-form input:focus, .input-form select:focus { border-color: #00f2fe; }
-        
-        .form-grid-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
-        .form-grid-3x1 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; width: 100%; }
-        .btn-log { background: #00f2fe; color: #000; border: none; font-weight: 800; padding: 12px; border-radius: 8px; cursor: pointer; margin-top: 4px; }
-
-        .history-list { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
-        .log-item { display: flex; justify-content: space-between; align-items: center; background: #0a0c10; padding: 10px 14px; border-radius: 9px; font-size: 0.85rem; border: 1px solid #1c2230; }
-        .log-item .set-badge { background: #1e293b; color: #00f2fe; padding: 2px 7px; border-radius: 5px; font-weight: 700; font-size: 0.75rem; margin-right: 6px; }
-        .log-item .ex-title { font-weight: 700; color: #fff; }
-        .log-item .ex-val { color: #38bdf8; font-weight: 700; }
-        .log-item button { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.85rem; padding: 2px 4px; }
-
-        .chart-box { flex: 1; min-height: 320px; position: relative; }
-
         /* --- 4. GÜNLÜK BESLENME EKRANI --- */
         #nutritionView { gap: 20px; max-width: 1350px; }
         .macro-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
         .macro-card { background: #0a0c10; border: 1px solid #1c2230; padding: 14px; border-radius: 12px; text-align: center; }
         .macro-val { font-size: 1.35rem; font-weight: 800; margin-top: 4px; }
         .macro-label { font-size: 0.72rem; font-weight: 700; color: #9ca3af; text-transform: uppercase; }
-
         .macro-c-cal { color: #f59e0b; }
         .macro-c-pro { color: #10b981; }
         .macro-c-carb { color: #00f2fe; }
         .macro-c-fat { color: #ec4899; }
         .meal-items-subtext { font-size: 0.75rem; color: #38bdf8; margin-top: 4px; font-weight: 500; }
 
-        /* --- 5. ÇOKLU BEFORE & AFTER FAZ PANİĞİ --- */
+        /* --- 5. BEFORE/AFTER STİLLERİ --- */
         #profileView { gap: 20px; max-width: 1400px; }
         .phase-header-bar { display: flex; justify-content: space-between; align-items: center; background: #0a0c10; padding: 10px 14px; border-radius: 10px; border: 1px solid #1c2230; margin-bottom: 10px; }
         .phase-selector { background: #141923; border: 1px solid #2b354d; color: #00f2fe; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-size: 0.85rem; outline: none; }
-        
         .photo-matrix-4x { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 12px; height: 500px; }
-        .photo-col-title { font-size: 0.85rem; font-weight: 800; color: #00f2fe; margin-bottom: 6px; display: flex; justify-content: space-between; }
-        
         .photo-card-slot { background: #0a0c10; border: 1px dashed #28354b; border-radius: 12px; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; height: 100%; cursor: pointer; transition: 0.2s; }
         .photo-card-slot:hover { border-color: #00f2fe; }
         .photo-card-slot img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; }
-        
         .slot-badge { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.8); border: 1px solid #00f2fe; color: #00f2fe; font-size: 0.7rem; font-weight: 800; padding: 3px 8px; border-radius: 5px; z-index: 2; }
         .btn-remove-photo { position: absolute; top: 8px; right: 8px; background: rgba(239, 68, 68, 0.9); border: none; color: white; width: 22px; height: 22px; border-radius: 50%; font-size: 0.75rem; font-weight: 800; cursor: pointer; z-index: 3; display: none; }
-        
         .slot-placeholder { z-index: 1; text-align: center; color: #6b7280; font-size: 0.75rem; }
-        .slot-placeholder .slot-icon { font-size: 1.6rem; margin-bottom: 4px; }
 
-        @media (max-width: 950px) {
+        /* --- 6. HEALTH & RECOVERY STİLLERİ --- */
+        #healthView { gap: 20px; max-width: 1400px; }
+        .recovery-banner { background: #0a0c10; border: 1px solid #1c2230; border-radius: 14px; padding: 18px; display: flex; align-items: center; gap: 20px; }
+        .recovery-circle { width: 84px; height: 84px; border-radius: 50%; border: 4px solid #00f2fe; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 1.45rem; font-weight: 800; color: #fff; flex-shrink: 0; }
+        .recovery-circle span { font-size: 0.65rem; color: #9ca3af; font-weight: 600; }
+        .recovery-info h3 { font-size: 1.15rem; font-weight: 800; color: #00f2fe; margin-bottom: 4px; }
+        .recovery-info p { font-size: 0.8rem; color: #9ca3af; line-height: 1.45; }
+
+        @media (max-width: 1100px) {
             body { overflow: auto; height: auto; }
             .hub-grid { grid-template-columns: repeat(2, 1fr); }
             .content-container { height: auto; overflow: visible; }
@@ -420,14 +468,14 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         <div class="view-panel active" id="hubView">
             <div class="hub-title">
                 <h1>Modülünü Seç Kral 🦍</h1>
-                <p>Neyi yönetmek veya geliştirmek istiyorsan tıkla ve başla.</p>
+                <p>Hipertrofi, beslenme, biyometrik toparlanma ve fizik takibini tek yerden yönet.</p>
             </div>
             <div class="hub-grid">
                 <div class="hub-card" onclick="openView('coach')">
                     <div>
                         <div class="card-icon">🤖</div>
                         <div class="card-heading">AI Koç & Vision</div>
-                        <div class="card-desc">Hipertrofi taktikleri, form kontrolü ve detaylı fizik değerlendirmesi yap.</div>
+                        <div class="card-desc">Tavizsiz hipertrofi koçluğu, form kontrolü ve anlık taktikler.</div>
                     </div>
                     <div class="card-action">Koçla Konuş →</div>
                 </div>
@@ -436,7 +484,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <div>
                         <div class="card-icon">📈</div>
                         <div class="card-heading">Progressive Overload</div>
-                        <div class="card-desc">Set ve ağırlıklarını kaydet. Gün gün sekme sekme antrenman ve dinlenme günlerini takip et.</div>
+                        <div class="card-desc">Set ve ağırlıklarını gün gün kaydet. Gelişim grafiklerini incele.</div>
                     </div>
                     <div class="card-action">Overload Takip →</div>
                 </div>
@@ -445,7 +493,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <div>
                         <div class="card-icon">🥗</div>
                         <div class="card-heading">Beslenme & Makro</div>
-                        <div class="card-desc">Yediklerini yaz veya fotoğrafını at; gün gün tüm haftalık makro ve kalorilerini takip et.</div>
+                        <div class="card-desc">Deterministik MyFitnessPal motoruyla yediklerini gramı gramına işle.</div>
                     </div>
                     <div class="card-action">Makro Takip →</div>
                 </div>
@@ -454,9 +502,18 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <div>
                         <div class="card-icon">📸</div>
                         <div class="card-heading">Profil & Before/After</div>
-                        <div class="card-desc">Tarih bazlı sınırsız Before/After dönemleri aç. Front ve Back/Side açılarıyla gelişimini gör.</div>
+                        <div class="card-desc">Ölçülerini kaydet, sınırsız dönem açıp Front/Back formlarını karşılaştır.</div>
                     </div>
                     <div class="card-action">Fizik Takip →</div>
+                </div>
+
+                <div class="hub-card" onclick="openView('health')">
+                    <div>
+                        <div class="card-icon">🫀</div>
+                        <div class="card-heading">Recovery & Health</div>
+                        <div class="card-desc">Apple Watch ile HRV, uyku ve nabız analizi. Günlük CNS toparlanma puanı.</div>
+                    </div>
+                    <div class="card-action">Sağlık Takip →</div>
                 </div>
             </div>
         </div>
@@ -465,7 +522,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
-                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload koçunum. Profilindeki ölçülere ve haftalık setlerine göre nokta atışı hipertrofi tavsiyesi verebilirim.</div>
+                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload koçunum. Antrenman setlerin, beslenmen ve Apple Watch toparlanma verilerine göre seni hedefe kitleyeceğim.</div>
                 </div>
 
                 <div class="preview-box" id="previewBox">
@@ -532,7 +589,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         <span>📊 Hareket Gelişim Grafiği</span>
                         <select id="chartExerciseSelect" onchange="updateChart()" style="background:#0a0c10; border:1px solid #2b354d; color:#00f2fe; padding:6px 12px; border-radius:7px; font-weight:700; outline:none;"></select>
                     </div>
-                    <div class="chart-box">
+                    <div class="chart-box" style="flex:1; min-height:340px; position:relative;">
                         <canvas id="progressionChart"></canvas>
                     </div>
                 </div>
@@ -601,7 +658,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 5. KULLANICI PROFİLİ & ÇOKLU BEFORE/AFTER EKRANI -->
+        <!-- 5. PROFİL & BEFORE/AFTER EKRANI -->
         <div class="view-panel" id="profileView">
             <div class="overload-col-left">
                 <div class="panel-card">
@@ -673,8 +730,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             <div class="overload-col-right">
                 <div class="panel-card" style="height: 100%;">
-                    
-                    <!-- DÖNEM SEÇİCİ VE YENİ DÖNEM BUTONU -->
                     <div class="phase-header-bar">
                         <div style="display:flex; align-items:center; gap:8px;">
                             <span style="font-size:0.85rem; font-weight:800; color:#fff;">Dönem:</span>
@@ -682,64 +737,112 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         </div>
                         <div style="display:flex; gap:6px;">
                             <button onclick="createNewPhasePrompt()" style="background:#00f2fe; color:#000; border:none; padding:6px 12px; border-radius:6px; font-weight:800; font-size:0.75rem; cursor:pointer;">➕ Yeni Dönem Başlat</button>
-                            <button onclick="deleteCurrentPhase()" style="background:#ef4444; color:#fff; border:none; padding:6px 10px; border-radius:6px; font-weight:700; font-size:0.75rem; cursor:pointer;" title="Bu dönemi sil">🗑️</button>
+                            <button onclick="deleteCurrentPhase()" style="background:#ef4444; color:#fff; border:none; padding:6px 10px; border-radius:6px; font-weight:700; font-size:0.75rem; cursor:pointer;">🗑️</button>
                         </div>
                     </div>
 
-                    <!-- 4'LÜ FOTOĞRAF MATRİSİ (BEFORE FRONT/BACK - AFTER FRONT/BACK) -->
                     <div class="photo-matrix-4x">
-                        
-                        <!-- 1. BEFORE FRONT -->
                         <div class="photo-card-slot" id="slot_before_front" onclick="triggerSlotUpload('before_front')">
                             <div class="slot-badge">BEFORE • FRONT (ÖN)</div>
                             <button class="btn-remove-photo" id="btn_rem_before_front" onclick="removePhoto(event, 'before_front')">✕</button>
                             <img id="img_before_front" src="" style="display:none;" />
                             <div class="slot-placeholder" id="hint_before_front">
-                                <div class="slot-icon">📷</div>
+                                <div style="font-size:1.6rem; margin-bottom:4px;">📷</div>
                                 <div>Ön Form Yükle</div>
-                                <span style="font-size:0.65rem; color:#4b5563;" id="date_before_display">Tarih Seç</span>
                             </div>
                         </div>
 
-                        <!-- 2. AFTER FRONT -->
                         <div class="photo-card-slot" id="slot_after_front" onclick="triggerSlotUpload('after_front')">
                             <div class="slot-badge" style="border-color:#10b981; color:#10b981;">AFTER • FRONT (ÖN)</div>
                             <button class="btn-remove-photo" id="btn_rem_after_front" onclick="removePhoto(event, 'after_front')">✕</button>
                             <img id="img_after_front" src="" style="display:none;" />
                             <div class="slot-placeholder" id="hint_after_front">
-                                <div class="slot-icon">🔥</div>
+                                <div style="font-size:1.6rem; margin-bottom:4px;">🔥</div>
                                 <div>Güncel Ön Form</div>
-                                <span style="font-size:0.65rem; color:#4b5563;" id="date_after_display">Tarih Seç</span>
                             </div>
                         </div>
 
-                        <!-- 3. BEFORE BACK/SIDE -->
                         <div class="photo-card-slot" id="slot_before_back" onclick="triggerSlotUpload('before_back')">
                             <div class="slot-badge">BEFORE • BACK/SIDE (SIRT)</div>
                             <button class="btn-remove-photo" id="btn_rem_before_back" onclick="removePhoto(event, 'before_back')">✕</button>
                             <img id="img_before_back" src="" style="display:none;" />
                             <div class="slot-placeholder" id="hint_before_back">
-                                <div class="slot-icon">📷</div>
+                                <div style="font-size:1.6rem; margin-bottom:4px;">📷</div>
                                 <div>Sırt/Yan Form Yükle</div>
                             </div>
                         </div>
 
-                        <!-- 4. AFTER BACK/SIDE -->
                         <div class="photo-card-slot" id="slot_after_back" onclick="triggerSlotUpload('after_back')">
                             <div class="slot-badge" style="border-color:#10b981; color:#10b981;">AFTER • BACK/SIDE (SIRT)</div>
                             <button class="btn-remove-photo" id="btn_rem_after_back" onclick="removePhoto(event, 'after_back')">✕</button>
                             <img id="img_after_back" src="" style="display:none;" />
                             <div class="slot-placeholder" id="hint_after_back">
-                                <div class="slot-icon">🔥</div>
+                                <div style="font-size:1.6rem; margin-bottom:4px;">🔥</div>
                                 <div>Güncel Sırt/Yan Form</div>
                             </div>
                         </div>
-
                     </div>
 
-                    <!-- Gizli Input -->
                     <input type="file" id="universalPhotoInput" accept="image/*" onchange="handleUniversalPhotoUpload(event)" style="display:none;" />
+                </div>
+            </div>
+        </div>
 
+        <!-- 6. YENİ MODÜL: RECOVERY & APPLE WATCH SAĞLIK EKRANI -->
+        <div class="view-panel" id="healthView">
+            <div class="overload-col-left">
+                <div class="recovery-banner" id="recoveryBannerBox">
+                    <div class="recovery-circle" id="recoveryScoreDisplay">--<span>SKOR</span></div>
+                    <div class="recovery-info">
+                        <h3 id="recoveryStatusTitle">Toparlanma Durumu</h3>
+                        <p id="recoveryAdviceText">Bugüne ait uyku, HRV ve dinlenik nabız verilerini kaydedin veya Apple Watch senkronizasyonu yapın.</p>
+                    </div>
+                </div>
+
+                <div class="panel-card">
+                    <div class="panel-header">
+                        <span>📲 Apple Health / Manuel Veri Girişi</span>
+                        <span class="badge-cyan" id="healthSelectedDateBadge">Bugün</span>
+                    </div>
+                    <div class="input-form">
+                        <div class="form-grid-2x2">
+                            <input type="number" id="healthSleep" placeholder="😴 Toplam Uyku (Saat, örn: 7.5)" step="0.1" />
+                            <input type="number" id="healthDeepSleep" placeholder="💤 Derin Uyku (Saat, örn: 1.5)" step="0.1" />
+                        </div>
+                        <div class="form-grid-2x2">
+                            <input type="number" id="healthHrv" placeholder="💓 HRV (ms, örn: 65)" step="1" />
+                            <input type="number" id="healthRestingHr" placeholder="🫀 Dinlenik Nabız (BPM, örn: 54)" step="1" />
+                        </div>
+                        <div class="form-grid-3x1">
+                            <input type="number" id="healthAvgWorkoutHr" placeholder="🏋️ İdman Ort. Nabız" step="1" />
+                            <input type="number" id="healthMaxWorkoutHr" placeholder="🔥 İdman Max Nabız" step="1" />
+                            <input type="number" id="healthSteps" placeholder="👟 Günlük Adım" step="100" />
+                        </div>
+                        <button class="btn-log" onclick="saveManualHealthData()">Sağlık Verilerini Kaydet & Skoru Hesapla</button>
+                    </div>
+                </div>
+
+                <div class="panel-card" style="flex:1;">
+                    <div class="panel-header">
+                        <span>💡 Apple Watch Entegrasyon Rehberi</span>
+                    </div>
+                    <div style="font-size:0.8rem; color:#9ca3af; line-height:1.5;">
+                        <p>iPhone'unuzdaki <b>Apple Kestirmeler (Shortcuts)</b> uygulamasını kullanarak her sabah uyandığınızda otomatik olarak sağlık verilerinizi web panelinize senkronize edebilirsiniz.</p>
+                        <div style="background:#0a0c10; padding:10px; border-radius:8px; border:1px solid #1c2230; margin-top:8px; font-family:monospace; color:#00f2fe; font-size:0.75rem;">
+                            Webhook URL: POST /api/health-sync
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="overload-col-right">
+                <div class="panel-card" style="height: 100%;">
+                    <div class="panel-header">
+                        <span>📈 7 Günlük HRV & Dinlenik Nabız Trendi</span>
+                    </div>
+                    <div style="flex:1; min-height:380px; position:relative;">
+                        <canvas id="healthTrendChart"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
@@ -782,12 +885,8 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         let selectedNutriDayIdx = weekDaysData.findIndex(item => item.fullDate === todayKey);
         if (selectedNutriDayIdx === -1) selectedNutriDayIdx = 0;
 
-        function getStorageUsers() {
-            return JSON.parse(localStorage.getItem("app_registered_users") || "{}");
-        }
-        function saveStorageUsers(users) {
-            localStorage.setItem("app_registered_users", JSON.stringify(users));
-        }
+        function getStorageUsers() { return JSON.parse(localStorage.getItem("app_registered_users") || "{}"); }
+        function saveStorageUsers(users) { localStorage.setItem("app_registered_users", JSON.stringify(users)); }
 
         function getUserWeeklyLogs(username) {
             const allWeeks = JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
@@ -809,19 +908,14 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             localStorage.setItem("user_nutri_weeks_" + username, JSON.stringify(allWeeks));
         }
 
-        function getUserProfileData(username) {
-            return JSON.parse(localStorage.getItem("user_profile_" + username) || "{}");
-        }
-        function saveUserProfileData(username, profData) {
-            localStorage.setItem("user_profile_" + username, JSON.stringify(profData));
-        }
+        function getUserProfileData(username) { return JSON.parse(localStorage.getItem("user_profile_" + username) || "{}"); }
+        function saveUserProfileData(username, profData) { localStorage.setItem("user_profile_" + username, JSON.stringify(profData)); }
 
-        function getUserPhases(username) {
-            return JSON.parse(localStorage.getItem("user_phases_" + username) || "[]");
-        }
-        function saveUserPhases(username, phases) {
-            localStorage.setItem("user_phases_" + username, JSON.stringify(phases));
-        }
+        function getUserPhases(username) { return JSON.parse(localStorage.getItem("user_phases_" + username) || "[]"); }
+        function saveUserPhases(username, phases) { localStorage.setItem("user_phases_" + username, JSON.stringify(phases)); }
+
+        function getUserHealthLogs(username) { return JSON.parse(localStorage.getItem("user_health_" + username) || "{}"); }
+        function saveUserHealthLogs(username, healthLogs) { localStorage.setItem("user_health_" + username, JSON.stringify(healthLogs)); }
 
         let currentUser = JSON.parse(localStorage.getItem("active_user") || "null");
         let isRegisterMode = false;
@@ -829,9 +923,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         let weeklyNutrition = {};
         let userProfile = {};
         let userPhases = [];
+        let userHealthLogs = {};
         let activePhaseId = null;
         let pendingUploadSlot = null;
         let chartInstance = null;
+        let healthChartInstance = null;
 
         document.getElementById("exerciseDate").value = weekDaysData[selectedWorkoutDayIdx].fullDate;
         document.getElementById("currentWeekDisplay").innerText = "Hafta: " + currentWeekKey;
@@ -843,17 +939,10 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             document.getElementById("backHubBtn").style.display = (viewName === 'hub') ? 'none' : 'block';
 
-            if (viewName === 'overload') {
-                setTimeout(updateChart, 150);
-            }
-            if (viewName === 'nutrition') {
-                renderNutriDayTabs();
-                renderSelectedDayNutrition();
-            }
-            if (viewName === 'profile') {
-                loadUserProfileUI();
-                loadUserPhasesUI();
-            }
+            if (viewName === 'overload') setTimeout(updateChart, 150);
+            if (viewName === 'nutrition') { renderNutriDayTabs(); renderSelectedDayNutrition(); }
+            if (viewName === 'profile') { loadUserProfileUI(); loadUserPhasesUI(); }
+            if (viewName === 'health') { loadHealthUI(); }
         }
 
         function checkAuth() {
@@ -866,6 +955,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 loadUserNutrition();
                 loadUserProfileUI();
                 loadUserPhasesUI();
+                loadHealthUI();
             }
         }
 
@@ -914,7 +1004,149 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             location.reload();
         }
 
-        // ================= PROFİL & HEDEFLER =================
+        // ================= HEALTH & RECOVERY =================
+        function loadHealthUI() {
+            if (!currentUser) return;
+            userHealthLogs = getUserHealthLogs(currentUser.username);
+            document.getElementById("healthSelectedDateBadge").innerText = todayKey;
+
+            const todayLog = userHealthLogs[todayKey];
+            if (todayLog) {
+                document.getElementById("healthSleep").value = todayLog.sleep_hours || "";
+                document.getElementById("healthDeepSleep").value = todayLog.deep_sleep_hours || "";
+                document.getElementById("healthHrv").value = todayLog.hrv_ms || "";
+                document.getElementById("healthRestingHr").value = todayLog.resting_hr || "";
+                document.getElementById("healthAvgWorkoutHr").value = todayLog.avg_workout_hr || "";
+                document.getElementById("healthMaxWorkoutHr").value = todayLog.max_workout_hr || "";
+                document.getElementById("healthSteps").value = todayLog.steps || "";
+
+                renderRecoveryScoreUI(todayLog);
+            }
+            updateHealthTrendChart();
+        }
+
+        function renderRecoveryScoreUI(log) {
+            const sleep = parseFloat(log.sleep_hours) || 7.0;
+            const hrv = parseFloat(log.hrv_ms) || 60.0;
+            const rhr = parseFloat(log.resting_hr) || 55.0;
+
+            const sleepScore = Math.min(40.0, (sleep / 8.0) * 40.0);
+            const hrvScore = Math.min(35.0, (hrv / 75.0) * 35.0);
+            let rhrScore = 25.0;
+            if (rhr > 60) rhrScore = Math.max(5.0, 25.0 - (rhr - 60) * 0.8);
+
+            const total = Math.round(Math.min(100.0, Math.max(10.0, sleepScore + hrvScore + rhrScore)));
+
+            const scoreCircle = document.getElementById("recoveryScoreDisplay");
+            scoreCircle.innerHTML = `${total}<span>SKOR</span>`;
+
+            let color = "#00f2fe";
+            let title = "Orta / Yeterli Toparlanma ⚡";
+            let advice = "Vücudun antrenmana hazır. Setlerde 1 tekrar cepte bırak (RIR 1).";
+
+            if (total >= 80) {
+                color = "#10b981";
+                title = "Optimal Toparlanma 🔥";
+                advice = "Merkezi sinir sistemin zirvede! Bugün ağır bileşik hareketlerde tükenişe gidebilir ve PR deneyebilirsin.";
+            } else if (total < 60) {
+                color = "#ef4444";
+                title = "Yetersiz Toparlanma / Yüksek Stres ⚠️";
+                advice = "Otonom sinir sistemin yorgun. Ağır PR denemesi yapma; form odaklı kal veya hafif kardiyo yap.";
+            }
+
+            scoreCircle.style.borderColor = color;
+            document.getElementById("recoveryStatusTitle").innerText = title;
+            document.getElementById("recoveryStatusTitle").style.color = color;
+            document.getElementById("recoveryAdviceText").innerText = advice;
+        }
+
+        function saveManualHealthData() {
+            if (!currentUser) return;
+            const sleep = parseFloat(document.getElementById("healthSleep").value) || 0;
+            const deepSleep = parseFloat(document.getElementById("healthDeepSleep").value) || 0;
+            const hrv = parseFloat(document.getElementById("healthHrv").value) || 0;
+            const rhr = parseFloat(document.getElementById("healthRestingHr").value) || 0;
+            const avgHr = parseFloat(document.getElementById("healthAvgWorkoutHr").value) || null;
+            const maxHr = parseFloat(document.getElementById("healthMaxWorkoutHr").value) || null;
+            const steps = parseInt(document.getElementById("healthSteps").value, 10) || 0;
+
+            if (sleep <= 0 || hrv <= 0 || rhr <= 0) {
+                return alert("Lütfen en az Uyku Süresi, HRV ve Dinlenik Nabız değerlerini gir kral!");
+            }
+
+            const log = {
+                date: todayKey,
+                sleep_hours: sleep,
+                deep_sleep_hours: deepSleep,
+                hrv_ms: hrv,
+                resting_hr: rhr,
+                avg_workout_hr: avgHr,
+                max_workout_hr: maxHr,
+                steps: steps
+            };
+
+            userHealthLogs[todayKey] = log;
+            saveUserHealthLogs(currentUser.username, userHealthLogs);
+            renderRecoveryScoreUI(log);
+            updateHealthTrendChart();
+            alert("Sağlık ve toparlanma verilerin başarıyla kaydedildi! 🫀");
+        }
+
+        function updateHealthTrendChart() {
+            const dates = weekDaysData.map(d => d.fullDate);
+            const hrvData = dates.map(d => userHealthLogs[d] ? userHealthLogs[d].hrv_ms : null);
+            const rhrData = dates.map(d => userHealthLogs[d] ? userHealthLogs[d].resting_hr : null);
+
+            const canvas = document.getElementById('healthTrendChart');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            if (healthChartInstance) healthChartInstance.destroy();
+
+            healthChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: weekDaysData.map(d => d.dayName + " (" + d.shortDate + ")"),
+                    datasets: [
+                        {
+                            label: 'HRV (ms)',
+                            data: hrvData,
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                            borderWidth: 3,
+                            yAxisID: 'y',
+                            tension: 0.35,
+                            fill: true,
+                            pointBackgroundColor: '#10b981',
+                            pointRadius: 5
+                        },
+                        {
+                            label: 'Dinlenik Nabız (BPM)',
+                            data: rhrData,
+                            borderColor: '#ef4444',
+                            backgroundColor: 'transparent',
+                            borderWidth: 2,
+                            borderDash: [4, 4],
+                            yAxisID: 'y1',
+                            tension: 0.35,
+                            pointBackgroundColor: '#ef4444',
+                            pointRadius: 5
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { grid: { color: '#1a2230' }, ticks: { color: '#9ca3af' } },
+                        y: { type: 'linear', position: 'left', grid: { color: '#1a2230' }, ticks: { color: '#10b981' }, title: { display: true, text: 'HRV (ms)', color: '#10b981' } },
+                        y1: { type: 'linear', position: 'right', grid: { display: false }, ticks: { color: '#ef4444' }, title: { display: true, text: 'Dinlenik Nabız (BPM)', color: '#ef4444' } }
+                    },
+                    plugins: { legend: { labels: { color: '#e5e7eb', font: { size: 11, weight: 'bold' } } } }
+                }
+            });
+        }
+
+        // ================= PROFİL & BEFORE/AFTER =================
         function loadUserProfileUI() {
             if (!currentUser) return;
             userProfile = getUserProfileData(currentUser.username);
@@ -981,7 +1213,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             alert("Profil bilgileri ve hedeflerin başarıyla kaydedildi kral! 🦍");
         }
 
-        // ================= ÇOKLU BEFORE & AFTER DÖNEM YÖNETİMİ =================
         function loadUserPhasesUI() {
             if (!currentUser) return;
             userPhases = getUserPhases(currentUser.username);
@@ -989,9 +1220,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (userPhases.length === 0) {
                 const defaultPhase = {
                     id: "phase_" + Date.now(),
-                    name: "Başlangıç",
-                    beforeDate: "01.05.2026",
-                    afterDate: "02.07.2026",
+                    name: "1. Dönem (1 Mayıs - 2 Temmuz)",
                     photos: { before_front: null, before_back: null, after_front: null, after_back: null }
                 };
                 userPhases.push(defaultPhase);
@@ -1025,7 +1254,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         }
 
         function createNewPhasePrompt() {
-            const name = prompt("Yeni Dönem Adı ve Tarihleri (Örn: '3 Temmuz - 10 Ağustos Lean Bulk'):");
+            const name = prompt("Yeni Dönem Adı (Örn: '3 Temmuz - 10 Ağustos Lean Bulk'):");
             if (!name || !name.trim()) return;
 
             const newPhase = {
@@ -1453,6 +1682,9 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             const lastSets = weeklyLogs.slice(-6).map(s => `${s.exercise} (${s.set_num}.Set, ${s.date}): ${s.weight}kg x ${s.reps}`).join(", ");
             const profSummary = userProfile.weight ? `Boy: ${userProfile.height}cm, Kilo: ${userProfile.weight}kg, Yağ: %${userProfile.bodyfat || '?'}, Hedef: ${userProfile.goal}` : "Profil girilmedi.";
+            
+            const todayH = userHealthLogs[todayKey];
+            const healthSummary = todayH ? `Uyku: ${todayH.sleep_hours}s, HRV: ${todayH.hrv_ms}ms, Dinlenik Nabız: ${todayH.resting_hr}bpm` : "Bugünkü sağlık/toparlanma verisi henüz girilmedi.";
 
             try {
                 const response = await fetch("/chat", {
@@ -1462,6 +1694,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         user_message: currentText,
                         workout_summary: lastSets,
                         user_profile_summary: profSummary,
+                        health_summary: healthSummary,
                         image_base64: currentImg,
                         history: conversationHistory
                     })
@@ -1565,6 +1798,22 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 def serve_ui():
     return HTML_INTERFACE
 
+@app.post("/api/health-sync")
+def sync_apple_health_webhook(payload: HealthSyncInput):
+    """
+    Apple Health / Shortcuts üzerinden gelen otomatik sağlık webhook'u.
+    """
+    recovery = compute_recovery_score(
+        sleep_hours=payload.sleep_hours,
+        hrv=payload.hrv_ms,
+        resting_hr=payload.resting_hr
+    )
+    return {
+        "status": "success",
+        "message": f"{payload.date} tarihli Apple Health verisi işlendi.",
+        "recovery_metrics": recovery
+    }
+
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
     if not client:
@@ -1572,17 +1821,30 @@ def coach_dialogue(data: ChatInput):
 
     user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
     profile_context = f"Kullanıcı Profili: {data.user_profile_summary}" if data.user_profile_summary else "Profil bilgisi girilmedi."
+    health_context = f"Biyometrik Sağlık & Recovery Durumu: {data.health_summary}" if data.health_summary else "Sağlık verisi yok."
 
     system_prompt = f"""
-Sen elit seviyede bir 'Looksmaxxing, Hipertrofi & Fizik Koçu'sun.
-KULLANICI BİLGİLERİ:
+Sen tavizsiz, sert, disiplin aşılayan ve bahane kabul etmeyen elit bir 'Looksmaxxing, Hipertrofi & Fizik Koçu'sun.
+Karakterin: Asla gevşekliğe, tembelliğe ve ağlamaya toleransın yok. Kullanıcıyı gaza getiren, gerektiğinde tokat gibi gerçekleri yüzüne vuran ama arkasında her zaman saf hipertrofi bilimi olan bir zihniyete sahipsin.
+
+KULLANICI BİLGİLERİ & PROFİLİ:
 {profile_context}
+
+BİYOMETRİK VERİLERİ (UYKU, HRV, NABIZ):
+{health_context}
+
+KULLANICININ BU HAFTAKİ SETLERİ / OVERLOAD DURUMU:
 {user_context}
 
-GÖREVLERİN:
-1. Kullanıcının boy, kilo, yağ oranı ve hedefine (Bulk/Cut/Recomp) göre kişiselleştirilmiş hipertrofi ve beslenme tavsiyesi ver.
-2. Set kayıtlarına bakarak bir sonraki idmanda kaç kg veya tekrar hedeflemesi gerektiğini net olarak söyle.
-3. Motive edici, bilimsel ve net bir dil kullan.
+KOÇLUK VE İLETİŞİM KURALLARIN:
+1. TON VE ÜSLUP:
+   - Sert, net, maskülen ve yüksek enerjili konuş. Boş motivasyon cümleleri kurma; hedefe odakla.
+   - Kullanıcıya "kral", "şampiyon" gibi hitap et. Asla pasif bir yapay zeka asistanı gibi konuşma.
+2. BİYOMETRİK TOZ KONTROLÜ (RECOVERY / CNS):
+   - Eğer kullanıcının uykusu düşükse (< 6 saat) veya HRV'si kötüyse sert uyar: "Bu uykuyla kas yapamazsın, merkezi sinir sistemin çöp olmuş, bugün PR deneme form odaklı kal" de.
+   - Eğer toparlanması tamsa: "Bahanen yok, recovery zirvede, bugün ağırlığın içinden geçeceksin" diye gazla.
+3. PROGRESSIVE OVERLOAD & HİPERTROFİ:
+   - Kullanıcının girdiği ağırlık ve tekrarlara bakarak bir sonraki idmanda kaç kg veya kaç tekrar zorlaması gerektiğini nokta atışı emret.
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
