@@ -19,7 +19,7 @@ client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 app = FastAPI(title="Looksmax Hub - Workout & Macro Tracker")
 
-# ================= 1. NUTRITION ENGINE (MYFITNESSPAL MİMARİSİ) =================
+# ================= 1. NUTRITION ENGINE =================
 DB_FILE = os.path.join(os.path.dirname(__file__), "foods_db.json")
 
 def load_food_database() -> Dict[str, Any]:
@@ -33,33 +33,55 @@ def load_food_database() -> Dict[str, Any]:
 
 LOCAL_FOOD_DB = load_food_database()
 
+# Ufak yazım hataları için düzeltme sözlüğü
+TYPO_CORRECTIONS = {
+    "psirnc": "pirinc",
+    "psirinc": "pirinc",
+    "pirinç": "pirinc",
+    "pırınc": "pirinc",
+    "tavk": "tavuk",
+    "kanaat": "kanat",
+    "kasarlı": "kasarli",
+    "karısık": "karisik"
+}
+
 def normalize_turkish(text: str) -> str:
-    """Türkçe karakterleri normalize eder ve özel karakterleri temizler."""
     t = text.lower()
     t = t.replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ş", "s").replace("ö", "o").replace("ç", "c")
     t = re.sub(r'[^a-z0-9\s.,]', ' ', t)
-    return re.sub(r'\s+', ' ', t).strip()
+    words = t.split()
+    corrected_words = [TYPO_CORRECTIONS.get(w, w) for w in words]
+    return " ".join(corrected_words).strip()
 
 def search_local_food(query: str):
-    """Fuzzy Match (Bulanık Arama) ve Anahtar Kelime Motoru."""
     if not query:
         return None
     norm_q = normalize_turkish(query)
 
-    # 1. Birebir veya Alt Dize Eşleşmesi
+    # 1. Birebir Tam Eşleşme (Örn: "tavuk" -> "tavuk")
+    if norm_q in LOCAL_FOOD_DB:
+        return {**LOCAL_FOOD_DB[norm_q], "matched_key": norm_q}
+
+    # 2. Öncelikli Kelime Başlangıcı Eşleşmesi (Döner/Tost yerine ana besin)
+    words = norm_q.split()
+    for word in words:
+        if word in ["tavuk", "pirinc", "pilav", "bulgur", "yulaf", "makarna", "patates", "yumurta", "kanat", "bonfile", "kofte"]:
+            if word in LOCAL_FOOD_DB:
+                return {**LOCAL_FOOD_DB[word], "matched_key": word}
+
+    # 3. Kapsama Eşleşmesi (En uzun anahtardan başlayarak)
     for key in sorted(LOCAL_FOOD_DB.keys(), key=lambda x: len(x), reverse=True):
-        if key == norm_q or key in norm_q or norm_q in key:
+        if key in norm_q or norm_q in key:
             return {**LOCAL_FOOD_DB[key], "matched_key": key}
 
-    # 2. Levenshtein Benzerlik Araması (Yazım hataları için: örn 'karsık tost')
-    matches = difflib.get_close_matches(norm_q, LOCAL_FOOD_DB.keys(), n=1, cutoff=0.65)
+    # 4. Fuzzy Arama (Yüksek benzerlik eşiği: 0.80)
+    matches = difflib.get_close_matches(norm_q, LOCAL_FOOD_DB.keys(), n=1, cutoff=0.80)
     if matches:
         return {**LOCAL_FOOD_DB[matches[0]], "matched_key": matches[0]}
 
     return None
 
 def fetch_open_food_facts(query: str):
-    """Global Open Food Facts REST API Entegrasyonu."""
     try:
         clean_q = urllib.parse.quote(query)
         url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={clean_q}&search_simple=1&action=process&json=1&page_size=1"
@@ -81,7 +103,6 @@ def fetch_open_food_facts(query: str):
     return None
 
 def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
-    """Çoklu besin metnini token'lara ayırıp tam makroları hesaplar."""
     norm_text = normalize_turkish(user_text)
     
     # Sayıların önüne ayırıcı koyarak ardışık girdileri tokenize et
@@ -99,13 +120,12 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
             continue
 
         qty = None
-        unit = "g"
+        unit = None
 
-        # Sayı ve birimi yakala
         m_num = re.search(r'^(\d+(?:[.,]\d+)?)\s*(kg|kilo|kilogram|g|gr|gram|adet|tane|tam|yarim|porsiyon|dilim|kase|tabak)?', token)
         if m_num:
             qty = float(m_num.group(1).replace(",", "."))
-            unit = m_num.group(2) or "g"
+            unit = m_num.group(2)
             food_query = token[m_num.end():].strip()
         else:
             food_query = token.strip()
@@ -113,17 +133,19 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
         if not food_query:
             continue
 
-        # 1. Tier: Yerel Veritabanında Fuzzy Match Ara
         food_data = search_local_food(food_query)
         
         if food_data:
-            if food_data["unit"] == "g":
+            # Gramaj emniyet kilidi: 'g', 'kg' girildiyse veya sayı >= 15 ise kesinlikle gramdır
+            is_gram_input = unit in ["kg", "kilo", "kilogram", "g", "gr", "gram"] or (qty is not None and qty >= 15)
+
+            if food_data["unit"] == "g" or is_gram_input:
                 if unit in ["kg", "kilo", "kilogram"]:
                     grams = (qty or 1.0) * 1000.0
                 elif unit in ["g", "gr", "gram"]:
                     grams = qty or 100.0
                 else:
-                    grams = qty if (qty and qty >= 10) else 100.0
+                    grams = qty if (qty and qty >= 15) else 100.0
 
                 ratio = grams / 100.0
                 c = food_data["cal"] * ratio
@@ -145,31 +167,24 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
             total_fat += f
             items_summary_list.append(title)
         else:
-            # 2. Tier: Global Open Food Facts API Ara
             api_data = fetch_open_food_facts(food_query)
             if api_data:
                 grams = 100.0
                 if unit in ["kg", "kilo", "kilogram"]:
                     grams = (qty or 1.0) * 1000.0
-                elif qty and qty >= 10:
+                elif qty and qty >= 15:
                     grams = qty
                 elif qty:
                     grams = qty * 100.0
 
                 ratio = grams / 100.0
-                c = api_data["cal"] * ratio
-                p = api_data["pro"] * ratio
-                cb = api_data["carb"] * ratio
-                f = api_data["fat"] * ratio
-                
-                total_cal += c
-                total_pro += p
-                total_carb += cb
-                total_fat += f
+                total_cal += api_data["cal"] * ratio
+                total_pro += api_data["pro"] * ratio
+                total_carb += api_data["carb"] * ratio
+                total_fat += api_data["fat"] * ratio
                 items_summary_list.append(f"{int(grams)}g {api_data['name']}")
             else:
-                # 3. Tier: Akıllı Varsayılan Standart Değer
-                grams = (qty or 1.0) * 1000.0 if unit in ["kg", "kilo", "kilogram"] else (qty if (qty and qty >= 10) else 150.0)
+                grams = (qty or 1.0) * 1000.0 if unit in ["kg", "kilo", "kilogram"] else (qty if (qty and qty >= 15) else 150.0)
                 total_cal += grams * 1.5
                 total_pro += grams * 0.12
                 total_carb += grams * 0.18
@@ -233,7 +248,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .view-panel { display: none; width: 100%; height: 100%; padding: 20px; }
         .view-panel.active { display: flex; }
 
-        /* --- 1. MODÜL SEÇİM EKRANI (HUB) --- */
         #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 28px; }
         .hub-title { text-align: center; }
         .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
@@ -248,7 +262,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .card-action { align-self: flex-start; background: #1a2232; color: #00f2fe; border: 1px solid #2d3b54; padding: 9px 16px; border-radius: 10px; font-weight: 700; font-size: 0.82rem; transition: 0.2s; }
         .hub-card:hover .card-action { background: #00f2fe; color: #000; }
 
-        /* --- 2. AI KOÇ EKRANI --- */
         #coachView { flex-direction: column; max-width: 950px; }
         .chat-container { flex: 1; display: flex; flex-direction: column; background: #131722; border-radius: 16px; border: 1px solid #1f2738; overflow: hidden; }
         .messages { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
@@ -268,14 +281,12 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         input[type="file"] { display: none; }
         .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 800; padding: 12px 24px; border-radius: 10px; cursor: pointer; }
 
-        /* --- 3. PROGRESSIVE OVERLOAD EKRANI --- */
         #overloadView { gap: 20px; max-width: 1350px; }
         .overload-col-left { width: 46%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
         .overload-col-right { width: 54%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
 
         .panel-card { background: #131722; border: 1px solid #1f2738; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
         .panel-header { font-size: 0.95rem; font-weight: 800; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
-
         .badge-cyan { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
 
         .days-tab-bar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
@@ -298,7 +309,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .btn-log { background: #00f2fe; color: #000; border: none; font-weight: 800; padding: 12px; border-radius: 8px; cursor: pointer; margin-top: 4px; }
 
         .history-list { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
-        
         .log-item { display: flex; justify-content: space-between; align-items: center; background: #0a0c10; padding: 10px 14px; border-radius: 9px; font-size: 0.85rem; border: 1px solid #1c2230; }
         .log-item .set-badge { background: #1e293b; color: #00f2fe; padding: 2px 7px; border-radius: 5px; font-weight: 700; font-size: 0.75rem; margin-right: 6px; }
         .log-item .ex-title { font-weight: 700; color: #fff; }
@@ -307,7 +317,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
         .chart-box { flex: 1; min-height: 320px; position: relative; }
 
-        /* --- 4. GÜNLÜK BESLENME EKRANI --- */
         #nutritionView { gap: 20px; max-width: 1350px; }
         .macro-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
         .macro-card { background: #0a0c10; border: 1px solid #1c2230; padding: 14px; border-radius: 12px; text-align: center; }
@@ -357,7 +366,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
     <div class="content-container">
 
-        <!-- 1. GİRİŞ SEÇİM EKRANI (DASHBOARD HUB) -->
         <div class="view-panel active" id="hubView">
             <div class="hub-title">
                 <h1>Modülünü Seç Kral 🦍</h1>
@@ -393,7 +401,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 2. AI KOÇ EKRANI -->
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
@@ -415,7 +422,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 3. PROGRESSIVE OVERLOAD EKRANI -->
         <div class="view-panel" id="overloadView">
             <div class="overload-col-left">
                 <div class="panel-card">
@@ -471,7 +477,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 4. GÜNLÜK BESLENME EKRANI -->
         <div class="view-panel" id="nutritionView">
             <div class="overload-col-left">
                 <div class="chat-container">
@@ -679,7 +684,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             location.reload();
         }
 
-        // ================= ANTRENMAN YÖNETİMİ =================
         function loadUserWorkouts() {
             if (!currentUser) return;
             weeklyLogs = getUserWeeklyLogs(currentUser.username);
@@ -857,7 +861,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             });
         }
 
-        // ================= BESLENME YÖNETİMİ =================
         function loadUserNutrition() {
             if (!currentUser) return;
             weeklyNutrition = getUserWeeklyNutrition(currentUser.username);
@@ -959,7 +962,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             renderSelectedDayNutrition();
         }
 
-        // ================= CHAT & VISION =================
         let conversationHistory = [];
         let selectedBase64Image = null;
         let nutriSelectedImage = null;
@@ -1179,7 +1181,6 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
 
 @app.post("/nutrition-chat")
 def nutrition_dialogue(data: NutritionChatInput):
-    # Deterministik Nutrition Engine
     detected_meal = parse_and_calculate_meal(data.user_message)
     
     if detected_meal:
