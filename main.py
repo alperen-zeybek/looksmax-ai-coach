@@ -19,7 +19,7 @@ client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 app = FastAPI(title="Looksmax Hub - Workout & Macro Tracker")
 
-# ================= 1. NUTRITION ENGINE (MYFITNESSPAL MİMARİSİ) =================
+# ================= 1. NUTRITION ENGINE (STRICT MULTI-WORD MATCHING) =================
 DB_FILE = os.path.join(os.path.dirname(__file__), "foods_db.json")
 
 def load_food_database() -> Dict[str, Any]:
@@ -33,7 +33,6 @@ def load_food_database() -> Dict[str, Any]:
 
 LOCAL_FOOD_DB = load_food_database()
 
-# Özel Porsiyon / Birim Çarpanları (Gram cinsinden)
 UNIT_GRAM_MAP = {
     "olcek": 30.0,
     "scoop": 30.0,
@@ -47,7 +46,6 @@ UNIT_GRAM_MAP = {
     "cay kasigi": 3.0,
     "bardak": 200.0,
     "su bardagi": 200.0,
-    "avuç": 30.0,
     "avuc": 30.0
 }
 
@@ -61,7 +59,11 @@ TYPO_CORRECTIONS = {
     "kasarlı": "kasarli",
     "karısık": "karisik",
     "ölçek": "olcek",
-    "kaşık": "kasik"
+    "kaşık": "kasik",
+    "ekmeği": "ekmegi",
+    "ekmek": "ekmegi",
+    "buğday": "bugday",
+    "bugday": "bugday"
 }
 
 def normalize_turkish(text: str) -> str:
@@ -77,22 +79,18 @@ def search_local_food(query: str):
         return None
     norm_q = normalize_turkish(query)
 
-    # 1. Birebir Tam Eşleşme
+    # 1. Uzun Öbek Eşleşmesi (En uzun kelime grubundan başla)
+    sorted_keys = sorted(LOCAL_FOOD_DB.keys(), key=lambda x: len(x), reverse=True)
+    for key in sorted_keys:
+        if key in norm_q:
+            return {**LOCAL_FOOD_DB[key], "matched_key": key}
+
+    # 2. Tam Eşleşme
     if norm_q in LOCAL_FOOD_DB:
         return {**LOCAL_FOOD_DB[norm_q], "matched_key": norm_q}
 
-    # 2. Tam Kelime Eşleşmesi (En uzun anahtarlardan başlayarak)
-    for key in sorted(LOCAL_FOOD_DB.keys(), key=lambda x: len(x), reverse=True):
-        if re.search(r'\b' + re.escape(key) + r'\b', norm_q):
-            return {**LOCAL_FOOD_DB[key], "matched_key": key}
-
-    # 3. Kapsama Eşleşmesi
-    for key in sorted(LOCAL_FOOD_DB.keys(), key=lambda x: len(x), reverse=True):
-        if key in norm_q or norm_q in key:
-            return {**LOCAL_FOOD_DB[key], "matched_key": key}
-
-    # 4. Fuzzy Arama (Yüksek benzerlik: 0.80)
-    matches = difflib.get_close_matches(norm_q, LOCAL_FOOD_DB.keys(), n=1, cutoff=0.80)
+    # 3. Yüksek Benzerlikli Fuzzy Match
+    matches = difflib.get_close_matches(norm_q, LOCAL_FOOD_DB.keys(), n=1, cutoff=0.85)
     if matches:
         return {**LOCAL_FOOD_DB[matches[0]], "matched_key": matches[0]}
 
@@ -122,8 +120,7 @@ def fetch_open_food_facts(query: str):
 def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
     norm_text = normalize_turkish(user_text)
     
-    # Sayıların önüne ayırıcı koyarak tokenize et
-    unit_pattern = r'(?:kg|kilo|kilogram|g|gr|gram|adet|tane|tam|yarim|olcek|scoop|dilim|kase|tabak|porsiyon|kasik|bardak)'
+    unit_pattern = r'(?:kg|kilo|kilogram|g|gr|gram|adet|tane|dilim|olcek|scoop|kase|tabak|porsiyon|kasik|bardak)'
     norm_text = re.sub(rf'(\d+(?:[.,]\d+)?\s*{unit_pattern}?)', r',\1', norm_text)
     raw_tokens = [t.strip() for t in re.split(r'[,+\n]|(?:\s+ve\s+)', norm_text) if t.strip()]
 
@@ -157,19 +154,16 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
             multiplier_gram = 0.0
             display_title = ""
 
-            # 1. Durum: Belirtilen Birim Haritasında Var mı? (örn: ölçek, dilim, kase)
             if unit in UNIT_GRAM_MAP:
                 multiplier_gram = (qty or 1.0) * UNIT_GRAM_MAP[unit]
                 display_title = f"{int(qty or 1)} {unit.title()} {food_data['name']} ({int(multiplier_gram)}g)"
-            # 2. Durum: Kilogram veya Gram Girdisi
             elif unit in ["kg", "kilo", "kilogram"]:
                 multiplier_gram = (qty or 1.0) * 1000.0
                 display_title = f"{int(multiplier_gram)}g {food_data['name']}"
             elif unit in ["g", "gr", "gram"]:
                 multiplier_gram = qty or 100.0
                 display_title = f"{int(multiplier_gram)}g {food_data['name']}"
-            # 3. Durum: Adet / Porsiyon veya Sayı Girdisi
-            elif unit in ["adet", "tane", "tam"] or (qty is not None and qty < 15 and food_data.get("unit") == "item"):
+            elif unit in ["adet", "tane"] or (qty is not None and qty < 15 and food_data.get("unit") == "item"):
                 count = qty or 1.0
                 c = food_data["cal"] * count
                 p = food_data["pro"] * count
@@ -181,13 +175,11 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
                 total_fat += f
                 items_summary_list.append(f"{int(count)} Adet {food_data['name']}")
                 continue
-            # 4. Durum: Ekmek veya Protein tozu gibi besinlere '4 adet' / '1' yazıldıysa varsayılan porsiyon ağırlığını kullan
             elif "serving_weight" in food_data:
                 count = qty or 1.0
                 multiplier_gram = count * food_data["serving_weight"]
                 s_unit = food_data.get("serving_unit", "porsiyon")
                 display_title = f"{int(count)} {s_unit.title()} {food_data['name']} ({int(multiplier_gram)}g)"
-            # 5. Durum: Sayı >= 15 ise doğrudan gramdır
             elif qty and qty >= 15:
                 multiplier_gram = qty
                 display_title = f"{int(multiplier_gram)}g {food_data['name']}"
@@ -518,7 +510,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! MyFitnessPal motoru devrede. Ne yediysen yaz (örn: <i>"4 dilim tam buğday ekmeği"</i>, <i>"1 ölçek protein tozu"</i>); tüm makrolarını tam hesaplayıp eklerim.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"4 tam buğday ekmeği"</i>, <i>"1 ölçek protein tozu"</i>, <i>"300g tavuk 150g pirinc"</i>); tüm makrolarını tam hesaplayıp eklerim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
