@@ -989,7 +989,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (userPhases.length === 0) {
                 const defaultPhase = {
                     id: "phase_" + Date.now(),
-                    name: "1. Dönem (1 Mayıs - 2 Temmuz)",
+                    name: "Başlangıç",
                     beforeDate: "01.05.2026",
                     afterDate: "02.07.2026",
                     photos: { before_front: null, before_back: null, after_front: null, after_back: null }
