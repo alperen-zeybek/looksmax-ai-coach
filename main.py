@@ -17,7 +17,7 @@ logger = logging.getLogger("looksmax-hub")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-app = FastAPI(title="Looksmax Hub - Workout, Macro, Health & Recovery Engine")
+app = FastAPI(title="Looksmax Hub - Elite Performance & Coaching Engine")
 
 # ================= 1. NUTRITION ENGINE =================
 DB_FILE = os.path.join(os.path.dirname(__file__), "foods_db.json")
@@ -28,7 +28,7 @@ def load_food_database() -> Dict[str, Any]:
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            logger.error(f"foods_db.json okuma hatası: {e}")
+            logger.error(f"foods_db.json okuma hatasi: {e}")
     return {}
 
 LOCAL_FOOD_DB = load_food_database()
@@ -111,7 +111,7 @@ def fetch_open_food_facts(query: str):
                 if cal > 0:
                     return {"name": name, "cal": cal, "pro": pro, "carb": carb, "fat": fat, "unit": "g"}
     except Exception as e:
-        logger.warning(f"OpenFoodFacts API hatası ({query}): {e}")
+        logger.warning(f"OpenFoodFacts API hatasi ({query}): {e}")
     return None
 
 def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
@@ -228,7 +228,7 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
         }
     return None
 
-# ================= 2. RECOVERY & HEALTH ALGORİTMASI =================
+# ================= 2. RECOVERY & HEALTH ENGINE =================
 def compute_recovery_score(sleep_hours: float, hrv: float, resting_hr: float) -> Dict[str, Any]:
     sleep_score = min(40.0, (sleep_hours / 8.0) * 40.0)
     hrv_score = min(35.0, (hrv / 75.0) * 35.0)
@@ -241,15 +241,15 @@ def compute_recovery_score(sleep_hours: float, hrv: float, resting_hr: float) ->
 
     if total_score >= 80:
         status = "Optimal Toparlanma 🔥"
-        cns_advice = "Merkezi sinir sistemin zirvede. Bugün PR deneyebilir, ağır bileşik hareketlerde tükenişe gidebilirsin."
+        cns_advice = "Merkezi sinir sistemin zirvede. Bahanen sıfır; bugün ağırlıkları artırıp tükenişe gitmelisin."
         badge_color = "#10b981"
     elif total_score >= 60:
         status = "Orta / Yeterli Toparlanma ⚡"
-        cns_advice = "Vücut antrenmana hazır ancak aşırı zorlama. Setlerde 1 tekrar cepte bırak (RIR 1)."
+        cns_advice = "Vücut antrenmana hazır. Formu bozmadan setlerde 1 tekrar cepte bırak (RIR 1)."
         badge_color = "#00f2fe"
     else:
         status = "Yetersiz Toparlanma / Yüksek Stres ⚠️"
-        cns_advice = "Otonom sinir sistemin yorgun. Ağır PR denemesi yapma; form odaklı kal veya kardiyo/deload yap."
+        cns_advice = "Otonom sinir sistemin yorgun. Durumu anlıyorum; sakatlanmamak için PR zorlama, form odaklı kal."
         badge_color = "#ef4444"
 
     return {
@@ -285,12 +285,18 @@ class HealthSyncInput(BaseModel):
     max_workout_hr: Optional[float] = None
     steps: Optional[int] = 0
 
+class CoachAuditInput(BaseModel):
+    profile_data: dict
+    recent_workouts: list
+    recent_nutrition: dict
+    recent_health: dict
+
 HTML_INTERFACE = r"""<!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Looksmax Hub - Workout, Macro, Health & Recovery</title>
+    <title>Looksmax HUB - Elite Performance & Coaching</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -310,7 +316,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .brand { font-size: 1.15rem; font-weight: 800; color: #00f2fe; display: flex; align-items: center; gap: 8px; cursor: pointer; }
         .back-hub-btn { background: #1a202c; color: #00f2fe; border: 1px solid #28334a; padding: 6px 14px; border-radius: 8px; font-size: 0.8rem; font-weight: 700; cursor: pointer; display: none; }
         .back-hub-btn:hover { background: #232b3b; }
-        .user-section { display: flex; align-items: center; gap: 12px; }
+        
+        .audit-trigger-btn { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: #000; border: none; padding: 6px 14px; border-radius: 8px; font-size: 0.8rem; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 6px; box-shadow: 0 4px 15px rgba(245, 158, 11, 0.3); transition: 0.2s; }
+        .audit-trigger-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(245, 158, 11, 0.5); }
+
+        .user-section { display: flex; align-items: center; gap: 10px; }
         .user-tag { font-size: 0.8rem; background: #161c26; padding: 6px 12px; border-radius: 8px; color: #10b981; border: 1px solid #263245; }
         .logout-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem; font-weight: 600; }
 
@@ -321,7 +331,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         /* --- 1. MODÜL SEÇİM EKRANI (HUB) --- */
         #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 24px; }
         .hub-title { text-align: center; }
-        .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 4px; }
+        .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 4px; letter-spacing: 0.5px; }
         .hub-title p { font-size: 0.95rem; color: #9ca3af; }
         
         .hub-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; max-width: 1350px; width: 100%; justify-content: center; }
@@ -419,13 +429,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
         /* --- POPUP / MODAL STİLLERİ --- */
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); display: none; justify-content: center; align-items: center; z-index: 10000; backdrop-filter: blur(6px); }
-        .modal-box { background: #131722; border: 1px solid #222d42; border-radius: 18px; width: 90%; max-width: 580px; padding: 26px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 16px 50px rgba(0,242,254,0.18); position: relative; max-height: 90vh; overflow-y: auto; }
+        .modal-box { background: #131722; border: 1px solid #222d42; border-radius: 18px; width: 90%; max-width: 620px; padding: 26px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 16px 50px rgba(0,242,254,0.18); position: relative; max-height: 90vh; overflow-y: auto; }
         .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e2638; padding-bottom: 12px; }
         .modal-header h3 { font-size: 1.15rem; font-weight: 800; color: #00f2fe; }
         .modal-close-btn { background: none; border: none; color: #9ca3af; font-size: 1.2rem; cursor: pointer; }
         .modal-step { background: #0a0c10; border: 1px solid #1c2230; padding: 12px 14px; border-radius: 10px; font-size: 0.82rem; line-height: 1.5; color: #e5e7eb; }
         .modal-step b { color: #00f2fe; }
         .url-box { background: #171f2e; border: 1px solid #2a374f; padding: 8px 12px; border-radius: 6px; font-family: monospace; color: #10b981; font-size: 0.8rem; display: flex; justify-content: space-between; align-items: center; margin-top: 6px; word-break: break-all; }
+
+        .audit-content-area { font-size: 0.9rem; line-height: 1.6; color: #d1d5db; white-space: pre-line; background: #0a0c10; border: 1px solid #1f2738; padding: 18px; border-radius: 12px; max-height: 480px; overflow-y: auto; }
 
         @media (max-width: 1100px) {
             body { overflow: auto; height: auto; }
@@ -489,12 +501,35 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- GENEL KOÇ GERİ BİLDİRİMİ (AUDIT) MODALI -->
+    <div class="modal-overlay" id="coachAuditModal" onclick="closeAuditModal(event)">
+        <div class="modal-box" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 style="color:#f59e0b;">🧠 Koçun Raporu & Çeki Düzen Analizi</h3>
+                <button class="modal-close-btn" onclick="toggleAuditModal(false)">✕</button>
+            </div>
+            
+            <div id="auditLoadingState" style="text-align:center; padding:30px; display:none;">
+                <div style="font-size:2.2rem; margin-bottom:8px;">🦍</div>
+                <div style="font-weight:700; color:#f59e0b;">Koç tüm antrenman, makro, uyku ve vücut verilerini denetliyor...</div>
+            </div>
+
+            <div class="audit-content-area" id="auditContentText">
+                Rapor yükleniyor...
+            </div>
+
+            <button class="btn-log" onclick="toggleAuditModal(false)" style="background:#f59e0b; color:#000; margin-top:0;">Emredersin Koç, Kendime Çeki Düzen Veriyorum! 🦍</button>
+        </div>
+    </div>
+
     <div class="header-bar">
         <div style="display:flex; align-items:center; gap:12px;">
             <div class="brand" onclick="openView('hub')">⚡ LOOKSMAX HUB</div>
             <button class="back-hub-btn" id="backHubBtn" onclick="openView('hub')">← Ana Menü</button>
         </div>
+        
         <div class="user-section">
+            <button class="audit-trigger-btn" onclick="triggerCoachAudit()">🧠 Koçun Raporu</button>
             <div class="user-tag" id="activeUserName">Giriş Yapılmadı</div>
             <button class="logout-btn" onclick="logout()">Çıkış</button>
         </div>
@@ -505,7 +540,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         <!-- 1. GİRİŞ SEÇİM EKRANI (DASHBOARD HUB) -->
         <div class="view-panel active" id="hubView">
             <div class="hub-title">
-                <h1>Modülünü Seç Kral 🦍</h1>
+                <h1>Looksmax HUB</h1>
                 <p>Hipertrofi, beslenme, biyometrik toparlanma ve fizik takibini tek yerden yönet.</p>
             </div>
             <div class="hub-grid">
@@ -513,7 +548,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <div>
                         <div class="card-icon">🤖</div>
                         <div class="card-heading">AI Koç & Vision</div>
-                        <div class="card-desc">Tavizsiz hipertrofi koçluğu, form kontrolü ve anlık taktikler.</div>
+                        <div class="card-desc">Anlayışlı ama tavizsiz hipertrofi koçluğu, form kontrolü ve anlık taktikler.</div>
                     </div>
                     <div class="card-action">Koçla Konuş →</div>
                 </div>
@@ -560,7 +595,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
-                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload koçunum. Antrenman setlerin, beslenmen ve Apple Watch toparlanma verilerine göre seni hedefe kitleyeceğim.</div>
+                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload başantrenörünüm. Durumunu anlarım, zor gününde arkanda dururum ama uykun tam, recovery'n yerindeyken kaytarmaya kalkarsan acımam, kendine getiririm. Sorunu sor veya sağ üstteki <b>🧠 Koçun Raporu</b> butonuna basıp haftalık genel karneni al.</div>
                 </div>
 
                 <div class="preview-box" id="previewBox">
@@ -860,7 +895,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     </div>
                 </div>
 
-                <!-- ŞIK REHBER AÇMA BUTONU -->
+                <!-- REHBER BUTONU -->
                 <div class="guide-btn-card" onclick="toggleGuideModal(true)">
                     <div style="display:flex; align-items:center; gap:12px;">
                         <div style="font-size:1.6rem;">⌚</div>
@@ -970,7 +1005,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         document.getElementById("exerciseDate").value = weekDaysData[selectedWorkoutDayIdx].fullDate;
         document.getElementById("currentWeekDisplay").innerText = "Hafta: " + currentWeekKey;
 
-        // Modal / Popup Yönetimi
         function toggleGuideModal(show) {
             const modal = document.getElementById("appleWatchModal");
             modal.style.display = show ? "flex" : "none";
@@ -981,9 +1015,16 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         }
 
         function closeGuideModal(e) {
-            if (e.target.id === "appleWatchModal") {
-                toggleGuideModal(false);
-            }
+            if (e.target.id === "appleWatchModal") toggleGuideModal(false);
+        }
+
+        function toggleAuditModal(show) {
+            const modal = document.getElementById("coachAuditModal");
+            modal.style.display = show ? "flex" : "none";
+        }
+
+        function closeAuditModal(e) {
+            if (e.target.id === "coachAuditModal") toggleAuditModal(false);
         }
 
         function copyWebhookUrl() {
@@ -991,6 +1032,42 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             navigator.clipboard.writeText(url).then(() => {
                 alert("Webhook URL adresi kopyalandı kral!");
             });
+        }
+
+        async function triggerCoachAudit() {
+            if (!currentUser) return alert("Lütfen önce giriş yap kral!");
+            toggleAuditModal(true);
+
+            const loadEl = document.getElementById("auditLoadingState");
+            const textEl = document.getElementById("auditContentText");
+            loadEl.style.display = "block";
+            textEl.style.display = "none";
+
+            const prof = getUserProfileData(currentUser.username);
+            const wLogs = getUserWeeklyLogs(currentUser.username);
+            const nutri = getUserWeeklyNutrition(currentUser.username);
+            const health = getUserHealthLogs(currentUser.username);
+
+            try {
+                const res = await fetch("/coach-audit", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        profile_data: prof,
+                        recent_workouts: wLogs,
+                        recent_nutrition: nutri,
+                        recent_health: health
+                    })
+                });
+                const data = await res.json();
+                loadEl.style.display = "none";
+                textEl.style.display = "block";
+                textEl.innerHTML = (data.audit_report || "Değerlendirme alınamadı.").replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
+            } catch (err) {
+                loadEl.style.display = "none";
+                textEl.style.display = "block";
+                textEl.innerText = "Hata oluştu kral, tekrar dener misin?";
+            }
         }
 
         function openView(viewName) {
@@ -1103,16 +1180,16 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             let color = "#00f2fe";
             let title = "Orta / Yeterli Toparlanma ⚡";
-            let advice = "Vücudun antrenmana hazır. Setlerde 1 tekrar cepte bırak (RIR 1).";
+            let advice = "Vücudun antrenmana hazır. Formu bozmadan setlerde 1 tekrar cepte bırak (RIR 1).";
 
             if (total >= 80) {
                 color = "#10b981";
                 title = "Optimal Toparlanma 🔥";
-                advice = "Merkezi sinir sistemin zirvede! Bugün ağır bileşik hareketlerde tükenişe gidebilir ve PR deneyebilirsin.";
+                advice = "Merkezi sinir sistemin zirvede! Bahanen sıfır, bugün ağırlıkların içinden geç ve fazladan tekrarı sök al.";
             } else if (total < 60) {
                 color = "#ef4444";
                 title = "Yetersiz Toparlanma / Yüksek Stres ⚠️";
-                advice = "Otonom sinir sistemin yorgun. Ağır PR denemesi yapma; form odaklı kal veya hafif kardiyo yap.";
+                advice = "Otonom sinir sistemin yorgun. Durumu anlıyorum; sakatlanmamak için PR zorlama, form ve hipertrofi odaklı kal.";
             }
 
             scoreCircle.style.borderColor = color;
@@ -1761,7 +1838,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     })
                 });
                 const data = await response.json();
-                let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
+                let replyFormatted = (data.coach_reply || "").replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
                 document.getElementById(loadingId).innerHTML = replyFormatted || "Yanıt alındı.";
 
                 conversationHistory.push({ role: "user", content: currentText });
@@ -1813,7 +1890,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 });
                 const data = await response.json();
 
-                let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
+                let replyFormatted = (data.coach_reply || "").replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
                 document.getElementById(loadingId).innerHTML = replyFormatted || "Yanıt alındı.";
 
                 if (data.detected_meal && Number(data.detected_meal.calories) > 0) {
@@ -1872,6 +1949,64 @@ def sync_apple_health_webhook(payload: HealthSyncInput):
         "recovery_metrics": recovery
     }
 
+@app.post("/coach-audit")
+def full_coach_audit(payload: CoachAuditInput):
+    if not client:
+        return {"audit_report": "Sunucuda GROQ_API_KEY tanımlı değil."}
+
+    prof = payload.profile_data or {}
+    workouts = payload.recent_workouts or []
+    nutrition = payload.recent_nutrition or {}
+    health = payload.recent_health or {}
+
+    audit_prompt = f"""
+Sen hem halden anlayan bilge bir mentor, hem de sıfır bahane kabul eden sert ve disiplinli bir 'Looksmax & Hipertrofi Başantrenörü'sün.
+Kullanıcının TÜM antrenman, beslenme, sağlık ve profil verilerini önüne koyuyorum.
+
+1. SPORCU PROFİLİ:
+- Ad: {prof.get('fullName', 'Bilinmiyor')}, Yaş: {prof.get('age', '-')}, Boy: {prof.get('height', '-')}cm, Kilo: {prof.get('weight', '-')}kg
+- Hedef: {prof.get('goal', 'Belirtilmedi')}, Yağ Oranı: %{prof.get('bodyfat', '-')}
+- Ölçüler: Kol {prof.get('arm', '-')}cm, Bel {prof.get('waist', '-')}cm, Omuz {prof.get('shoulder', '-')}cm
+
+2. ANTRENMAN & OVERLOAD GEÇMİŞİ:
+{json.dumps(workouts, ensure_ascii=False) if workouts else "HİÇ SET GİRİLMEMİŞ!"}
+
+3. BESLENME GEÇMİŞİ:
+{json.dumps(nutrition, ensure_ascii=False) if nutrition else "ÖĞÜN KAYDI YOK YA DA ÇOK DÜZENSİZ!"}
+
+4. BİYOMETRİK VERİLER (UYKU & HRV):
+{json.dumps(health, ensure_ascii=False) if health else "SAĞLIK VE UYKU VERİSİ GİRİLMEMİŞ!"}
+
+KOÇLUK MANTIĞIN & DEĞERLENDİRME KURALLARIN:
+1. ANLAYIŞ GÖSTERMEN GEREKEN YER:
+   - Eğer kullanıcının uykusu çok azsa, HRV'si yerlerdeyse veya dinlenik nabzı fırlamışsa; yıprandığını ve yorgun olduğunu anla. Ona neden yorgun olduğunu bilimsel açıkla, sakatlanmaması için akıllı çalışmasını söyle.
+2. TOKAT GİBİ SERT OLMAM GEREKEN YER (BAHANESİZ KAYTARMA):
+   - Eğer uykusu 7-8 saat, toparlanması (Recovery) tavan, hiçbir biyometrik engeli YOKKEN ağırlık artıramamışsa, setleri eksik bırakmışsa veya proteini aksatmışsa: 'Oğlum kendine gel! Uykun tam, recovery'n zirvede, bahanen sıfır! Salonda piknik mi yapıyorsun? O kiloyu artıracaksın!' diye sertçe sars ve kendine getir.
+3. TON:
+   - Abi-kardeş samimiyetinde, bilge, maskülen, sert ama sporcusuna inanan gerçek bir koç dili.
+
+RAPOR FORMATI:
+- 🔥 **DURUM TESPİTİ:** Genel gidişatı nasıl?
+- 🏋️ **ANTRENMAN & OVERLOAD ANALİZİ:** Ağırlıklar artıyor mu yoksa yerinde mi sayıyor? (Bahanesi yoksa sert uyar).
+- 🥗 **MUTFAK & DİSİPLİN KONTROLÜ:** Makrolar ve protein hedefe uygun mu?
+- 🫀 **TOPARLANMA & BİYOMETRİK YORUM:** Uyku/HRV durumu ve antrenman modülasyonu.
+- ⚡ **BU HAFTA İÇİN 3 NET EMİR:** Kendine çeki düzen vermesi için 3 net aksiyon maddesi.
+"""
+    try:
+        completion = client.chat.completions.create(
+            messages=[{"role": "system", "content": audit_prompt}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.4,
+            max_tokens=900
+        )
+        report = completion.choices[0].message.content
+        report = re.sub(r'<think>.*?</think>', '', report, flags=re.DOTALL).strip()
+    except Exception as e:
+        logger.error(f"Coach audit hatası: {e}")
+        report = "Rapor oluşturulurken bir hata oluştu kral. Verilerini kontrol edip tekrar dene."
+
+    return {"audit_report": report}
+
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
     if not client:
@@ -1882,8 +2017,7 @@ def coach_dialogue(data: ChatInput):
     health_context = f"Biyometrik Sağlık & Recovery Durumu: {data.health_summary}" if data.health_summary else "Sağlık verisi yok."
 
     system_prompt = f"""
-Sen tavizsiz, sert, disiplin aşılayan ve bahane kabul etmeyen elit bir 'Looksmaxxing, Hipertrofi & Fizik Koçu'sun.
-Karakterin: Asla gevşekliğe, tembelliğe ve ağlamaya toleransın yok. Kullanıcıyı gaza getiren, gerektiğinde tokat gibi gerçekleri yüzüne vuran ama arkasında her zaman saf hipertrofi bilimi olan bir zihniyete sahipsin.
+Sen sporcusunun durumunu çok iyi anlayan ama asla laubaliliğe ve bahanelere izin vermeyen bilge ve sert bir 'Looksmax & Hipertrofi Başantrenörü'sün.
 
 KULLANICI BİLGİLERİ & PROFİLİ:
 {profile_context}
@@ -1894,15 +2028,13 @@ BİYOMETRİK VERİLERİ (UYKU, HRV, NABIZ):
 KULLANICININ BU HAFTAKİ SETLERİ / OVERLOAD DURUMU:
 {user_context}
 
-KOÇLUK VE İLETİŞİM KURALLARIN:
-1. TON VE ÜSLUP:
-   - Sert, net, maskülen ve yüksek enerjili konuş. Boş motivasyon cümleleri kurma; hedefe odakla.
-   - Kullanıcıya "kral", "şampiyon" gibi hitap et. Asla pasif bir yapay zeka asistanı gibi konuşma.
-2. BİYOMETRİK TOZ KONTROLÜ (RECOVERY / CNS):
-   - Eğer kullanıcının uykusu düşükse (< 6 saat) veya HRV'si kötüyse sert uyar: "Bu uykuyla kas yapamazsın, merkezi sinir sistemin çöp olmuş, bugün PR deneme form odaklı kal" de.
-   - Eğer toparlanması tamsa: "Bahanen yok, recovery zirvede, bugün ağırlığın içinden geçeceksin" diye gazla.
-3. PROGRESSIVE OVERLOAD & HİPERTROFİ:
-   - Kullanıcının girdiği ağırlık ve tekrarlara bakarak bir sonraki idmanda kaç kg veya kaç tekrar zorlaması gerektiğini nokta atışı emret.
+KOÇLUK DAVRANIŞ KURALLARIN:
+1. ANLAYIŞ VE AKILCI YAKLAŞIM:
+   - Eğer kullanıcının uykusu kötüyse (<6 saat) veya HRV'si dipteyse: Durumu anla, vücudun toparlanamadığını belirt. 'Bugün ağır PR zorlama, sakatlanmanı istemiyorum, form odaklı ve RIR 2'de kal' de.
+2. SERT VE MOTİVASYONEL TOKAT (BAHANESİ YOKKEN YETERSİZSE):
+   - Eğer kullanıcının uykusu tam, recovery skoru yüksek ama antrenmanda ağırlık artıramamışsa veya kaytarıyorsa sert konuş: 'Oğlum kendine gel! Uykun tam, recovery zirvede, bahanen sıfır! Salonda piknik mi yapıyorsun? O barın altına gir ve hakkını ver!' diye kendine getir.
+3. HEDEF ODAKLI EMİRLER:
+   - Kullanıcıya her zaman bir sonraki idmanda tam olarak hangi kiloyu ve kaç tekrarı hedeflemesi gerektiğini net söyle.
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
