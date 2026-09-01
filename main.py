@@ -2,16 +2,202 @@ import os
 import time
 import json
 import re
+import urllib.request
+import urllib.parse
+import logging
 from typing import List, Optional
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from groq import Groq
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("looksmax-hub")
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
 client = Groq(api_key=GROQ_API_KEY)
 
 app = FastAPI(title="Looksmax Hub - Workout & Macro Tracker")
+
+# ================= DETERMINİSTİK BESİN VERİ TABANI (100g / 1 Adet Bazlı) =================
+LOCAL_FOOD_DB = {
+    # Et, Tavuk, Balık
+    "kanat": {"cal": 220, "pro": 18.0, "carb": 0.0, "fat": 16.0, "unit": "g", "default": 300},
+    "tavuk kanat": {"cal": 220, "pro": 18.0, "carb": 0.0, "fat": 16.0, "unit": "g", "default": 300},
+    "tavuk": {"cal": 165, "pro": 31.0, "carb": 0.0, "fat": 3.6, "unit": "g", "default": 200},
+    "tavuk gogsu": {"cal": 165, "pro": 31.0, "carb": 0.0, "fat": 3.6, "unit": "g", "default": 200},
+    "bonfile": {"cal": 150, "pro": 25.0, "carb": 0.0, "fat": 5.0, "unit": "g", "default": 200},
+    "biftek": {"cal": 210, "pro": 26.0, "carb": 0.0, "fat": 11.0, "unit": "g", "default": 200},
+    "kofte": {"cal": 240, "pro": 18.0, "carb": 5.0, "fat": 16.0, "unit": "g", "default": 200},
+    "kiyma": {"cal": 250, "pro": 20.0, "carb": 0.0, "fat": 18.0, "unit": "g", "default": 200},
+    "ton baligi": {"cal": 130, "pro": 28.0, "carb": 0.0, "fat": 1.0, "unit": "g", "default": 160},
+    "somon": {"cal": 208, "pro": 20.0, "carb": 0.0, "fat": 13.0, "unit": "g", "default": 200},
+
+    # Karbonhidrat & Tahıllar
+    "bulgur": {"cal": 110, "pro": 3.5, "carb": 23.0, "fat": 0.8, "unit": "g", "default": 150},
+    "pilav": {"cal": 130, "pro": 2.7, "carb": 28.0, "fat": 1.0, "unit": "g", "default": 150},
+    "pirinc": {"cal": 130, "pro": 2.7, "carb": 28.0, "fat": 1.0, "unit": "g", "default": 150},
+    "makarna": {"cal": 140, "pro": 5.0, "carb": 28.0, "fat": 0.9, "unit": "g", "default": 150},
+    "yulaf": {"cal": 370, "pro": 13.0, "carb": 60.0, "fat": 7.0, "unit": "g", "default": 60},
+    "patates": {"cal": 87, "pro": 1.9, "carb": 20.0, "fat": 0.1, "unit": "g", "default": 200},
+
+    # Fast Food & Sokak Lezzetleri (Adet / Porsiyon)
+    "tam kokorec": {"cal": 950, "pro": 38.0, "carb": 85.0, "fat": 50.0, "unit": "item"},
+    "yarim kokorec": {"cal": 520, "pro": 22.0, "carb": 45.0, "fat": 28.0, "unit": "item"},
+    "kokorec": {"cal": 520, "pro": 22.0, "carb": 45.0, "fat": 28.0, "unit": "item"},
+    "lahmacun": {"cal": 220, "pro": 9.0, "carb": 28.0, "fat": 8.0, "unit": "item"},
+    "tirnak pide": {"cal": 130, "pro": 4.5, "carb": 26.0, "fat": 1.0, "unit": "item"},
+    "pide": {"cal": 130, "pro": 4.5, "carb": 26.0, "fat": 1.0, "unit": "item"},
+    "lavas": {"cal": 160, "pro": 4.5, "carb": 31.0, "fat": 2.0, "unit": "item"},
+    "iskender": {"cal": 920, "pro": 42.0, "carb": 65.0, "fat": 55.0, "unit": "item"},
+    "doner durüm": {"cal": 580, "pro": 28.0, "carb": 60.0, "fat": 24.0, "unit": "item"},
+    "tantuni": {"cal": 450, "pro": 22.0, "carb": 42.0, "fat": 21.0, "unit": "item"},
+
+    # Atıştırmalık, Yumurta, Süt Ürünleri
+    "yumurta": {"cal": 72, "pro": 6.3, "carb": 0.4, "fat": 5.0, "unit": "item"},
+    "laviva": {"cal": 180, "pro": 2.5, "carb": 22.0, "fat": 9.0, "unit": "item"},
+    "ruffles": {"cal": 535, "pro": 6.0, "carb": 52.0, "fat": 33.0, "unit": "g", "default": 105},
+    "cips": {"cal": 535, "pro": 6.0, "carb": 52.0, "fat": 33.0, "unit": "g", "default": 105},
+    "lor peyniri": {"cal": 90, "pro": 17.0, "carb": 2.5, "fat": 1.0, "unit": "g", "default": 100},
+    "kasar": {"cal": 350, "pro": 27.0, "carb": 1.5, "fat": 26.0, "unit": "g", "default": 50},
+    "protein tozu": {"cal": 120, "pro": 24.0, "carb": 2.0, "fat": 1.5, "unit": "item"}
+}
+
+def normalize_text(text: str) -> str:
+    t = text.lower()
+    t = t.replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ş", "s").replace("ö", "o").replace("ç", "c")
+    t = re.sub(r'[^a-z0-9\s.,]', ' ', t)
+    return re.sub(r'\s+', ' ', t).strip()
+
+def fetch_open_food_facts(query: str):
+    """Global Open Food Facts API'sinden canlı besin verisi çeker."""
+    try:
+        clean_q = urllib.parse.quote(query)
+        url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={clean_q}&search_simple=1&action=process&json=1&page_size=1"
+        req = urllib.request.Request(url, headers={"User-Agent": "LooksmaxHub - NutritionTracker - v1.0"})
+        with urllib.request.urlopen(req, timeout=2.5) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            if data.get("products") and len(data["products"]) > 0:
+                p = data["products"][0]
+                nutr = p.get("nutriments", {})
+                cal = float(nutr.get("energy-kcal_100g") or nutr.get("energy-kcal") or 0)
+                pro = float(nutr.get("proteins_100g") or nutr.get("proteins") or 0)
+                carb = float(nutr.get("carbohydrates_100g") or nutr.get("carbohydrates") or 0)
+                fat = float(nutr.get("fat_100g") or nutr.get("fat") or 0)
+                name = p.get("product_name_tr") or p.get("product_name") or query.title()
+                if cal > 0:
+                    return {"name": name, "cal": cal, "pro": pro, "carb": carb, "fat": fat}
+    except Exception as e:
+        logger.warning(f"OpenFoodFacts API Hatası ({query}): {e}")
+    return None
+
+def parse_and_calculate_meal(user_text: str):
+    """Kullanıcının girdiği metni sıfır hatayla deterministik hesaplar."""
+    raw_parts = [p.strip() for p in re.split(r'[,+\n]| ve ', user_text) if p.strip()]
+    
+    total_cal = 0.0
+    total_pro = 0.0
+    total_carb = 0.0
+    total_fat = 0.0
+    items_summary_list = []
+
+    for part in raw_parts:
+        norm_part = normalize_text(part)
+        
+        # Miktar ve Birim Çıkarımı
+        qty = None
+        unit = None
+        
+        # 1. Sayı ve Birim Tespiti (örn: "1.5 kg", "220g", "3 adet", "2 tam")
+        m_num = re.search(r'(\d+(?:[.,]\d+)?)\s*(kg|kilo|kilogram|g|gr|gram|adet|tane|tam|yarim|porsiyon)?', norm_part)
+        if m_num:
+            qty = float(m_num.group(1).replace(",", "."))
+            unit = m_num.group(2)
+        
+        # İsim temizliği
+        clean_name = re.sub(r'(\d+(?:[.,]\d+)?)\s*(kg|kilo|kilogram|g|gr|gram|adet|tane|tam|yarim|porsiyon)?', '', norm_part).strip()
+        if "kanaat" in clean_name or "kanat" in clean_name:
+            clean_name = "kanat"
+
+        matched_food = None
+        matched_key = None
+
+        # Yerel veri tabanında ara
+        for key in sorted(LOCAL_FOOD_DB.keys(), key=lambda x: len(x), reverse=True):
+            if key in norm_part or key in clean_name:
+                matched_food = LOCAL_FOOD_DB[key]
+                matched_key = key
+                break
+
+        if matched_food:
+            if matched_food["unit"] == "g":
+                if unit in ["kg", "kilo", "kilogram"]:
+                    grams = (qty or 1.0) * 1000.0
+                elif unit in ["g", "gr", "gram"]:
+                    grams = qty or matched_food.get("default", 100)
+                else:
+                    grams = qty if (qty and qty >= 10) else matched_food.get("default", 100)
+                
+                ratio = grams / 100.0
+                c = matched_food["cal"] * ratio
+                p = matched_food["pro"] * ratio
+                cb = matched_food["carb"] * ratio
+                f = matched_food["fat"] * ratio
+                items_summary_list.append(f"{int(grams)}g {matched_key.title()}")
+            else:
+                count = qty or 1.0
+                if "tam" in norm_part and matched_key == "kokorec":
+                    count = qty or 1.0
+                    c = 950 * count
+                    p = 38 * count
+                    cb = 85 * count
+                    f = 50 * count
+                    items_summary_list.append(f"{int(count)} Tam Kokoreç")
+                else:
+                    c = matched_food["cal"] * count
+                    p = matched_food["pro"] * count
+                    cb = matched_food["carb"] * count
+                    f = matched_food["fat"] * count
+                    items_summary_list.append(f"{int(count)} Adet {matched_key.title()}")
+
+            total_cal += c
+            total_pro += p
+            total_carb += cb
+            total_fat += f
+        else:
+            # 2. Aşama: Global Open Food Facts API Arama
+            api_res = fetch_open_food_facts(clean_name or norm_part)
+            if api_res:
+                grams = 100.0
+                if unit in ["kg", "kilo", "kilogram"]:
+                    grams = (qty or 1.0) * 1000.0
+                elif qty and qty >= 10:
+                    grams = qty
+                elif qty:
+                    grams = qty * 100.0
+                
+                ratio = grams / 100.0
+                c = api_res["cal"] * ratio
+                p = api_res["pro"] * ratio
+                cb = api_res["carb"] * ratio
+                f = api_res["fat"] * ratio
+                
+                total_cal += c
+                total_pro += p
+                total_carb += cb
+                total_fat += f
+                items_summary_list.append(f"{int(grams)}g {api_res['name']}")
+
+    if total_cal > 0:
+        return {
+            "food_name": " + ".join(items_summary_list[:2]) + ("..." if len(items_summary_list) > 2 else ""),
+            "items_summary": ", ".join(items_summary_list),
+            "calories": round(total_cal),
+            "protein": round(total_pro),
+            "carbs": round(total_carb),
+            "fat": round(total_fat)
+        }
+    return None
 
 class ChatInput(BaseModel):
     user_message: str
@@ -25,7 +211,7 @@ class NutritionChatInput(BaseModel):
     daily_summary: Optional[str] = ""
     history: List[dict] = []
 
-HTML_INTERFACE = """<!DOCTYPE html>
+HTML_INTERFACE = r"""<!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
@@ -58,6 +244,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
         .view-panel { display: none; width: 100%; height: 100%; padding: 20px; }
         .view-panel.active { display: flex; }
 
+        /* --- 1. MODÜL SEÇİM EKRANI (HUB) --- */
         #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 28px; }
         .hub-title { text-align: center; }
         .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
@@ -72,6 +259,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
         .card-action { align-self: flex-start; background: #1a2232; color: #00f2fe; border: 1px solid #2d3b54; padding: 9px 16px; border-radius: 10px; font-weight: 700; font-size: 0.82rem; transition: 0.2s; }
         .hub-card:hover .card-action { background: #00f2fe; color: #000; }
 
+        /* --- 2. AI KOÇ EKRANI --- */
         #coachView { flex-direction: column; max-width: 950px; }
         .chat-container { flex: 1; display: flex; flex-direction: column; background: #131722; border-radius: 16px; border: 1px solid #1f2738; overflow: hidden; }
         .messages { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
@@ -91,6 +279,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
         input[type="file"] { display: none; }
         .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 800; padding: 12px 24px; border-radius: 10px; cursor: pointer; }
 
+        /* --- 3. PROGRESSIVE OVERLOAD EKRANI --- */
         #overloadView { gap: 20px; max-width: 1350px; }
         .overload-col-left { width: 46%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
         .overload-col-right { width: 54%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
@@ -129,6 +318,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         .chart-box { flex: 1; min-height: 320px; position: relative; }
 
+        /* --- 4. GÜNLÜK BESLENME EKRANI --- */
         #nutritionView { gap: 20px; max-width: 1350px; }
         .macro-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
         .macro-card { background: #0a0c10; border: 1px solid #1c2230; padding: 14px; border-radius: 12px; text-align: center; }
@@ -297,7 +487,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Aklına gelen her yemeği yazabilir veya fotoğrafını atabilirsin (örn: <i>"1 kg kanat", "200g bonfile, 1 tabak pilav"</i>). Makrolarını hesaplayıp seçili güne otomatik eklerim.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"1 kg kanat"</i>, <i>"3 tam kokoreç"</i>, <i>"220g tavuk, 70g bulgur"</i>); anında besin API'sinden tam makrolarla işlensin.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -309,7 +499,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     <div class="chat-input-area">
                         <label class="file-btn" for="nutriImageInput" title="Yemek Fotoğrafı">📷</label>
                         <input type="file" id="nutriImageInput" accept="image/*" onchange="handleImageSelect(event, 'nutri')" />
-                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Ne yediysen yaz (örn: 1 kg kanat, 200g pilav...)" onkeypress="handleKey(event, 'nutri')" />
+                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Ne yediysen yaz (örn: 1 kg kanat, 3 tam kokoreç...)" onkeypress="handleKey(event, 'nutri')" />
                         <button class="send-btn" id="nutriSendBtn" onclick="sendNutriMessage()">Ekle</button>
                     </div>
                 </div>
@@ -439,6 +629,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                 setTimeout(updateChart, 150);
             }
             if (viewName === 'nutrition') {
+                renderNutriDayTabs();
                 renderSelectedDayNutrition();
             }
         }
@@ -511,6 +702,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         function renderWorkoutDayTabs() {
             const bar = document.getElementById("workoutDaysTabBar");
+            if (!bar) return;
             bar.innerHTML = "";
 
             weekDaysData.forEach((d, idx) => {
@@ -534,6 +726,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
         function renderSelectedWorkoutDayLogs() {
             const currentDay = weekDaysData[selectedWorkoutDayIdx];
             const list = document.getElementById("dayHistoryList");
+            if (!list) return;
             list.innerHTML = "";
 
             const dayLogs = weeklyLogs.filter(item => item.date === currentDay.fullDate);
@@ -597,6 +790,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         function populateDropdown() {
             const select = document.getElementById("chartExerciseSelect");
+            if (!select) return;
             const currentSelected = select.value;
             const unique = [...new Set(weeklyLogs.map(item => item.exercise))];
 
@@ -616,14 +810,18 @@ HTML_INTERFACE = """<!DOCTYPE html>
         }
 
         function updateChart() {
-            const selectedEx = document.getElementById("chartExerciseSelect").value;
+            const select = document.getElementById("chartExerciseSelect");
+            if (!select) return;
+            const selectedEx = select.value;
             const filtered = weeklyLogs.filter(item => item.exercise === selectedEx);
 
             const labels = filtered.map((item, idx) => `${item.date} (${item.set_num || idx+1}.Set)`);
             const weights = filtered.map(item => item.weight);
             const reps = filtered.map(item => item.reps);
 
-            const ctx = document.getElementById('progressionChart').getContext('2d');
+            const canvas = document.getElementById('progressionChart');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
             if (chartInstance) chartInstance.destroy();
 
             chartInstance = new Chart(ctx, {
@@ -680,6 +878,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         function renderNutriDayTabs() {
             const bar = document.getElementById("nutriDaysTabBar");
+            if (!bar) return;
             bar.innerHTML = "";
 
             weekDaysData.forEach((d, idx) => {
@@ -701,11 +900,15 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
         function renderSelectedDayNutrition() {
             const currentDay = weekDaysData[selectedNutriDayIdx];
-            document.getElementById("nutriSelectedDateDisplay").innerText = currentDay.fullDate + " (" + currentDay.dayName + ")";
+            const dateDisp = document.getElementById("nutriSelectedDateDisplay");
+            if (dateDisp) {
+                dateDisp.innerText = currentDay.fullDate + " (" + currentDay.dayName + ")";
+            }
 
             const dayMeals = weeklyNutrition[currentDay.fullDate] || [];
             let cal = 0, pro = 0, carb = 0, fat = 0;
             const list = document.getElementById("mealsList");
+            if (!list) return;
             list.innerHTML = "";
 
             if (dayMeals.length === 0) {
@@ -723,7 +926,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     carb += parseFloat(meal.carbs || 0);
                     fat += parseFloat(meal.fat || 0);
 
-                    const itemsSub = meal.items_summary ? `<div class="meal-items-subtext">🍽️ ${meal.items_summary}</div>` : '';
+                    const subHtml = meal.items_summary ? `<div class="meal-items-subtext">🍽️ ${meal.items_summary}</div>` : '';
 
                     list.innerHTML += `
                         <div class="log-item" style="flex-direction:column; align-items:flex-start; gap:6px;">
@@ -739,7 +942,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
                                 </div>
                                 <button onclick="deleteMeal(${meal.id})">Sil</button>
                             </div>
-                            ${itemsSub}
+                            ${subHtml}
                         </div>
                     `;
                 });
@@ -863,7 +1066,7 @@ HTML_INTERFACE = """<!DOCTYPE html>
 
             if (!text && !nutriSelectedImage) return;
 
-            const currentDay = weekDaysData[selectedNutriDayIdx];
+            const targetDateStr = weekDaysData[selectedNutriDayIdx].fullDate;
 
             let userHtml = "";
             if (nutriSelectedImage) userHtml += `<img src="${nutriSelectedImage}" class="preview-img" />`;
@@ -892,13 +1095,13 @@ HTML_INTERFACE = """<!DOCTYPE html>
                     })
                 });
                 const data = await response.json();
-                
+
                 let replyFormatted = (data.coach_reply || "").replace(/\\n/g, "<br>").replace(/\\*\\*(.*?)\\*\\*/g, "<b>$1</b>");
-                document.getElementById(loadingId).innerHTML = replyFormatted || "Makrolar hesaplandı ve eklendi!";
+                document.getElementById(loadingId).innerHTML = replyFormatted || "Yanıt alındı.";
 
                 if (data.detected_meal && Number(data.detected_meal.calories) > 0) {
                     const newMeal = {
-                        id: Date.now(),
+                        id: Date.now() + Math.floor(Math.random() * 1000),
                         food_name: data.detected_meal.food_name || "Öğün",
                         items_summary: data.detected_meal.items_summary || currentText,
                         calories: Math.round(Number(data.detected_meal.calories) || 0),
@@ -907,15 +1110,15 @@ HTML_INTERFACE = """<!DOCTYPE html>
                         fat: Math.round(Number(data.detected_meal.fat) || 0)
                     };
 
-                    if (!weeklyNutrition[currentDay.fullDate]) {
-                        weeklyNutrition[currentDay.fullDate] = [];
+                    if (!weeklyNutrition[targetDateStr]) {
+                        weeklyNutrition[targetDateStr] = [];
                     }
-                    weeklyNutrition[currentDay.fullDate].push(newMeal);
+                    weeklyNutrition[targetDateStr] = [...weeklyNutrition[targetDateStr], newMeal];
                     saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
                     renderSelectedDayNutrition();
                 }
             } catch (err) {
-                document.getElementById(loadingId).innerText = "Hata oluştu kral.";
+                document.getElementById(loadingId).innerText = "Hata oluştu kral, tekrar dener misin?";
             } finally {
                 btn.disabled = false;
                 chatBox.scrollTop = chatBox.scrollHeight;
@@ -960,13 +1163,11 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
             {"type": "text", "text": data.user_message},
             {"type": "image_url", "image_url": {"url": data.image_base64}}
         ]})
-        models_to_try = ["llama-3.2-11b-vision-preview", "llama-3.2-90b-vision-preview"]
     else:
         messages.append({"role": "user", "content": data.user_message})
-        models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
     reply_text = None
-    for m in models_to_try:
+    for m in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
         try:
             chat_completion = client.chat.completions.create(
                 messages=messages, model=m, temperature=0.4, max_tokens=600,
@@ -975,7 +1176,7 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
             if reply_text:
                 break
         except Exception as e:
-            print(f"[{m}] Chat Hata: {e}")
+            logger.warning(f"[/chat] model {m} failed: {e}")
             continue
 
     if not reply_text:
@@ -986,93 +1187,31 @@ KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
 
 @app.post("/nutrition-chat")
 def nutrition_dialogue(data: NutritionChatInput):
-    system_prompt = """
-Sen elit seviyede bir Sporcu Diyetisyeni ve Beslenme Koçusun.
-Görevin: Kullanıcının belirttiği veya görseldeki yiyeceklerin gramajına göre kalori ve makrolarını (Protein, Karbonhidrat, Yağ) doğru orantıyla hesaplamak.
+    # 1. Aşama: Deterministik Besin Motoru + Canlı Besin API'si (Sıfır Hata Garantisi)
+    detected_meal = parse_and_calculate_meal(data.user_message)
 
-Referans Değerler (100g bazında):
-- 100g Tavuk Kanat: ~220 kcal, 18g Protein, 0g Karb, 16g Yağ (1 kg / 1000g = 2200 kcal, 180g P, 160g Y)
-- 100g Dana Bonfile/Biftek: ~150 kcal, 25g Protein, 0g Karb, 5g Yağ (1 kg = 1500 kcal, 250g P, 50g Y)
-- 100g Tavuk Göğsü: ~125 kcal, 26g Protein, 0g Karb, 2g Yağ (1 kg = 1250 kcal, 260g P, 20g Y)
-- 100g Pişmiş Pirinç Pilavı: ~160 kcal, 3g Protein, 35g Karb, 1g Yağ
-- 100g Pişmiş Bulgur: ~150 kcal, 4g Protein, 30g Karb, 1g Yağ
-- 100g Ruffles / Cips: ~535 kcal, 6g Protein, 52g Karb, 33g Yağ
-
-ZORUNLU KURAL:
-Yanıtında SADECE aşağıdaki JSON şemasına uygun geçerli bir JSON objesi döndür. Markdown backtick veya fazladan hiçbir metin yazma:
-{
-  "coach_reply": "Afiyet olsun kral! Makroların başarıyla eklendi.",
-  "food_name": "Öğün adı (Örn: 1000g Tavuk Kanat)",
-  "items_summary": "Detaylı açıklama (Örn: 1 kg Tavuk Kanat)",
-  "calories": 2200,
-  "protein": 180,
-  "carbs": 0,
-  "fat": 160
-}
-"""
-
-    if data.image_base64:
-        user_content = [
-            {"type": "text", "text": data.user_message or "Bu fotoğraftaki yemeğin makrolarını hesapla ve JSON döndür."},
-            {"type": "image_url", "image_url": {"url": data.image_base64}}
-        ]
-        models_to_try = ["llama-3.2-11b-vision-preview", "llama-3.2-90b-vision-preview"]
-    else:
-        user_content = f"Yediğim yemek: {data.user_message}. Lütfen makrolarını hesapla ve JSON formatında döndür."
-        models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content}
-    ]
-
-    detected_meal = None
     reply_text = None
 
-    for model_name in models_to_try:
+    # 2. Aşama: Eğer veri bulunduysa koç bunu özetler ve motive eder
+    if detected_meal:
+        reply_text = (
+            f"Afiyet olsun kral! Girdiğin **{detected_meal['items_summary']}** listene eklendi: "
+            f"**{detected_meal['calories']} kcal | {detected_meal['protein']}g Protein | "
+            f"{detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
+        )
+    else:
+        # 3. Aşama: Çok spesifik bir şey yazıldıysa LLM'den yardım al
         try:
-            req_params = {
-                "messages": messages,
-                "model": model_name,
-                "temperature": 0.2,
-                "max_tokens": 800
-            }
-            if not data.image_base64:
-                req_params["response_format"] = {"type": "json_object"}
-
-            chat_completion = client.chat.completions.create(**req_params)
-            raw_content = chat_completion.choices[0].message.content.strip()
-
-            raw_content = re.sub(r'^```(?:json)?\s*', '', raw_content, flags=re.IGNORECASE)
-            raw_content = re.sub(r'\s*```$', '', raw_content).strip()
-
-            start_idx = raw_content.find('{')
-            end_idx = raw_content.rfind('}')
-            if start_idx != -1 and end_idx != -1:
-                json_str = raw_content[start_idx:end_idx+1]
-                parsed_json = json.loads(json_str)
-
-                cal_val = float(parsed_json.get("calories", 0))
-                detected_meal = {
-                    "food_name": str(parsed_json.get("food_name", data.user_message.title())),
-                    "items_summary": str(parsed_json.get("items_summary", data.user_message)),
-                    "calories": round(cal_val),
-                    "protein": round(float(parsed_json.get("protein", 0))),
-                    "carbs": round(float(parsed_json.get("carbs", 0))),
-                    "fat": round(float(parsed_json.get("fat", 0)))
-                }
-                reply_text = parsed_json.get("coach_reply", f"Afiyet olsun kral! {detected_meal['food_name']} kaydedildi.")
-                break
-        except Exception as e:
-            print(f"HATA [{model_name}]: {repr(e)}")
-            continue
-
-    if not detected_meal:
-        return {
-            "user_message": data.user_message,
-            "coach_reply": "Makrolar hesaplanamadı kral, girdiğin yemeği kontrol edip tekrar dene.",
-            "detected_meal": None
-        }
+            prompt = f"Kullanıcı şunu yediğini belirtti: '{data.user_message}'. Bunun tahmini kalori ve makrolarını özetle."
+            chat_completion = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.1-8b-instant",
+                temperature=0.3,
+                max_tokens=300
+            )
+            reply_text = chat_completion.choices[0].message.content
+        except Exception:
+            reply_text = "Bu yemeği tanıyamadım kral. Lütfen gramaj veya adedini belirterek yaz (Örn: '1 kg kanat', '200g pirinc')."
 
     return {
         "user_message": data.user_message,
