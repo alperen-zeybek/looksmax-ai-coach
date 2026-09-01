@@ -230,30 +230,18 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
 
 # ================= 2. RECOVERY & HEALTH ALGORİTMASI =================
 def compute_recovery_score(sleep_hours: float, hrv: float, resting_hr: float) -> Dict[str, Any]:
-    """
-    Biyometrik Recovery / Toparlanma Skoru (0 - 100):
-    - Uyku (Ağırlık: %40) -> 8 saat ideal
-    - HRV (Ağırlık: %35) -> Yüksek HRV = Güçlü Parasempatik / Düşük Stres
-    - Dinlenik Nabız (Ağırlık: %25) -> Düşük Nabız = İyi Kardiyovasküler Durum
-    """
-    # 1. Uyku Puanı (0 - 40)
     sleep_score = min(40.0, (sleep_hours / 8.0) * 40.0)
-
-    # 2. HRV Puanı (0 - 35) (50-100 ms arası tipik genç sporcu bandı)
     hrv_score = min(35.0, (hrv / 75.0) * 35.0)
 
-    # 3. Dinlenik Nabız Puanı (0 - 25) (50-60 bpm arası ideal)
     rhr_score = 25.0
     if resting_hr > 60:
         rhr_score = max(5.0, 25.0 - (resting_hr - 60) * 0.8)
-    elif resting_hr < 45:
-        rhr_score = 25.0
 
     total_score = round(min(100.0, max(10.0, sleep_score + hrv_score + rhr_score)))
 
     if total_score >= 80:
         status = "Optimal Toparlanma 🔥"
-        cns_advice = "Merkezi sinir sistemin zirvede. Bugün PR deneyebilir, ağır bileşik hareketlerde tükenişe (RPE 9.5-10) gidebilirsin."
+        cns_advice = "Merkezi sinir sistemin zirvede. Bugün PR deneyebilir, ağır bileşik hareketlerde tükenişe gidebilirsin."
         badge_color = "#10b981"
     elif total_score >= 60:
         status = "Orta / Yeterli Toparlanma ⚡"
@@ -288,7 +276,7 @@ class NutritionChatInput(BaseModel):
 
 class HealthSyncInput(BaseModel):
     username: str
-    date: str  # DD.MM.YYYY
+    date: str
     sleep_hours: float
     deep_sleep_hours: Optional[float] = 0.0
     hrv_ms: float
@@ -349,7 +337,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .panel-card { background: #131722; border: 1px solid #1f2738; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
         .panel-header { font-size: 0.95rem; font-weight: 800; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
         .badge-cyan { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
-        .badge-green { font-size: 0.75rem; background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
         
         .overload-col-left { width: 45%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
         .overload-col-right { width: 55%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
@@ -427,6 +414,19 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .recovery-info h3 { font-size: 1.15rem; font-weight: 800; color: #00f2fe; margin-bottom: 4px; }
         .recovery-info p { font-size: 0.8rem; color: #9ca3af; line-height: 1.45; }
 
+        .guide-btn-card { background: linear-gradient(135deg, #131b2a 0%, #0d121c 100%); border: 1px solid #1f2e47; padding: 16px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: 0.2s; }
+        .guide-btn-card:hover { border-color: #00f2fe; transform: translateY(-2px); }
+
+        /* --- POPUP / MODAL STİLLERİ --- */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); display: none; justify-content: center; align-items: center; z-index: 10000; backdrop-filter: blur(6px); }
+        .modal-box { background: #131722; border: 1px solid #222d42; border-radius: 18px; width: 90%; max-width: 580px; padding: 26px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 16px 50px rgba(0,242,254,0.18); position: relative; max-height: 90vh; overflow-y: auto; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e2638; padding-bottom: 12px; }
+        .modal-header h3 { font-size: 1.15rem; font-weight: 800; color: #00f2fe; }
+        .modal-close-btn { background: none; border: none; color: #9ca3af; font-size: 1.2rem; cursor: pointer; }
+        .modal-step { background: #0a0c10; border: 1px solid #1c2230; padding: 12px 14px; border-radius: 10px; font-size: 0.82rem; line-height: 1.5; color: #e5e7eb; }
+        .modal-step b { color: #00f2fe; }
+        .url-box { background: #171f2e; border: 1px solid #2a374f; padding: 8px 12px; border-radius: 6px; font-family: monospace; color: #10b981; font-size: 0.8rem; display: flex; justify-content: space-between; align-items: center; margin-top: 6px; word-break: break-all; }
+
         @media (max-width: 1100px) {
             body { overflow: auto; height: auto; }
             .hub-grid { grid-template-columns: repeat(2, 1fr); }
@@ -441,6 +441,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 </head>
 <body>
 
+    <!-- AUTH OVERLAY -->
     <div class="auth-overlay" id="authOverlay">
         <div class="auth-box">
             <h2 id="authTitle">⚡ LOOKSMAX PRO</h2>
@@ -448,6 +449,43 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             <input type="password" id="authPassword" placeholder="Şifre" />
             <button id="authSubmitBtn" onclick="handleAuthSubmit()">Giriş Yap</button>
             <div class="auth-toggle" id="authToggle" onclick="toggleAuthMode()">Hesabın yok mu? <b>Kayıt Ol</b></div>
+        </div>
+    </div>
+
+    <!-- APPLE WATCH MODAL / REHBER POPUP -->
+    <div class="modal-overlay" id="appleWatchModal" onclick="closeGuideModal(event)">
+        <div class="modal-box" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3>📲 Apple Watch & iPhone Otomatik Senkronizasyon</h3>
+                <button class="modal-close-btn" onclick="toggleGuideModal(false)">✕</button>
+            </div>
+            
+            <div class="modal-step">
+                <b>Adım 1:</b> iPhone'unuzda <b>Kestirmeler (Shortcuts)</b> uygulamasını açıp <b>+</b> ile yeni bir kestirme oluşturun.
+            </div>
+
+            <div class="modal-step">
+                <b>Adım 2:</b> Sırasıyla şu 3 sağlık verisini ekleyin:
+                <ul style="margin-left: 18px; margin-top: 4px; color:#9ca3af;">
+                    <li><i>Sağlık Örneklerini Bul</i> $\rightarrow$ <b>Uyku Analizi</b> (Süre/Saat)</li>
+                    <li><i>Sağlık Örneklerini Bul</i> $\rightarrow$ <b>Kalp Atış Hızı Değişkenliği (HRV)</b></li>
+                    <li><i>Sağlık Örneklerini Bul</i> $\rightarrow$ <b>Dinlenme Sırasındaki Kalp Atış Hızı</b></li>
+                </ul>
+            </div>
+
+            <div class="modal-step">
+                <b>Adım 3:</b> <b>URL İçeriğini Al</b> eylemini ekleyip <b>POST</b> yöntemiyle şu adresi girin:
+                <div class="url-box" id="webhookUrlBox">
+                    <span id="webhookUrlText">https://.../api/health-sync</span>
+                    <button onclick="copyWebhookUrl()" style="background:#00f2fe; color:#000; border:none; padding:4px 8px; border-radius:4px; font-weight:800; font-size:0.7rem; cursor:pointer;">Kopyala</button>
+                </div>
+            </div>
+
+            <div class="modal-step">
+                <b>💡 Otomatikleştirme:</b> Kestirmeler $\rightarrow$ Otomasyon sekmesinden <i>"Sabah Alarmı Durdurulduğunda"</i> bu kestirmeyi seçerseniz her sabah uyandığınızda verileriniz panele otomatik yüklenir.
+            </div>
+
+            <button class="btn-log" onclick="toggleGuideModal(false)" style="margin-top:0;">Anladım Kral 🦍</button>
         </div>
     </div>
 
@@ -788,7 +826,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 6. YENİ MODÜL: RECOVERY & APPLE WATCH SAĞLIK EKRANI -->
+        <!-- 6. HEALTH & RECOVERY EKRANI -->
         <div class="view-panel" id="healthView">
             <div class="overload-col-left">
                 <div class="recovery-banner" id="recoveryBannerBox">
@@ -801,7 +839,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
                 <div class="panel-card">
                     <div class="panel-header">
-                        <span>📲 Apple Health / Manuel Veri Girişi</span>
+                        <span>📲 Günlük Biyometrik Veri Girişi</span>
                         <span class="badge-cyan" id="healthSelectedDateBadge">Bugün</span>
                     </div>
                     <div class="input-form">
@@ -822,16 +860,16 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     </div>
                 </div>
 
-                <div class="panel-card" style="flex:1;">
-                    <div class="panel-header">
-                        <span>💡 Apple Watch Entegrasyon Rehberi</span>
-                    </div>
-                    <div style="font-size:0.8rem; color:#9ca3af; line-height:1.5;">
-                        <p>iPhone'unuzdaki <b>Apple Kestirmeler (Shortcuts)</b> uygulamasını kullanarak her sabah uyandığınızda otomatik olarak sağlık verilerinizi web panelinize senkronize edebilirsiniz.</p>
-                        <div style="background:#0a0c10; padding:10px; border-radius:8px; border:1px solid #1c2230; margin-top:8px; font-family:monospace; color:#00f2fe; font-size:0.75rem;">
-                            Webhook URL: POST /api/health-sync
+                <!-- ŞIK REHBER AÇMA BUTONU -->
+                <div class="guide-btn-card" onclick="toggleGuideModal(true)">
+                    <div style="display:flex; align-items:center; gap:12px;">
+                        <div style="font-size:1.6rem;">⌚</div>
+                        <div>
+                            <div style="font-size:0.9rem; font-weight:800; color:#fff;">Apple Watch Otomasyon Rehberi</div>
+                            <div style="font-size:0.75rem; color:#9ca3af;">Verilerin her sabah otomatik akması için tıkla</div>
                         </div>
                     </div>
+                    <div style="color:#00f2fe; font-size:1.1rem; font-weight:800;">→</div>
                 </div>
             </div>
 
@@ -931,6 +969,29 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
         document.getElementById("exerciseDate").value = weekDaysData[selectedWorkoutDayIdx].fullDate;
         document.getElementById("currentWeekDisplay").innerText = "Hafta: " + currentWeekKey;
+
+        // Modal / Popup Yönetimi
+        function toggleGuideModal(show) {
+            const modal = document.getElementById("appleWatchModal");
+            modal.style.display = show ? "flex" : "none";
+            if (show) {
+                const currentOrigin = window.location.origin;
+                document.getElementById("webhookUrlText").innerText = `${currentOrigin}/api/health-sync`;
+            }
+        }
+
+        function closeGuideModal(e) {
+            if (e.target.id === "appleWatchModal") {
+                toggleGuideModal(false);
+            }
+        }
+
+        function copyWebhookUrl() {
+            const url = document.getElementById("webhookUrlText").innerText;
+            navigator.clipboard.writeText(url).then(() => {
+                alert("Webhook URL adresi kopyalandı kral!");
+            });
+        }
 
         function openView(viewName) {
             document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
@@ -1800,9 +1861,6 @@ def serve_ui():
 
 @app.post("/api/health-sync")
 def sync_apple_health_webhook(payload: HealthSyncInput):
-    """
-    Apple Health / Shortcuts üzerinden gelen otomatik sağlık webhook'u.
-    """
     recovery = compute_recovery_score(
         sleep_hours=payload.sleep_hours,
         hrv=payload.hrv_ms,
