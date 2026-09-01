@@ -19,7 +19,7 @@ client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 app = FastAPI(title="Looksmax Hub - Workout & Macro Tracker")
 
-# ================= 1. NUTRITION ENGINE =================
+# ================= 1. NUTRITION ENGINE (MYFITNESSPAL MİMARİSİ) =================
 DB_FILE = os.path.join(os.path.dirname(__file__), "foods_db.json")
 
 def load_food_database() -> Dict[str, Any]:
@@ -33,7 +33,24 @@ def load_food_database() -> Dict[str, Any]:
 
 LOCAL_FOOD_DB = load_food_database()
 
-# Ufak yazım hataları için düzeltme sözlüğü
+# Özel Porsiyon / Birim Çarpanları (Gram cinsinden)
+UNIT_GRAM_MAP = {
+    "olcek": 30.0,
+    "scoop": 30.0,
+    "dilim": 28.0,
+    "kase": 200.0,
+    "tabak": 250.0,
+    "porsiyon": 200.0,
+    "kasik": 15.0,
+    "yemek kasigi": 15.0,
+    "tatli kasigi": 5.0,
+    "cay kasigi": 3.0,
+    "bardak": 200.0,
+    "su bardagi": 200.0,
+    "avuç": 30.0,
+    "avuc": 30.0
+}
+
 TYPO_CORRECTIONS = {
     "psirnc": "pirinc",
     "psirinc": "pirinc",
@@ -42,7 +59,9 @@ TYPO_CORRECTIONS = {
     "tavk": "tavuk",
     "kanaat": "kanat",
     "kasarlı": "kasarli",
-    "karısık": "karisik"
+    "karısık": "karisik",
+    "ölçek": "olcek",
+    "kaşık": "kasik"
 }
 
 def normalize_turkish(text: str) -> str:
@@ -58,23 +77,21 @@ def search_local_food(query: str):
         return None
     norm_q = normalize_turkish(query)
 
-    # 1. Birebir Tam Eşleşme (Örn: "tavuk" -> "tavuk")
+    # 1. Birebir Tam Eşleşme
     if norm_q in LOCAL_FOOD_DB:
         return {**LOCAL_FOOD_DB[norm_q], "matched_key": norm_q}
 
-    # 2. Öncelikli Kelime Başlangıcı Eşleşmesi (Döner/Tost yerine ana besin)
-    words = norm_q.split()
-    for word in words:
-        if word in ["tavuk", "pirinc", "pilav", "bulgur", "yulaf", "makarna", "patates", "yumurta", "kanat", "bonfile", "kofte"]:
-            if word in LOCAL_FOOD_DB:
-                return {**LOCAL_FOOD_DB[word], "matched_key": word}
+    # 2. Tam Kelime Eşleşmesi (En uzun anahtarlardan başlayarak)
+    for key in sorted(LOCAL_FOOD_DB.keys(), key=lambda x: len(x), reverse=True):
+        if re.search(r'\b' + re.escape(key) + r'\b', norm_q):
+            return {**LOCAL_FOOD_DB[key], "matched_key": key}
 
-    # 3. Kapsama Eşleşmesi (En uzun anahtardan başlayarak)
+    # 3. Kapsama Eşleşmesi
     for key in sorted(LOCAL_FOOD_DB.keys(), key=lambda x: len(x), reverse=True):
         if key in norm_q or norm_q in key:
             return {**LOCAL_FOOD_DB[key], "matched_key": key}
 
-    # 4. Fuzzy Arama (Yüksek benzerlik eşiği: 0.80)
+    # 4. Fuzzy Arama (Yüksek benzerlik: 0.80)
     matches = difflib.get_close_matches(norm_q, LOCAL_FOOD_DB.keys(), n=1, cutoff=0.80)
     if matches:
         return {**LOCAL_FOOD_DB[matches[0]], "matched_key": matches[0]}
@@ -105,8 +122,9 @@ def fetch_open_food_facts(query: str):
 def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
     norm_text = normalize_turkish(user_text)
     
-    # Sayıların önüne ayırıcı koyarak ardışık girdileri tokenize et
-    norm_text = re.sub(r'(\d+(?:[.,]\d+)?\s*(?:kg|kilo|kilogram|g|gr|gram|adet|tane|tam|yarim|porsiyon|dilim|kase|tabak)?)', r',\1', norm_text)
+    # Sayıların önüne ayırıcı koyarak tokenize et
+    unit_pattern = r'(?:kg|kilo|kilogram|g|gr|gram|adet|tane|tam|yarim|olcek|scoop|dilim|kase|tabak|porsiyon|kasik|bardak)'
+    norm_text = re.sub(rf'(\d+(?:[.,]\d+)?\s*{unit_pattern}?)', r',\1', norm_text)
     raw_tokens = [t.strip() for t in re.split(r'[,+\n]|(?:\s+ve\s+)', norm_text) if t.strip()]
 
     total_cal = 0.0
@@ -122,7 +140,7 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
         qty = None
         unit = None
 
-        m_num = re.search(r'^(\d+(?:[.,]\d+)?)\s*(kg|kilo|kilogram|g|gr|gram|adet|tane|tam|yarim|porsiyon|dilim|kase|tabak)?', token)
+        m_num = re.search(rf'^(\d+(?:[.,]\d+)?)\s*({unit_pattern})?', token)
         if m_num:
             qty = float(m_num.group(1).replace(",", "."))
             unit = m_num.group(2)
@@ -136,41 +154,60 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
         food_data = search_local_food(food_query)
         
         if food_data:
-            # Gramaj emniyet kilidi: 'g', 'kg' girildiyse veya sayı >= 15 ise kesinlikle gramdır
-            is_gram_input = unit in ["kg", "kilo", "kilogram", "g", "gr", "gram"] or (qty is not None and qty >= 15)
+            multiplier_gram = 0.0
+            display_title = ""
 
-            if food_data["unit"] == "g" or is_gram_input:
-                if unit in ["kg", "kilo", "kilogram"]:
-                    grams = (qty or 1.0) * 1000.0
-                elif unit in ["g", "gr", "gram"]:
-                    grams = qty or 100.0
-                else:
-                    grams = qty if (qty and qty >= 15) else 100.0
-
-                ratio = grams / 100.0
-                c = food_data["cal"] * ratio
-                p = food_data["pro"] * ratio
-                cb = food_data["carb"] * ratio
-                f = food_data["fat"] * ratio
-                title = f"{int(grams)}g {food_data['name']}"
-            else:
+            # 1. Durum: Belirtilen Birim Haritasında Var mı? (örn: ölçek, dilim, kase)
+            if unit in UNIT_GRAM_MAP:
+                multiplier_gram = (qty or 1.0) * UNIT_GRAM_MAP[unit]
+                display_title = f"{int(qty or 1)} {unit.title()} {food_data['name']} ({int(multiplier_gram)}g)"
+            # 2. Durum: Kilogram veya Gram Girdisi
+            elif unit in ["kg", "kilo", "kilogram"]:
+                multiplier_gram = (qty or 1.0) * 1000.0
+                display_title = f"{int(multiplier_gram)}g {food_data['name']}"
+            elif unit in ["g", "gr", "gram"]:
+                multiplier_gram = qty or 100.0
+                display_title = f"{int(multiplier_gram)}g {food_data['name']}"
+            # 3. Durum: Adet / Porsiyon veya Sayı Girdisi
+            elif unit in ["adet", "tane", "tam"] or (qty is not None and qty < 15 and food_data.get("unit") == "item"):
                 count = qty or 1.0
                 c = food_data["cal"] * count
                 p = food_data["pro"] * count
                 cb = food_data["carb"] * count
                 f = food_data["fat"] * count
-                title = f"{int(count)} Adet {food_data['name']}"
+                total_cal += c
+                total_pro += p
+                total_carb += cb
+                total_fat += f
+                items_summary_list.append(f"{int(count)} Adet {food_data['name']}")
+                continue
+            # 4. Durum: Ekmek veya Protein tozu gibi besinlere '4 adet' / '1' yazıldıysa varsayılan porsiyon ağırlığını kullan
+            elif "serving_weight" in food_data:
+                count = qty or 1.0
+                multiplier_gram = count * food_data["serving_weight"]
+                s_unit = food_data.get("serving_unit", "porsiyon")
+                display_title = f"{int(count)} {s_unit.title()} {food_data['name']} ({int(multiplier_gram)}g)"
+            # 5. Durum: Sayı >= 15 ise doğrudan gramdır
+            elif qty and qty >= 15:
+                multiplier_gram = qty
+                display_title = f"{int(multiplier_gram)}g {food_data['name']}"
+            else:
+                multiplier_gram = 100.0
+                display_title = f"100g {food_data['name']}"
 
-            total_cal += c
-            total_pro += p
-            total_carb += cb
-            total_fat += f
-            items_summary_list.append(title)
+            ratio = multiplier_gram / 100.0
+            total_cal += food_data["cal"] * ratio
+            total_pro += food_data["pro"] * ratio
+            total_carb += food_data["carb"] * ratio
+            total_fat += food_data["fat"] * ratio
+            items_summary_list.append(display_title)
         else:
             api_data = fetch_open_food_facts(food_query)
             if api_data:
                 grams = 100.0
-                if unit in ["kg", "kilo", "kilogram"]:
+                if unit in UNIT_GRAM_MAP:
+                    grams = (qty or 1.0) * UNIT_GRAM_MAP[unit]
+                elif unit in ["kg", "kilo", "kilogram"]:
                     grams = (qty or 1.0) * 1000.0
                 elif qty and qty >= 15:
                     grams = qty
@@ -184,9 +221,9 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
                 total_fat += api_data["fat"] * ratio
                 items_summary_list.append(f"{int(grams)}g {api_data['name']}")
             else:
-                grams = (qty or 1.0) * 1000.0 if unit in ["kg", "kilo", "kilogram"] else (qty if (qty and qty >= 15) else 150.0)
+                grams = (qty or 1.0) * 1000.0 if unit in ["kg", "kilo", "kilogram"] else (qty if (qty and qty >= 15) else 100.0)
                 total_cal += grams * 1.5
-                total_pro += grams * 0.12
+                total_pro += grams * 0.10
                 total_carb += grams * 0.18
                 total_fat += grams * 0.05
                 items_summary_list.append(f"{int(grams)}g {food_query.title()}")
@@ -481,7 +518,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! MyFitnessPal motoru devrede. Ne yediysen yaz (örn: <i>"1 karisik tost"</i>, <i>"300g tavuk 150g pirinc"</i>); tüm makrolarını tam hesaplayıp eklerim.</div>
+                        <div class="msg coach">Afiyet olsun kral! MyFitnessPal motoru devrede. Ne yediysen yaz (örn: <i>"4 dilim tam buğday ekmeği"</i>, <i>"1 ölçek protein tozu"</i>); tüm makrolarını tam hesaplayıp eklerim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -493,7 +530,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <div class="chat-input-area">
                         <label class="file-btn" for="nutriImageInput" title="Yemek Fotoğrafı">📷</label>
                         <input type="file" id="nutriImageInput" accept="image/*" onchange="handleImageSelect(event, 'nutri')" />
-                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Yediklerini yaz (örn: 1 karisik tost, 300g tavuk 150g pirinc...)" onkeypress="handleKey(event, 'nutri')" />
+                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Yediklerini yaz (örn: 4 dilim tam bugday ekmegi, 1 olcek protein tozu...)" onkeypress="handleKey(event, 'nutri')" />
                         <button class="send-btn" id="nutriSendBtn" onclick="sendNutriMessage()">Ekle</button>
                     </div>
                 </div>
@@ -1190,7 +1227,7 @@ def nutrition_dialogue(data: NutritionChatInput):
             f"{detected_meal['carbs']}g Karb | {detected_meal['fat']}g Yağ**"
         )
     else:
-        reply_text = "Bu yemeği tanıyamadım kral. Lütfen miktar belirterek yaz (Örn: '1 karisik tost', '300g tavuk 150g pirinc')."
+        reply_text = "Bu yemeği tanıyamadım kral. Lütfen miktar belirterek yaz (Örn: '4 dilim tam buğday ekmeği', '1 ölçek protein tozu')."
         detected_meal = None
 
     return {
