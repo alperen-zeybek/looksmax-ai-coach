@@ -17,9 +17,9 @@ logger = logging.getLogger("looksmax-hub")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-app = FastAPI(title="Looksmax Hub - Workout & Macro Tracker")
+app = FastAPI(title="Looksmax Hub - Workout, Macro & Profile Tracker")
 
-# ================= 1. NUTRITION ENGINE (STRICT MULTI-WORD MATCHING) =================
+# ================= 1. NUTRITION ENGINE (MYFITNESSPAL MİMARİSİ) =================
 DB_FILE = os.path.join(os.path.dirname(__file__), "foods_db.json")
 
 def load_food_database() -> Dict[str, Any]:
@@ -28,7 +28,7 @@ def load_food_database() -> Dict[str, Any]:
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            logger.error(f"foods_db.json okuma hatası: {e}")
+            logger.error(f"foods_db.json okuma hatasi: {e}")
     return {}
 
 LOCAL_FOOD_DB = load_food_database()
@@ -79,17 +79,14 @@ def search_local_food(query: str):
         return None
     norm_q = normalize_turkish(query)
 
-    # 1. Uzun Öbek Eşleşmesi (En uzun kelime grubundan başla)
     sorted_keys = sorted(LOCAL_FOOD_DB.keys(), key=lambda x: len(x), reverse=True)
     for key in sorted_keys:
         if key in norm_q:
             return {**LOCAL_FOOD_DB[key], "matched_key": key}
 
-    # 2. Tam Eşleşme
     if norm_q in LOCAL_FOOD_DB:
         return {**LOCAL_FOOD_DB[norm_q], "matched_key": norm_q}
 
-    # 3. Yüksek Benzerlikli Fuzzy Match
     matches = difflib.get_close_matches(norm_q, LOCAL_FOOD_DB.keys(), n=1, cutoff=0.85)
     if matches:
         return {**LOCAL_FOOD_DB[matches[0]], "matched_key": matches[0]}
@@ -114,7 +111,7 @@ def fetch_open_food_facts(query: str):
                 if cal > 0:
                     return {"name": name, "cal": cal, "pro": pro, "carb": carb, "fat": fat, "unit": "g"}
     except Exception as e:
-        logger.warning(f"OpenFoodFacts API hatası ({query}): {e}")
+        logger.warning(f"OpenFoodFacts API hatasi ({query}): {e}")
     return None
 
 def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
@@ -236,6 +233,7 @@ class ChatInput(BaseModel):
     user_message: str
     image_base64: Optional[str] = None
     workout_summary: Optional[str] = ""
+    user_profile_summary: Optional[str] = ""
     history: List[dict] = []
 
 class NutritionChatInput(BaseModel):
@@ -249,7 +247,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Looksmax Hub - Antrenman & Beslenme</title>
+    <title>Looksmax Hub - Antrenman, Beslenme & Profil</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -277,20 +275,22 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .view-panel { display: none; width: 100%; height: 100%; padding: 20px; }
         .view-panel.active { display: flex; }
 
+        /* --- 1. MODÜL SEÇİM EKRANI (HUB) --- */
         #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 28px; }
         .hub-title { text-align: center; }
         .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
         .hub-title p { font-size: 0.95rem; color: #9ca3af; }
         
-        .hub-grid { display: flex; gap: 20px; max-width: 1050px; width: 100%; justify-content: center; }
-        .hub-card { flex: 1; background: #131722; border: 1px solid #222c3f; border-radius: 20px; padding: 32px 24px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 8px 24px rgba(0,0,0,0.4); text-align: left; }
+        .hub-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; max-width: 1200px; width: 100%; justify-content: center; }
+        .hub-card { background: #131722; border: 1px solid #222c3f; border-radius: 20px; padding: 26px 20px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 8px 24px rgba(0,0,0,0.4); text-align: left; }
         .hub-card:hover { transform: translateY(-6px); border-color: #00f2fe; box-shadow: 0 12px 35px rgba(0,242,254,0.22); }
-        .card-icon { font-size: 2.3rem; margin-bottom: 14px; }
-        .card-heading { font-size: 1.3rem; font-weight: 800; color: #fff; margin-bottom: 8px; }
-        .card-desc { font-size: 0.82rem; color: #9ca3af; line-height: 1.5; margin-bottom: 20px; }
-        .card-action { align-self: flex-start; background: #1a2232; color: #00f2fe; border: 1px solid #2d3b54; padding: 9px 16px; border-radius: 10px; font-weight: 700; font-size: 0.82rem; transition: 0.2s; }
+        .card-icon { font-size: 2.1rem; margin-bottom: 12px; }
+        .card-heading { font-size: 1.15rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
+        .card-desc { font-size: 0.78rem; color: #9ca3af; line-height: 1.45; margin-bottom: 16px; }
+        .card-action { align-self: flex-start; background: #1a2232; color: #00f2fe; border: 1px solid #2d3b54; padding: 8px 14px; border-radius: 9px; font-weight: 700; font-size: 0.78rem; transition: 0.2s; }
         .hub-card:hover .card-action { background: #00f2fe; color: #000; }
 
+        /* --- 2. AI KOÇ EKRANI --- */
         #coachView { flex-direction: column; max-width: 950px; }
         .chat-container { flex: 1; display: flex; flex-direction: column; background: #131722; border-radius: 16px; border: 1px solid #1f2738; overflow: hidden; }
         .messages { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
@@ -310,6 +310,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         input[type="file"] { display: none; }
         .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 800; padding: 12px 24px; border-radius: 10px; cursor: pointer; }
 
+        /* --- 3. PROGRESSIVE OVERLOAD EKRANI --- */
         #overloadView { gap: 20px; max-width: 1350px; }
         .overload-col-left { width: 46%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
         .overload-col-right { width: 54%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
@@ -331,10 +332,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .empty-day-desc { font-size: 0.78rem; color: #6b7280; max-width: 250px; line-height: 1.4; }
 
         .input-form { display: flex; flex-direction: column; gap: 10px; }
-        .input-form input { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 11px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; width: 100%; }
-        .input-form input:focus { border-color: #00f2fe; }
+        .input-form input, .input-form select { background: #0a0c10; border: 1px solid #2b354d; color: #fff; padding: 11px 12px; border-radius: 8px; font-size: 0.85rem; outline: none; width: 100%; }
+        .input-form input:focus, .input-form select:focus { border-color: #00f2fe; }
         
         .form-grid-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
+        .form-grid-3x1 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; width: 100%; }
         .btn-log { background: #00f2fe; color: #000; border: none; font-weight: 800; padding: 12px; border-radius: 8px; cursor: pointer; margin-top: 4px; }
 
         .history-list { flex: 1; overflow-y: auto; max-height: 380px; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
@@ -346,6 +348,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
         .chart-box { flex: 1; min-height: 320px; position: relative; }
 
+        /* --- 4. GÜNLÜK BESLENME EKRANI --- */
         #nutritionView { gap: 20px; max-width: 1350px; }
         .macro-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
         .macro-card { background: #0a0c10; border: 1px solid #1c2230; padding: 14px; border-radius: 12px; text-align: center; }
@@ -356,17 +359,25 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .macro-c-pro { color: #10b981; }
         .macro-c-carb { color: #00f2fe; }
         .macro-c-fat { color: #ec4899; }
-
         .meal-items-subtext { font-size: 0.75rem; color: #38bdf8; margin-top: 4px; font-weight: 500; }
 
-        @media (max-width: 850px) {
+        /* --- 5. KULLANICI PROFİLİ & BEFORE/AFTER EKRANI --- */
+        #profileView { gap: 20px; max-width: 1350px; }
+        .photo-comparison-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; height: 100%; }
+        .photo-box { background: #0a0c10; border: 2px dashed #242f44; border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; overflow: hidden; min-height: 340px; cursor: pointer; }
+        .photo-box img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; }
+        .photo-label-badge { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.75); border: 1px solid #00f2fe; color: #00f2fe; font-size: 0.75rem; font-weight: 800; padding: 4px 10px; border-radius: 6px; z-index: 2; }
+        .photo-upload-hint { z-index: 1; text-align: center; color: #6b7280; font-size: 0.85rem; }
+
+        @media (max-width: 950px) {
             body { overflow: auto; height: auto; }
-            .hub-grid { flex-direction: column; }
+            .hub-grid { grid-template-columns: repeat(2, 1fr); }
             .content-container { height: auto; overflow: visible; }
             .view-panel { height: auto; flex-direction: column !important; }
             .overload-col-left, .overload-col-right { width: 100%; }
             #coachView { height: 80vh; }
             .macro-stat-grid { grid-template-columns: repeat(2, 1fr); }
+            .photo-comparison-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -395,6 +406,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
     <div class="content-container">
 
+        <!-- 1. GİRİŞ SEÇİM EKRANI (DASHBOARD HUB) -->
         <div class="view-panel active" id="hubView">
             <div class="hub-title">
                 <h1>Modülünü Seç Kral 🦍</h1>
@@ -422,18 +434,28 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 <div class="hub-card" onclick="openView('nutrition')">
                     <div>
                         <div class="card-icon">🥗</div>
-                        <div class="card-heading">Haftalık Beslenme & Makro</div>
+                        <div class="card-heading">Beslenme & Makro</div>
                         <div class="card-desc">Yediklerini yaz veya fotoğrafını at; gün gün tüm haftalık makro ve kalorilerini takip et.</div>
                     </div>
                     <div class="card-action">Makro Takip →</div>
                 </div>
+
+                <div class="hub-card" onclick="openView('profile')">
+                    <div>
+                        <div class="card-icon">👤</div>
+                        <div class="card-heading">Profil & Before/After</div>
+                        <div class="card-desc">Boy, kilo, yağ oranı ve vücut ölçülerini kaydet. Form fotoğraflarını karşılaştır.</div>
+                    </div>
+                    <div class="card-action">Profili Yönet →</div>
+                </div>
             </div>
         </div>
 
+        <!-- 2. AI KOÇ EKRANI -->
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
-                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload koçunum. Antrenman taktikleri sorabilir, formunu veya fiziğini değerlendirebilirim.</div>
+                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload koçunum. Profilindeki ölçülere ve haftalık setlerine göre nokta atışı hipertrofi tavsiyesi verebilirim.</div>
                 </div>
 
                 <div class="preview-box" id="previewBox">
@@ -451,6 +473,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- 3. PROGRESSIVE OVERLOAD EKRANI -->
         <div class="view-panel" id="overloadView">
             <div class="overload-col-left">
                 <div class="panel-card">
@@ -506,11 +529,12 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- 4. GÜNLÜK BESLENME EKRANI -->
         <div class="view-panel" id="nutritionView">
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"4 tam buğday ekmeği"</i>, <i>"1 ölçek protein tozu"</i>, <i>"300g tavuk 150g pirinc"</i>); tüm makrolarını tam hesaplayıp eklerim.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"4 dilim tam buğday ekmeği"</i>, <i>"1 ölçek protein tozu"</i>, <i>"300g tavuk 150g pirinc"</i>); tüm makrolarını tam hesaplayıp eklerim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -563,6 +587,108 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         <button onclick="clearSelectedDayMeals()" style="background:none; border:none; color:#ef4444; font-size:0.75rem; cursor:pointer; font-weight:700;">Bu Günü Sıfırla</button>
                     </div>
                     <div class="history-list" id="mealsList"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 5. KULLANICI PROFİLİ & BEFORE/AFTER EKRANI -->
+        <div class="view-panel" id="profileView">
+            <div class="overload-col-left">
+                <div class="panel-card">
+                    <div class="panel-header">
+                        <span>👤 Sporcu Bilgileri & Hedef</span>
+                        <span class="badge-cyan" id="bmrCalculatedBadge">BMR: - kcal</span>
+                    </div>
+                    <div class="input-form">
+                        <div class="form-grid-2x2">
+                            <input type="text" id="profFullName" placeholder="Ad Soyad" />
+                            <input type="number" id="profAge" placeholder="Yaş" min="14" max="80" />
+                        </div>
+                        <div class="form-grid-3x1">
+                            <input type="number" id="profHeight" placeholder="Boy (cm)" step="0.5" />
+                            <input type="number" id="profWeight" placeholder="Kilo (kg)" step="0.1" />
+                            <input type="number" id="profBodyfat" placeholder="Yağ Oranı (%)" step="0.5" />
+                        </div>
+                        <div class="form-grid-2x2">
+                            <select id="profGoal">
+                                <option value="Recomposition">Hedef: Recomposition (Clean)</option>
+                                <option value="Lean Bulk">Hedef: Lean Bulk (Hacim)</option>
+                                <option value="Aggressive Cut">Hedef: Cut (Yağ Yakımı)</option>
+                                <option value="Maintenance">Hedef: Koruma</option>
+                            </select>
+                            <select id="profActivity">
+                                <option value="1.55">Aktivite: Orta (Haftada 3-5 Gün İdman)</option>
+                                <option value="1.725">Aktivite: Yüksek (Haftada 6 Gün İdman)</option>
+                                <option value="1.375">Aktivite: Düşük (Haftada 1-2 Gün İdman)</option>
+                            </select>
+                        </div>
+
+                        <div class="panel-header" style="margin-top:4px; font-size:0.85rem;">
+                            <span>📏 Vücut Çevre Ölçüleri (cm)</span>
+                        </div>
+                        <div class="form-grid-3x1">
+                            <input type="number" id="profArm" placeholder="Kol (cm)" step="0.5" />
+                            <input type="number" id="profWaist" placeholder="Bel (cm)" step="0.5" />
+                            <input type="number" id="profShoulder" placeholder="Omuz (cm)" step="0.5" />
+                        </div>
+
+                        <button class="btn-log" onclick="saveUserProfile()">Profili & Hedefleri Kaydet</button>
+                    </div>
+                </div>
+
+                <div class="panel-card" style="flex:1;">
+                    <div class="panel-header">
+                        <span>🎯 Önerilen Günlük Hedefler</span>
+                    </div>
+                    <div class="macro-stat-grid">
+                        <div class="macro-card">
+                            <div class="macro-label">Hedef Kalori</div>
+                            <div class="macro-val macro-c-cal" id="calcTargetCal">0 kcal</div>
+                        </div>
+                        <div class="macro-card">
+                            <div class="macro-label">Protein (x2.2)</div>
+                            <div class="macro-val macro-c-pro" id="calcTargetPro">0g</div>
+                        </div>
+                        <div class="macro-card">
+                            <div class="macro-label">Hedef Karb</div>
+                            <div class="macro-val macro-c-carb" id="calcTargetCarb">0g</div>
+                        </div>
+                        <div class="macro-card">
+                            <div class="macro-label">Hedef Yağ</div>
+                            <div class="macro-val macro-c-fat" id="calcTargetFat">0g</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="overload-col-right">
+                <div class="panel-card" style="height: 100%;">
+                    <div class="panel-header">
+                        <span>📸 Before & After Form Karşılaştırması</span>
+                        <span style="font-size:0.75rem; color:#9ca3af;">Tıklayıp Fotoğraf Yükle</span>
+                    </div>
+
+                    <div class="photo-comparison-grid">
+                        <div class="photo-box" onclick="document.getElementById('beforePhotoInput').click()">
+                            <div class="photo-label-badge">BEFORE (BAŞLANGIÇ)</div>
+                            <img id="beforePhotoImg" src="" style="display:none;" />
+                            <div class="photo-upload-hint" id="beforePhotoHint">
+                                <div style="font-size:2rem; margin-bottom:6px;">📸</div>
+                                Başlangıç Formu Ekle
+                            </div>
+                            <input type="file" id="beforePhotoInput" accept="image/*" onchange="handleProfilePhoto(event, 'before')" />
+                        </div>
+
+                        <div class="photo-box" onclick="document.getElementById('afterPhotoInput').click()">
+                            <div class="photo-label-badge" style="border-color:#10b981; color:#10b981;">AFTER (GÜNCEL)</div>
+                            <img id="afterPhotoImg" src="" style="display:none;" />
+                            <div class="photo-upload-hint" id="afterPhotoHint">
+                                <div style="font-size:2rem; margin-bottom:6px;">🔥</div>
+                                Güncel Form Ekle
+                            </div>
+                            <input type="file" id="afterPhotoInput" accept="image/*" onchange="handleProfilePhoto(event, 'after')" />
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -632,10 +758,18 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             localStorage.setItem("user_nutri_weeks_" + username, JSON.stringify(allWeeks));
         }
 
+        function getUserProfileData(username) {
+            return JSON.parse(localStorage.getItem("user_profile_" + username) || "{}");
+        }
+        function saveUserProfileData(username, profData) {
+            localStorage.setItem("user_profile_" + username, JSON.stringify(profData));
+        }
+
         let currentUser = JSON.parse(localStorage.getItem("active_user") || "null");
         let isRegisterMode = false;
         let weeklyLogs = [];
         let weeklyNutrition = {};
+        let userProfile = {};
         let chartInstance = null;
 
         document.getElementById("exerciseDate").value = weekDaysData[selectedWorkoutDayIdx].fullDate;
@@ -655,6 +789,9 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 renderNutriDayTabs();
                 renderSelectedDayNutrition();
             }
+            if (viewName === 'profile') {
+                loadUserProfileUI();
+            }
         }
 
         function checkAuth() {
@@ -665,6 +802,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 document.getElementById("activeUserName").innerText = "👤 " + currentUser.username;
                 loadUserWorkouts();
                 loadUserNutrition();
+                loadUserProfileUI();
             }
         }
 
@@ -713,6 +851,108 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             location.reload();
         }
 
+        // ================= PROFİL & BEFORE/AFTER =================
+        function loadUserProfileUI() {
+            if (!currentUser) return;
+            userProfile = getUserProfileData(currentUser.username);
+
+            document.getElementById("profFullName").value = userProfile.fullName || "";
+            document.getElementById("profAge").value = userProfile.age || "";
+            document.getElementById("profHeight").value = userProfile.height || "";
+            document.getElementById("profWeight").value = userProfile.weight || "";
+            document.getElementById("profBodyfat").value = userProfile.bodyfat || "";
+            if (userProfile.goal) document.getElementById("profGoal").value = userProfile.goal;
+            if (userProfile.activity) document.getElementById("profActivity").value = userProfile.activity;
+
+            document.getElementById("profArm").value = userProfile.arm || "";
+            document.getElementById("profWaist").value = userProfile.waist || "";
+            document.getElementById("profShoulder").value = userProfile.shoulder || "";
+
+            if (userProfile.beforePhoto) {
+                document.getElementById("beforePhotoImg").src = userProfile.beforePhoto;
+                document.getElementById("beforePhotoImg").style.display = "block";
+                document.getElementById("beforePhotoHint").style.display = "none";
+            }
+            if (userProfile.afterPhoto) {
+                document.getElementById("afterPhotoImg").src = userProfile.afterPhoto;
+                document.getElementById("afterPhotoImg").style.display = "block";
+                document.getElementById("afterPhotoHint").style.display = "none";
+            }
+
+            calculateMetabolismAndMacros();
+        }
+
+        function calculateMetabolismAndMacros() {
+            const h = parseFloat(document.getElementById("profHeight").value) || 0;
+            const w = parseFloat(document.getElementById("profWeight").value) || 0;
+            const a = parseFloat(document.getElementById("profAge").value) || 22;
+            const act = parseFloat(document.getElementById("profActivity").value) || 1.55;
+            const goal = document.getElementById("profGoal").value;
+
+            if (h > 0 && w > 0) {
+                // Mifflin-St Jeor Formülü (Erkek bazlı BMR)
+                const bmr = 10 * w + 6.25 * h - 5 * a + 5;
+                const tdee = bmr * act;
+
+                let targetCal = tdee;
+                if (goal === "Lean Bulk") targetCal += 300;
+                else if (goal === "Aggressive Cut") targetCal -= 500;
+                else if (goal === "Recomposition") targetCal -= 150;
+
+                const proteinGrams = Math.round(w * 2.2);
+                const fatGrams = Math.round((targetCal * 0.25) / 9);
+                const carbGrams = Math.max(0, Math.round((targetCal - (proteinGrams * 4 + fatGrams * 9)) / 4));
+
+                document.getElementById("bmrCalculatedBadge").innerText = `BMR: ${Math.round(bmr)} kcal | TDEE: ${Math.round(tdee)} kcal`;
+                document.getElementById("calcTargetCal").innerText = `${Math.round(targetCal)} kcal`;
+                document.getElementById("calcTargetPro").innerText = `${proteinGrams}g`;
+                document.getElementById("calcTargetCarb").innerText = `${carbGrams}g`;
+                document.getElementById("calcTargetFat").innerText = `${fatGrams}g`;
+            }
+        }
+
+        function saveUserProfile() {
+            if (!currentUser) return;
+            userProfile.fullName = document.getElementById("profFullName").value.trim();
+            userProfile.age = document.getElementById("profAge").value;
+            userProfile.height = document.getElementById("profHeight").value;
+            userProfile.weight = document.getElementById("profWeight").value;
+            userProfile.bodyfat = document.getElementById("profBodyfat").value;
+            userProfile.goal = document.getElementById("profGoal").value;
+            userProfile.activity = document.getElementById("profActivity").value;
+
+            userProfile.arm = document.getElementById("profArm").value;
+            userProfile.waist = document.getElementById("profWaist").value;
+            userProfile.shoulder = document.getElementById("profShoulder").value;
+
+            saveUserProfileData(currentUser.username, userProfile);
+            calculateMetabolismAndMacros();
+            alert("Profil bilgileri ve hedeflerin kaydedildi kral! 🦍");
+        }
+
+        function handleProfilePhoto(event, type) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const base64 = e.target.result;
+                if (type === 'before') {
+                    userProfile.beforePhoto = base64;
+                    document.getElementById("beforePhotoImg").src = base64;
+                    document.getElementById("beforePhotoImg").style.display = "block";
+                    document.getElementById("beforePhotoHint").style.display = "none";
+                } else {
+                    userProfile.afterPhoto = base64;
+                    document.getElementById("afterPhotoImg").src = base64;
+                    document.getElementById("afterPhotoImg").style.display = "block";
+                    document.getElementById("afterPhotoHint").style.display = "none";
+                }
+                saveUserProfileData(currentUser.username, userProfile);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // ================= ANTRENMAN YÖNETİMİ =================
         function loadUserWorkouts() {
             if (!currentUser) return;
             weeklyLogs = getUserWeeklyLogs(currentUser.username);
@@ -890,6 +1130,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             });
         }
 
+        // ================= BESLENME YÖNETİMİ =================
         function loadUserNutrition() {
             if (!currentUser) return;
             weeklyNutrition = getUserWeeklyNutrition(currentUser.username);
@@ -991,6 +1232,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             renderSelectedDayNutrition();
         }
 
+        // ================= CHAT & VISION =================
         let conversationHistory = [];
         let selectedBase64Image = null;
         let nutriSelectedImage = null;
@@ -1051,6 +1293,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             chatBox.scrollTop = chatBox.scrollHeight;
 
             const lastSets = weeklyLogs.slice(-6).map(s => `${s.exercise} (${s.set_num}.Set, ${s.date}): ${s.weight}kg x ${s.reps}`).join(", ");
+            const profSummary = userProfile.weight ? `Boy: ${userProfile.height}cm, Kilo: ${userProfile.weight}kg, Yağ: %${userProfile.bodyfat || '?'}, Hedef: ${userProfile.goal}` : "Profil girilmedi.";
 
             try {
                 const response = await fetch("/chat", {
@@ -1059,6 +1302,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     body: JSON.stringify({
                         user_message: currentText,
                         workout_summary: lastSets,
+                        user_profile_summary: profSummary,
                         image_base64: currentImg,
                         history: conversationHistory
                     })
@@ -1168,14 +1412,18 @@ def coach_dialogue(data: ChatInput):
         return {"user_message": data.user_message, "coach_reply": "Sunucuda GROQ_API_KEY bulunamadı."}
 
     user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
+    profile_context = f"Kullanıcı Profili: {data.user_profile_summary}" if data.user_profile_summary else "Profil bilgisi girilmedi."
 
     system_prompt = f"""
 Sen elit seviyede bir 'Looksmaxxing, Hipertrofi & Fizik Koçu'sun.
-KULLANICI HAFTALIK ANTRENMAN GEÇMİŞİ:
+KULLANICI BİLGİLERİ:
+{profile_context}
 {user_context}
 
-1. SET / PROGRESSIVE OVERLOAD DEĞERLENDİRMESİ:
-- Kullanıcının bu haftaki ağırlık ve setlerine bakarak bir sonraki idmanda hedeflemesi gereken net kg ve tekrarı söyle.
+GÖREVLERİN:
+1. Kullanıcının boy, kilo, yağ oranı ve hedefine (Bulk/Cut/Recomp) göre kişiselleştirilmiş hipertrofi ve beslenme tavsiyesi ver.
+2. Set kayıtlarına bakarak bir sonraki idmanda kaç kg veya tekrar hedeflemesi gerektiğini net olarak söyle.
+3. Motive edici, bilimsel ve net bir dil kullan.
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
