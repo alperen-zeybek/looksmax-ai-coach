@@ -17,9 +17,9 @@ logger = logging.getLogger("looksmax-hub")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-app = FastAPI(title="Looksmax Hub - Workout, Macro & Profile Tracker")
+app = FastAPI(title="Looksmax Hub - Workout, Macro & Multi-Phase Tracker")
 
-# ================= 1. NUTRITION ENGINE (MYFITNESSPAL MİMARİSİ) =================
+# ================= 1. NUTRITION ENGINE =================
 DB_FILE = os.path.join(os.path.dirname(__file__), "foods_db.json")
 
 def load_food_database() -> Dict[str, Any]:
@@ -28,7 +28,7 @@ def load_food_database() -> Dict[str, Any]:
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            logger.error(f"foods_db.json okuma hatasi: {e}")
+            logger.error(f"foods_db.json okuma hatası: {e}")
     return {}
 
 LOCAL_FOOD_DB = load_food_database()
@@ -111,7 +111,7 @@ def fetch_open_food_facts(query: str):
                 if cal > 0:
                     return {"name": name, "cal": cal, "pro": pro, "carb": carb, "fat": fat, "unit": "g"}
     except Exception as e:
-        logger.warning(f"OpenFoodFacts API hatasi ({query}): {e}")
+        logger.warning(f"OpenFoodFacts API hatası ({query}): {e}")
     return None
 
 def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
@@ -247,7 +247,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Looksmax Hub - Antrenman, Beslenme & Profil</title>
+    <title>Looksmax Hub - Antrenman, Beslenme & Çoklu Before/After</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -361,13 +361,23 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .macro-c-fat { color: #ec4899; }
         .meal-items-subtext { font-size: 0.75rem; color: #38bdf8; margin-top: 4px; font-weight: 500; }
 
-        /* --- 5. KULLANICI PROFİLİ & BEFORE/AFTER EKRANI --- */
-        #profileView { gap: 20px; max-width: 1350px; }
-        .photo-comparison-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; height: 100%; }
-        .photo-box { background: #0a0c10; border: 2px dashed #242f44; border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; overflow: hidden; min-height: 340px; cursor: pointer; }
-        .photo-box img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; }
-        .photo-label-badge { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.75); border: 1px solid #00f2fe; color: #00f2fe; font-size: 0.75rem; font-weight: 800; padding: 4px 10px; border-radius: 6px; z-index: 2; }
-        .photo-upload-hint { z-index: 1; text-align: center; color: #6b7280; font-size: 0.85rem; }
+        /* --- 5. ÇOKLU BEFORE & AFTER FAZ PANİĞİ --- */
+        #profileView { gap: 20px; max-width: 1400px; }
+        .phase-header-bar { display: flex; justify-content: space-between; align-items: center; background: #0a0c10; padding: 10px 14px; border-radius: 10px; border: 1px solid #1c2230; margin-bottom: 10px; }
+        .phase-selector { background: #141923; border: 1px solid #2b354d; color: #00f2fe; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-size: 0.85rem; outline: none; }
+        
+        .photo-matrix-4x { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 12px; height: 500px; }
+        .photo-col-title { font-size: 0.85rem; font-weight: 800; color: #00f2fe; margin-bottom: 6px; display: flex; justify-content: space-between; }
+        
+        .photo-card-slot { background: #0a0c10; border: 1px dashed #28354b; border-radius: 12px; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; height: 100%; cursor: pointer; transition: 0.2s; }
+        .photo-card-slot:hover { border-color: #00f2fe; }
+        .photo-card-slot img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; }
+        
+        .slot-badge { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.8); border: 1px solid #00f2fe; color: #00f2fe; font-size: 0.7rem; font-weight: 800; padding: 3px 8px; border-radius: 5px; z-index: 2; }
+        .btn-remove-photo { position: absolute; top: 8px; right: 8px; background: rgba(239, 68, 68, 0.9); border: none; color: white; width: 22px; height: 22px; border-radius: 50%; font-size: 0.75rem; font-weight: 800; cursor: pointer; z-index: 3; display: none; }
+        
+        .slot-placeholder { z-index: 1; text-align: center; color: #6b7280; font-size: 0.75rem; }
+        .slot-placeholder .slot-icon { font-size: 1.6rem; margin-bottom: 4px; }
 
         @media (max-width: 950px) {
             body { overflow: auto; height: auto; }
@@ -377,7 +387,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             .overload-col-left, .overload-col-right { width: 100%; }
             #coachView { height: 80vh; }
             .macro-stat-grid { grid-template-columns: repeat(2, 1fr); }
-            .photo-comparison-grid { grid-template-columns: 1fr; }
+            .photo-matrix-4x { height: auto; grid-template-columns: 1fr; grid-template-rows: repeat(4, 220px); }
         }
     </style>
 </head>
@@ -442,11 +452,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
                 <div class="hub-card" onclick="openView('profile')">
                     <div>
-                        <div class="card-icon">👤</div>
+                        <div class="card-icon">📸</div>
                         <div class="card-heading">Profil & Before/After</div>
-                        <div class="card-desc">Boy, kilo, yağ oranı ve vücut ölçülerini kaydet. Form fotoğraflarını karşılaştır.</div>
+                        <div class="card-desc">Tarih bazlı sınırsız Before/After dönemleri aç. Front ve Back/Side açılarıyla gelişimini gör.</div>
                     </div>
-                    <div class="card-action">Profili Yönet →</div>
+                    <div class="card-action">Fizik Takip →</div>
                 </div>
             </div>
         </div>
@@ -591,7 +601,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 5. KULLANICI PROFİLİ & BEFORE/AFTER EKRANI -->
+        <!-- 5. KULLANICI PROFİLİ & ÇOKLU BEFORE/AFTER EKRANI -->
         <div class="view-panel" id="profileView">
             <div class="overload-col-left">
                 <div class="panel-card">
@@ -663,32 +673,73 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             <div class="overload-col-right">
                 <div class="panel-card" style="height: 100%;">
-                    <div class="panel-header">
-                        <span>📸 Before & After Form Karşılaştırması</span>
-                        <span style="font-size:0.75rem; color:#9ca3af;">Tıklayıp Fotoğraf Yükle</span>
-                    </div>
-
-                    <div class="photo-comparison-grid">
-                        <div class="photo-box" onclick="document.getElementById('beforePhotoInput').click()">
-                            <div class="photo-label-badge">BEFORE (BAŞLANGIÇ)</div>
-                            <img id="beforePhotoImg" src="" style="display:none;" />
-                            <div class="photo-upload-hint" id="beforePhotoHint">
-                                <div style="font-size:2rem; margin-bottom:6px;">📸</div>
-                                Başlangıç Formu Ekle
-                            </div>
-                            <input type="file" id="beforePhotoInput" accept="image/*" onchange="handleProfilePhoto(event, 'before')" />
+                    
+                    <!-- DÖNEM SEÇİCİ VE YENİ DÖNEM BUTONU -->
+                    <div class="phase-header-bar">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-size:0.85rem; font-weight:800; color:#fff;">Dönem:</span>
+                            <select class="phase-selector" id="phaseSelectDropdown" onchange="switchPhase(this.value)"></select>
                         </div>
-
-                        <div class="photo-box" onclick="document.getElementById('afterPhotoInput').click()">
-                            <div class="photo-label-badge" style="border-color:#10b981; color:#10b981;">AFTER (GÜNCEL)</div>
-                            <img id="afterPhotoImg" src="" style="display:none;" />
-                            <div class="photo-upload-hint" id="afterPhotoHint">
-                                <div style="font-size:2rem; margin-bottom:6px;">🔥</div>
-                                Güncel Form Ekle
-                            </div>
-                            <input type="file" id="afterPhotoInput" accept="image/*" onchange="handleProfilePhoto(event, 'after')" />
+                        <div style="display:flex; gap:6px;">
+                            <button onclick="createNewPhasePrompt()" style="background:#00f2fe; color:#000; border:none; padding:6px 12px; border-radius:6px; font-weight:800; font-size:0.75rem; cursor:pointer;">➕ Yeni Dönem Başlat</button>
+                            <button onclick="deleteCurrentPhase()" style="background:#ef4444; color:#fff; border:none; padding:6px 10px; border-radius:6px; font-weight:700; font-size:0.75rem; cursor:pointer;" title="Bu dönemi sil">🗑️</button>
                         </div>
                     </div>
+
+                    <!-- 4'LÜ FOTOĞRAF MATRİSİ (BEFORE FRONT/BACK - AFTER FRONT/BACK) -->
+                    <div class="photo-matrix-4x">
+                        
+                        <!-- 1. BEFORE FRONT -->
+                        <div class="photo-card-slot" id="slot_before_front" onclick="triggerSlotUpload('before_front')">
+                            <div class="slot-badge">BEFORE • FRONT (ÖN)</div>
+                            <button class="btn-remove-photo" id="btn_rem_before_front" onclick="removePhoto(event, 'before_front')">✕</button>
+                            <img id="img_before_front" src="" style="display:none;" />
+                            <div class="slot-placeholder" id="hint_before_front">
+                                <div class="slot-icon">📷</div>
+                                <div>Ön Form Yükle</div>
+                                <span style="font-size:0.65rem; color:#4b5563;" id="date_before_display">Tarih Seç</span>
+                            </div>
+                        </div>
+
+                        <!-- 2. AFTER FRONT -->
+                        <div class="photo-card-slot" id="slot_after_front" onclick="triggerSlotUpload('after_front')">
+                            <div class="slot-badge" style="border-color:#10b981; color:#10b981;">AFTER • FRONT (ÖN)</div>
+                            <button class="btn-remove-photo" id="btn_rem_after_front" onclick="removePhoto(event, 'after_front')">✕</button>
+                            <img id="img_after_front" src="" style="display:none;" />
+                            <div class="slot-placeholder" id="hint_after_front">
+                                <div class="slot-icon">🔥</div>
+                                <div>Güncel Ön Form</div>
+                                <span style="font-size:0.65rem; color:#4b5563;" id="date_after_display">Tarih Seç</span>
+                            </div>
+                        </div>
+
+                        <!-- 3. BEFORE BACK/SIDE -->
+                        <div class="photo-card-slot" id="slot_before_back" onclick="triggerSlotUpload('before_back')">
+                            <div class="slot-badge">BEFORE • BACK/SIDE (SIRT)</div>
+                            <button class="btn-remove-photo" id="btn_rem_before_back" onclick="removePhoto(event, 'before_back')">✕</button>
+                            <img id="img_before_back" src="" style="display:none;" />
+                            <div class="slot-placeholder" id="hint_before_back">
+                                <div class="slot-icon">📷</div>
+                                <div>Sırt/Yan Form Yükle</div>
+                            </div>
+                        </div>
+
+                        <!-- 4. AFTER BACK/SIDE -->
+                        <div class="photo-card-slot" id="slot_after_back" onclick="triggerSlotUpload('after_back')">
+                            <div class="slot-badge" style="border-color:#10b981; color:#10b981;">AFTER • BACK/SIDE (SIRT)</div>
+                            <button class="btn-remove-photo" id="btn_rem_after_back" onclick="removePhoto(event, 'after_back')">✕</button>
+                            <img id="img_after_back" src="" style="display:none;" />
+                            <div class="slot-placeholder" id="hint_after_back">
+                                <div class="slot-icon">🔥</div>
+                                <div>Güncel Sırt/Yan Form</div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- Gizli Input -->
+                    <input type="file" id="universalPhotoInput" accept="image/*" onchange="handleUniversalPhotoUpload(event)" style="display:none;" />
+
                 </div>
             </div>
         </div>
@@ -765,11 +816,21 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             localStorage.setItem("user_profile_" + username, JSON.stringify(profData));
         }
 
+        function getUserPhases(username) {
+            return JSON.parse(localStorage.getItem("user_phases_" + username) || "[]");
+        }
+        function saveUserPhases(username, phases) {
+            localStorage.setItem("user_phases_" + username, JSON.stringify(phases));
+        }
+
         let currentUser = JSON.parse(localStorage.getItem("active_user") || "null");
         let isRegisterMode = false;
         let weeklyLogs = [];
         let weeklyNutrition = {};
         let userProfile = {};
+        let userPhases = [];
+        let activePhaseId = null;
+        let pendingUploadSlot = null;
         let chartInstance = null;
 
         document.getElementById("exerciseDate").value = weekDaysData[selectedWorkoutDayIdx].fullDate;
@@ -791,6 +852,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             }
             if (viewName === 'profile') {
                 loadUserProfileUI();
+                loadUserPhasesUI();
             }
         }
 
@@ -803,6 +865,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 loadUserWorkouts();
                 loadUserNutrition();
                 loadUserProfileUI();
+                loadUserPhasesUI();
             }
         }
 
@@ -851,7 +914,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             location.reload();
         }
 
-        // ================= PROFİL & BEFORE/AFTER =================
+        // ================= PROFİL & HEDEFLER =================
         function loadUserProfileUI() {
             if (!currentUser) return;
             userProfile = getUserProfileData(currentUser.username);
@@ -868,17 +931,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             document.getElementById("profWaist").value = userProfile.waist || "";
             document.getElementById("profShoulder").value = userProfile.shoulder || "";
 
-            if (userProfile.beforePhoto) {
-                document.getElementById("beforePhotoImg").src = userProfile.beforePhoto;
-                document.getElementById("beforePhotoImg").style.display = "block";
-                document.getElementById("beforePhotoHint").style.display = "none";
-            }
-            if (userProfile.afterPhoto) {
-                document.getElementById("afterPhotoImg").src = userProfile.afterPhoto;
-                document.getElementById("afterPhotoImg").style.display = "block";
-                document.getElementById("afterPhotoHint").style.display = "none";
-            }
-
             calculateMetabolismAndMacros();
         }
 
@@ -890,7 +942,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             const goal = document.getElementById("profGoal").value;
 
             if (h > 0 && w > 0) {
-                // Mifflin-St Jeor Formülü (Erkek bazlı BMR)
                 const bmr = 10 * w + 6.25 * h - 5 * a + 5;
                 const tdee = bmr * act;
 
@@ -927,29 +978,137 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             saveUserProfileData(currentUser.username, userProfile);
             calculateMetabolismAndMacros();
-            alert("Profil bilgileri ve hedeflerin kaydedildi kral! 🦍");
+            alert("Profil bilgileri ve hedeflerin başarıyla kaydedildi kral! 🦍");
         }
 
-        function handleProfilePhoto(event, type) {
+        // ================= ÇOKLU BEFORE & AFTER DÖNEM YÖNETİMİ =================
+        function loadUserPhasesUI() {
+            if (!currentUser) return;
+            userPhases = getUserPhases(currentUser.username);
+
+            if (userPhases.length === 0) {
+                const defaultPhase = {
+                    id: "phase_" + Date.now(),
+                    name: "1. Dönem (1 Mayıs - 2 Temmuz)",
+                    beforeDate: "01.05.2026",
+                    afterDate: "02.07.2026",
+                    photos: { before_front: null, before_back: null, after_front: null, after_back: null }
+                };
+                userPhases.push(defaultPhase);
+                saveUserPhases(currentUser.username, userPhases);
+            }
+
+            if (!activePhaseId || !userPhases.find(p => p.id === activePhaseId)) {
+                activePhaseId = userPhases[0].id;
+            }
+
+            renderPhaseDropdown();
+            renderActivePhasePhotos();
+        }
+
+        function renderPhaseDropdown() {
+            const select = document.getElementById("phaseSelectDropdown");
+            if (!select) return;
+            select.innerHTML = "";
+            userPhases.forEach(p => {
+                const opt = document.createElement("option");
+                opt.value = p.id;
+                opt.innerText = p.name;
+                if (p.id === activePhaseId) opt.selected = true;
+                select.appendChild(opt);
+            });
+        }
+
+        function switchPhase(phaseId) {
+            activePhaseId = phaseId;
+            renderActivePhasePhotos();
+        }
+
+        function createNewPhasePrompt() {
+            const name = prompt("Yeni Dönem Adı ve Tarihleri (Örn: '3 Temmuz - 10 Ağustos Lean Bulk'):");
+            if (!name || !name.trim()) return;
+
+            const newPhase = {
+                id: "phase_" + Date.now(),
+                name: name.trim(),
+                photos: { before_front: null, before_back: null, after_front: null, after_back: null }
+            };
+            userPhases.unshift(newPhase);
+            saveUserPhases(currentUser.username, userPhases);
+            activePhaseId = newPhase.id;
+            renderPhaseDropdown();
+            renderActivePhasePhotos();
+        }
+
+        function deleteCurrentPhase() {
+            if (userPhases.length <= 1) return alert("En az bir dönem bulunmalıdır kral!");
+            if (!confirm("Bu dönemi ve içindeki fotoğrafları silmek istiyor musun?")) return;
+
+            userPhases = userPhases.filter(p => p.id !== activePhaseId);
+            saveUserPhases(currentUser.username, userPhases);
+            activePhaseId = userPhases[0].id;
+            renderPhaseDropdown();
+            renderActivePhasePhotos();
+        }
+
+        function renderActivePhasePhotos() {
+            const phase = userPhases.find(p => p.id === activePhaseId);
+            if (!phase) return;
+
+            const slots = ["before_front", "before_back", "after_front", "after_back"];
+            slots.forEach(slotKey => {
+                const imgEl = document.getElementById("img_" + slotKey);
+                const hintEl = document.getElementById("hint_" + slotKey);
+                const btnRem = document.getElementById("btn_rem_" + slotKey);
+                const photoSrc = phase.photos ? phase.photos[slotKey] : null;
+
+                if (photoSrc) {
+                    imgEl.src = photoSrc;
+                    imgEl.style.display = "block";
+                    hintEl.style.display = "none";
+                    btnRem.style.display = "block";
+                } else {
+                    imgEl.src = "";
+                    imgEl.style.display = "none";
+                    hintEl.style.display = "block";
+                    btnRem.style.display = "none";
+                }
+            });
+        }
+
+        function triggerSlotUpload(slotKey) {
+            pendingUploadSlot = slotKey;
+            document.getElementById("universalPhotoInput").click();
+        }
+
+        function handleUniversalPhotoUpload(event) {
             const file = event.target.files[0];
-            if (!file) return;
+            if (!file || !pendingUploadSlot) return;
+
             const reader = new FileReader();
             reader.onload = function(e) {
                 const base64 = e.target.result;
-                if (type === 'before') {
-                    userProfile.beforePhoto = base64;
-                    document.getElementById("beforePhotoImg").src = base64;
-                    document.getElementById("beforePhotoImg").style.display = "block";
-                    document.getElementById("beforePhotoHint").style.display = "none";
-                } else {
-                    userProfile.afterPhoto = base64;
-                    document.getElementById("afterPhotoImg").src = base64;
-                    document.getElementById("afterPhotoImg").style.display = "block";
-                    document.getElementById("afterPhotoHint").style.display = "none";
+                const phase = userPhases.find(p => p.id === activePhaseId);
+                if (phase) {
+                    if (!phase.photos) phase.photos = {};
+                    phase.photos[pendingUploadSlot] = base64;
+                    saveUserPhases(currentUser.username, userPhases);
+                    renderActivePhasePhotos();
                 }
-                saveUserProfileData(currentUser.username, userProfile);
+                pendingUploadSlot = null;
+                document.getElementById("universalPhotoInput").value = "";
             };
             reader.readAsDataURL(file);
+        }
+
+        function removePhoto(event, slotKey) {
+            event.stopPropagation();
+            const phase = userPhases.find(p => p.id === activePhaseId);
+            if (phase && phase.photos) {
+                phase.photos[slotKey] = null;
+                saveUserPhases(currentUser.username, userPhases);
+                renderActivePhasePhotos();
+            }
         }
 
         // ================= ANTRENMAN YÖNETİMİ =================
