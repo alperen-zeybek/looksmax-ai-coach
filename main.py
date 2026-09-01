@@ -286,10 +286,10 @@ class HealthSyncInput(BaseModel):
     steps: Optional[int] = 0
 
 class CoachAuditInput(BaseModel):
-    profile_data: dict
-    recent_workouts: list
-    recent_nutrition: dict
-    recent_health: dict
+    profile_data: Optional[dict] = {}
+    recent_workouts: Optional[list] = []
+    recent_nutrition: Optional[dict] = {}
+    recent_health: Optional[dict] = {}
 
 HTML_INTERFACE = r"""<!DOCTYPE html>
 <html lang="tr">
@@ -505,7 +505,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
     <div class="modal-overlay" id="coachAuditModal" onclick="closeAuditModal(event)">
         <div class="modal-box" onclick="event.stopPropagation()">
             <div class="modal-header">
-                <h3 style="color:#f59e0b;">🧠 Koçun Raporu & Çeki Düzen Analizi</h3>
+                <h3 style="color:#f59e0b;">🧠 Koçun Raporu & Haftalık Analiz</h3>
                 <button class="modal-close-btn" onclick="toggleAuditModal(false)">✕</button>
             </div>
             
@@ -518,7 +518,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 Rapor yükleniyor...
             </div>
 
-            <button class="btn-log" onclick="toggleAuditModal(false)" style="background:#f59e0b; color:#000; margin-top:0;">Emredersin Koç, Kendime Çeki Düzen Veriyorum! 🦍</button>
+            <button class="btn-log" onclick="toggleAuditModal(false)" style="background:#f59e0b; color:#000; margin-top:0;">Anlaşıldı</button>
         </div>
     </div>
 
@@ -1043,10 +1043,22 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             loadEl.style.display = "block";
             textEl.style.display = "none";
 
-            const prof = getUserProfileData(currentUser.username);
-            const wLogs = getUserWeeklyLogs(currentUser.username);
-            const nutri = getUserWeeklyNutrition(currentUser.username);
-            const health = getUserHealthLogs(currentUser.username);
+            const prof = getUserProfileData(currentUser.username) || {};
+            const wLogs = getUserWeeklyLogs(currentUser.username) || [];
+            const nutri = getUserWeeklyNutrition(currentUser.username) || {};
+            const health = getUserHealthLogs(currentUser.username) || {};
+
+            const hasProfile = prof.weight || prof.height;
+            const hasWorkouts = Array.isArray(wLogs) && wLogs.length > 0;
+            const hasNutri = Object.keys(nutri).length > 0;
+            const hasHealth = Object.keys(health).length > 0;
+
+            if (!hasProfile && !hasWorkouts && !hasNutri && !hasHealth) {
+                loadEl.style.display = "none";
+                textEl.style.display = "block";
+                textEl.innerHTML = "<b>Henüz yeterli veri girişi yapmadın kral.</b><br><br>Sana özel haftalık karne ve analiz çıkarabilmem için en azından:<br>• <b>Profil</b> bilgilerini kaydetmeli,<br>• <b>Overload</b> sekmesinden birkaç set veya <b>Beslenme</b> öğünü girmelisin.<br><br>Verilerini girdikten sonra tekrar butona bas, detaylı raporunu hemen çıkarayım! 🦍";
+                return;
+            }
 
             try {
                 const res = await fetch("/coach-audit", {
@@ -1992,19 +2004,26 @@ RAPOR FORMATI:
 - 🫀 **TOPARLANMA & BİYOMETRİK YORUM:** Uyku/HRV durumu ve antrenman modülasyonu.
 - ⚡ **BU HAFTA İÇİN 3 NET EMİR:** Kendine çeki düzen vermesi için 3 net aksiyon maddesi.
 """
-    try:
-        completion = client.chat.completions.create(
-            messages=[{"role": "system", "content": audit_prompt}],
-            model="llama-3.3-70b-versatile",
-            temperature=0.4,
-            max_tokens=900
-        )
-        report = completion.choices[0].message.content
-        report = re.sub(r'<think>.*?</think>', '', report, flags=re.DOTALL).strip()
-    except Exception as e:
-        logger.error(f"Coach audit hatası: {e}")
-        report = "Rapor oluşturulurken bir hata oluştu kral. Verilerini kontrol edip tekrar dene."
+    report = None
+    for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+        try:
+            completion = client.chat.completions.create(
+                messages=[{"role": "system", "content": audit_prompt}],
+                model=model_name,
+                temperature=0.4,
+                max_tokens=900
+            )
+            report = completion.choices[0].message.content
+            if report:
+                break
+        except Exception as e:
+            logger.error(f"Coach audit hatası ({model_name}): {e}")
+            continue
 
+    if not report:
+        report = "Henüz yeterli veri girişi yapılmadı kral. Profilini doldurup set ve beslenme kayıtlarını girdikten sonra tekrar dene."
+
+    report = re.sub(r'<think>.*?</think>', '', report, flags=re.DOTALL).strip()
     return {"audit_report": report}
 
 @app.post("/chat")
