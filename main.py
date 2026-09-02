@@ -35,6 +35,34 @@ else:
 
 app = FastAPI(title="Looksmax Hub - Elite Performance & Coaching Engine")
 
+# ================= 0. DINAMIK MODEL SECICI (404 Onleyici) =================
+def get_best_available_model() -> str:
+    preferences = [
+        "llama-3.1-8b-instant",
+        "llama3-8b-8192",
+        "gemma2-9b-it",
+        "mixtral-8x7b-32768",
+        "openai/gpt-oss-20b"
+    ]
+    if not client:
+        return "llama-3.1-8b-instant"
+    try:
+        models_response = client.models.list()
+        active_models = [m.id for m in models_response.data]
+        logger.info(f"Aktif Groq Modelleri: {active_models}")
+        
+        for pref in preferences:
+            if pref in active_models:
+                return pref
+                
+        chat_models = [m for m in active_models if not any(x in m for x in ["whisper", "tts", "guard", "embed"])]
+        if chat_models:
+            return chat_models[0]
+    except Exception as e:
+        logger.warning(f"Dinamik model secilemedi, varsayilana donuluyor: {e}")
+    
+    return "llama-3.1-8b-instant"
+
 # ================= 1. NUTRITION ENGINE =================
 DB_FILE = os.path.join(os.path.dirname(__file__), "foods_db.json")
 
@@ -2045,14 +2073,15 @@ RAPOR FORMATI:
 - ⚡ **BU HAFTA İÇİN 3 NET EMİR:** Net aksiyon maddeleri.
 """
     try:
+        active_model = get_best_available_model()
         completion = client.chat.completions.create(
             messages=[{"role": "system", "content": audit_prompt}],
-            model="llama-3.3-70b-versatile",
+            model=active_model,
             temperature=0.4,
             max_tokens=900
         )
         report = completion.choices[0].message.content
-        report = re.sub(r'<think>.*?</think>', '', report, flags=re.DOTALL).strip()
+        report = re.sub(r'<think>.*?</think>', '', report, flags=dotall if 'dotall' in globals() else re.DOTALL).strip()
         return {"audit_report": report, "is_error": False}
     except Exception as e:
         full_err = traceback.format_exc()
@@ -2082,7 +2111,6 @@ SETLER: {user_context}
     for msg in data.history:
         messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
 
-    # Not: Standart Llama modelleri doğrudan base64 image_url kabul etmez. Görsel varsa kullanıcı mesajına not düşelim.
     if data.image_base64:
         user_msg = f"[Kullanıcı bir fotoğraf yükledi]: {data.user_message}"
     else:
@@ -2091,9 +2119,10 @@ SETLER: {user_context}
     messages.append({"role": "user", "content": user_msg})
 
     try:
+        active_model = get_best_available_model()
         chat_completion = client.chat.completions.create(
             messages=messages,
-            model="llama-3.3-70b-versatile",
+            model=active_model,
             temperature=0.4,
             max_tokens=600,
         )
@@ -2103,7 +2132,6 @@ SETLER: {user_context}
     except Exception as e:
         full_err = traceback.format_exc()
         logger.error(f"Chat hatasi:\n{full_err}")
-        # Hatanın tam halini doğrudan ekrana veriyoruz
         return {
             "user_message": data.user_message,
             "coach_reply": f"Groq API Hatası: {str(e)}",
