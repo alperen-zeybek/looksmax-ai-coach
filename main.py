@@ -5,13 +5,13 @@ import difflib
 import urllib.request
 import urllib.parse
 import logging
+import traceback
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from groq import Groq
 
-# Yerel ortamda .env varsa otomatik yuklesin (kodun icine key yazmaya gerek yok)
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -22,7 +22,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("looksmax-hub")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+client = None
+
+if GROQ_API_KEY:
+    try:
+        client = Groq(api_key=GROQ_API_KEY)
+    except Exception as e:
+        logger.error(f"Groq istemcisi baslatilamadi: {e}")
+        traceback.print_exc()
+else:
+    logger.warning("GROQ_API_KEY ortam degiskeni bulunamadi!")
 
 app = FastAPI(title="Looksmax Hub - Elite Performance & Coaching Engine")
 
@@ -41,36 +50,16 @@ def load_food_database() -> Dict[str, Any]:
 LOCAL_FOOD_DB = load_food_database()
 
 UNIT_GRAM_MAP = {
-    "olcek": 30.0,
-    "scoop": 30.0,
-    "dilim": 28.0,
-    "kase": 200.0,
-    "tabak": 250.0,
-    "porsiyon": 200.0,
-    "kasik": 15.0,
-    "yemek kasigi": 15.0,
-    "tatli kasigi": 5.0,
-    "cay kasigi": 3.0,
-    "bardak": 200.0,
-    "su bardagi": 200.0,
-    "avuc": 30.0
+    "olcek": 30.0, "scoop": 30.0, "dilim": 28.0, "kase": 200.0, "tabak": 250.0,
+    "porsiyon": 200.0, "kasik": 15.0, "yemek kasigi": 15.0, "tatli kasigi": 5.0,
+    "cay kasigi": 3.0, "bardak": 200.0, "su bardagi": 200.0, "avuc": 30.0
 }
 
 TYPO_CORRECTIONS = {
-    "psirnc": "pirinc",
-    "psirinc": "pirinc",
-    "pirinç": "pirinc",
-    "pırınc": "pirinc",
-    "tavk": "tavuk",
-    "kanaat": "kanat",
-    "kasarlı": "kasarli",
-    "karısık": "karisik",
-    "ölçek": "olcek",
-    "kaşık": "kasik",
-    "ekmeği": "ekmegi",
-    "ekmek": "ekmegi",
-    "buğday": "bugday",
-    "bugday": "bugday"
+    "psirnc": "pirinc", "psirinc": "pirinc", "pirinç": "pirinc", "pırınc": "pirinc",
+    "tavk": "tavuk", "kanaat": "kanat", "kasarlı": "kasarli", "karısık": "karisik",
+    "ölçek": "olcek", "kaşık": "kasik", "ekmeği": "ekmegi", "ekmek": "ekmegi",
+    "buğday": "bugday", "bugday": "bugday"
 }
 
 def normalize_turkish(text: str) -> str:
@@ -380,6 +369,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .msg { max-width: 82%; padding: 13px 17px; border-radius: 14px; font-size: 0.92rem; line-height: 1.5; word-wrap: break-word; }
         .msg.user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 3px; }
         .msg.coach { align-self: flex-start; background: #1a2130; border: 1px solid #283449; border-bottom-left-radius: 3px; }
+        .msg.error { background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; color: #fca5a5; font-family: monospace; font-size: 0.8rem; }
         .msg img.preview-img { max-width: 240px; border-radius: 8px; margin-bottom: 8px; display: block; }
         
         .preview-box { display: none; padding: 8px 16px; background: #0d1017; align-items: center; gap: 10px; border-top: 1px solid #1c2230; }
@@ -587,7 +577,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
-                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload başantrenörünüm. Durumunu anlarım, zor gününde arkanda dururum ama uykun tam, recovery'n yerindeyken kaytarmaya kalkarsan acımam, kendine getiririm. Sorunu sor veya sağ üstteki <b>🧠 Koçun Raporu</b> butonuna basıp haftalık genel karneni al.</div>
+                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload başantrenörünüm. Sorunu sor veya sağ üstteki <b>🧠 Koçun Raporu</b> butonuna basıp haftalık genel karneni al.</div>
                 </div>
 
                 <div class="preview-box" id="previewBox">
@@ -667,7 +657,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"4 dilim tam buğday ekmeği"</i>, <i>"1 ölçek protein tozu"</i>, <i>"300g tavuk 150g pirinc"</i>); tüm makrolarını tam hesaplayıp eklerim.</div>
+                        <div class="msg coach">Afiyet olsun kral! Ne yediysen yaz (örn: <i>"4 dilim tam buğday ekmeği"</i>, <i>"1 ölçek protein tozu"</i>); makrolarını tam hesaplayıp eklerim.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -679,7 +669,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <div class="chat-input-area">
                         <label class="file-btn" for="nutriImageInput" title="Yemek Fotoğrafı">📷</label>
                         <input type="file" id="nutriImageInput" accept="image/*" onchange="handleImageSelect(event, 'nutri')" />
-                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Yediklerini yaz (örn: 4 dilim tam bugday ekmegi, 1 olcek protein tozu...)" onkeypress="handleKey(event, 'nutri')" />
+                        <input type="text" class="chat-input" id="nutriUserInput" placeholder="Yediklerini yaz..." onkeypress="handleKey(event, 'nutri')" />
                         <button class="send-btn" id="nutriSendBtn" onclick="sendNutriMessage()">Ekle</button>
                     </div>
                 </div>
@@ -859,7 +849,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <div class="recovery-circle" id="recoveryScoreDisplay">--<span>SKOR</span></div>
                     <div class="recovery-info">
                         <h3 id="recoveryStatusTitle">Toparlanma Durumu</h3>
-                        <p id="recoveryAdviceText">Bugüne ait uyku, HRV ve dinlenik nabız verilerini kaydedin veya Apple Watch senkronizasyonu yapın.</p>
+                        <p id="recoveryAdviceText">Bugüne ait uyku, HRV ve dinlenik nabız verilerini kaydedin.</p>
                     </div>
                 </div>
 
@@ -1103,7 +1093,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (!hasProfile && !hasWorkouts && !hasNutri && !hasHealth) {
                 loadEl.style.display = "none";
                 textEl.style.display = "block";
-                textEl.innerHTML = "<b>Henüz yeterli veri girişi yapmadın kral.</b><br><br>Sana özel haftalık karne ve analiz çıkarabilmem için en azından:<br>• <b>Profil</b> bilgilerini kaydetmeli,<br>• <b>Overload</b> sekmesinden birkaç set veya <b>Beslenme</b> öğünü girmelisin.<br><br>Verilerini girdikten sonra tekrar butona bas, detaylı raporunu hemen çıkarayım! 🦍";
+                textEl.innerHTML = "<b>Henüz yeterli veri girişi yapmadın kral.</b><br><br>Sana özel haftalık karne çıkarabilmem için:<br>• <b>Profil</b> bilgilerini kaydetmeli,<br>• <b>Overload</b> sekmesinden birkaç set veya <b>Beslenme</b> öğünü girmelisin.<br><br>Verilerini girdikten sonra tekrar dene!";
                 return;
             }
 
@@ -1121,11 +1111,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 const data = await res.json();
                 loadEl.style.display = "none";
                 textEl.style.display = "block";
-                textEl.innerHTML = (data.audit_report || "Değerlendirme alınamadı.").replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
+                if (data.is_error) {
+                    textEl.innerHTML = `<span style="color:#ef4444; font-weight:700;">HATA DETAYI:</span><br><pre style="white-space:pre-wrap; margin-top:8px;">${data.audit_report}</pre>`;
+                } else {
+                    textEl.innerHTML = (data.audit_report || "Değerlendirme alınamadı.").replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
+                }
             } catch (err) {
                 loadEl.style.display = "none";
                 textEl.style.display = "block";
-                textEl.innerText = "Hata oluştu kral, tekrar dener misin?";
+                textEl.innerHTML = `<span style="color:#ef4444;">İstemci bağlantı hatası: ${err.message}</span>`;
             }
         }
 
@@ -1245,11 +1239,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (total >= 80) {
                 color = "#10b981";
                 title = "Optimal Toparlanma 🔥";
-                advice = "Merkezi sinir sistemin zirvede! Bahanen sıfır, bugün ağırlıkların içinden geç ve fazladan tekrarı sök al.";
+                advice = "Merkezi sinir sistemin zirvede! Bahanen sıfır, bugün ağırlıkların içinden geç.";
             } else if (total < 60) {
                 color = "#ef4444";
                 title = "Yetersiz Toparlanma / Yüksek Stres ⚠️";
-                advice = "Otonom sinir sistemin yorgun. Durumu anlıyorum; sakatlanmamak için PR zorlama, form ve hipertrofi odaklı kal.";
+                advice = "Otonom sinir sistemin yorgun. Sakatlanmamak için PR zorlama, form ve hipertrofi odaklı kal.";
             }
 
             scoreCircle.style.borderColor = color;
@@ -1868,11 +1862,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             let userHtml = "";
             if (selectedBase64Image) userHtml += `<img src="${selectedBase64Image}" class="preview-img" />`;
-            userHtml += `<span>${text || "Fotoğraf analizi"}</span>`;
+            userHtml += `<span>${text || "Görsel analizi"}</span>`;
 
             chatBox.innerHTML += `<div class="msg user">${userHtml}</div>`;
             const currentImg = selectedBase64Image;
-            const currentText = text || "Bu fotoğrafı analiz et.";
+            const currentText = text || "Bu görseli değerlendir kral.";
 
             input.value = "";
             clearImage();
@@ -1903,14 +1897,22 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     })
                 });
                 const data = await response.json();
-                let replyFormatted = (data.coach_reply || "").replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
-                document.getElementById(loadingId).innerHTML = replyFormatted || "Yanıt alındı.";
-
-                conversationHistory.push({ role: "user", content: currentText });
-                conversationHistory.push({ role: "assistant", content: data.coach_reply });
-                if (conversationHistory.length > 8) conversationHistory = conversationHistory.slice(-8);
+                const loadEl = document.getElementById(loadingId);
+                
+                if (data.is_error) {
+                    loadEl.className = "msg coach error";
+                    loadEl.innerHTML = `⚠️ <b>HATA DETAYI:</b><br>${data.coach_reply}`;
+                } else {
+                    let replyFormatted = (data.coach_reply || "").replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
+                    loadEl.innerHTML = replyFormatted || "Yanıt alındı.";
+                    conversationHistory.push({ role: "user", content: currentText });
+                    conversationHistory.push({ role: "assistant", content: data.coach_reply });
+                    if (conversationHistory.length > 8) conversationHistory = conversationHistory.slice(-8);
+                }
             } catch (err) {
-                document.getElementById(loadingId).innerText = "Hata oluştu kral.";
+                const loadEl = document.getElementById(loadingId);
+                loadEl.className = "msg coach error";
+                loadEl.innerText = `İstemci bağlantı hatası: ${err.message}`;
             } finally {
                 btn.disabled = false;
                 chatBox.scrollTop = chatBox.scrollHeight;
@@ -1977,7 +1979,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     renderSelectedDayNutrition();
                 }
             } catch (err) {
-                document.getElementById(loadingId).innerText = "Hata oluştu kral, tekrar dener misin?";
+                document.getElementById(loadingId).innerText = `Hata: ${err.message}`;
             } finally {
                 btn.disabled = false;
                 chatBox.scrollTop = chatBox.scrollHeight;
@@ -2017,7 +2019,10 @@ def sync_apple_health_webhook(payload: HealthSyncInput):
 @app.post("/coach-audit")
 def full_coach_audit(payload: CoachAuditInput):
     if not client:
-        return {"audit_report": "Sunucuda GROQ_API_KEY tanımlı değil."}
+        return {
+            "audit_report": "GROQ_API_KEY bulunamadı! Lütfen sunucu ortam değişkenine (Environment Variable) veya .env dosyasına ekle.",
+            "is_error": True
+        }
 
     prof = payload.profile_data or {}
     workouts = payload.recent_workouts or []
@@ -2026,137 +2031,84 @@ def full_coach_audit(payload: CoachAuditInput):
 
     audit_prompt = f"""
 Sen hem halden anlayan bilge bir mentor, hem de sıfır bahane kabul eden sert ve disiplinli bir 'Looksmax & Hipertrofi Başantrenörü'sün.
-Kullanıcının TÜM antrenman, beslenme, sağlık ve profil verilerini önüne koyuyorum.
-
-1. SPORCU PROFİLİ:
-- Ad: {prof.get('fullName', 'Bilinmiyor')}, Yaş: {prof.get('age', '-')}, Boy: {prof.get('height', '-')}cm, Kilo: {prof.get('weight', '-')}kg
-- Hedef: {prof.get('goal', 'Belirtilmedi')}, Yağ Oranı: %{prof.get('bodyfat', '-')}
-- Ölçüler: Kol {prof.get('arm', '-')}cm, Bel {prof.get('waist', '-')}cm, Omuz {prof.get('shoulder', '-')}cm
-
-2. ANTRENMAN & OVERLOAD GEÇMİŞİ:
-{json.dumps(workouts, ensure_ascii=False) if workouts else "HİÇ SET GİRİLMEMİŞ!"}
-
-3. BESLENME GEÇMİŞİ:
-{json.dumps(nutrition, ensure_ascii=False) if nutrition else "ÖĞÜN KAYDI YOK YA DA ÇOK DÜZENSİZ!"}
-
-4. BİYOMETRİK VERİLER (UYKU & HRV):
-{json.dumps(health, ensure_ascii=False) if health else "SAĞLIK VE UYKU VERİSİ GİRİLMEMİŞ!"}
-
-KOÇLUK MANTIĞIN & DEĞERLENDİRME KURALLARIN:
-1. ANLAYIŞ GÖSTERMEN GEREKEN YER:
-   - Eğer kullanıcının uykusu çok azsa, HRV'si yerlerdeyse veya dinlenik nabzı fırlamışsa; yıprandığını ve yorgun olduğunu anla. Ona neden yorgun olduğunu bilimsel açıkla, sakatlanmaması için akıllı çalışmasını söyle.
-2. TOKAT GİBİ SERT OLMAM GEREKEN YER (BAHANESİZ KAYTARMA):
-   - Eğer uykusu 7-8 saat, toparlanması (Recovery) tavan, hiçbir biyometrik engeli YOKKEN ağırlık artıramamışsa, setleri eksik bırakmışsa veya proteini aksatmışsa: 'Oğlum kendine gel! Uykun tam, recovery'n zirvede, bahanen sıfır! Salonda piknik mi yapıyorsun? O kiloyu artıracaksın!' diye sertçe sars ve kendine getir.
-3. TON:
-   - Abi-kardeş samimiyetinde, bilge, maskülen, sert ama sporcusuna inanan gerçek bir koç dili.
+Kullanıcının TÜM verileri:
+1. SPORCU PROFİLİ: Ad: {prof.get('fullName', 'Bilinmiyor')}, Boy: {prof.get('height', '-')}cm, Kilo: {prof.get('weight', '-')}kg, Hedef: {prof.get('goal', '-')}
+2. SETLER: {json.dumps(workouts, ensure_ascii=False) if workouts else "GİRİLMEDİ"}
+3. BESLENME: {json.dumps(nutrition, ensure_ascii=False) if nutrition else "GİRİLMEDİ"}
+4. SAĞLIK: {json.dumps(health, ensure_ascii=False) if health else "GİRİLMEDİ"}
 
 RAPOR FORMATI:
-- 🔥 **DURUM TESPİTİ:** Genel gidişatı nasıl?
-- 🏋️ **ANTRENMAN & OVERLOAD ANALİZİ:** Ağırlıklar artıyor mu yoksa yerinde mi sayıyor? (Bahanesi yoksa sert uyar).
-- 🥗 **MUTFAK & DİSİPLİN KONTROLÜ:** Makrolar ve protein hedefe uygun mu?
-- 🫀 **TOPARLANMA & BİYOMETRİK YORUM:** Uyku/HRV durumu ve antrenman modülasyonu.
-- ⚡ **BU HAFTA İÇİN 3 NET EMİR:** Kendine çeki düzen vermesi için 3 net aksiyon maddesi.
+- 🔥 **DURUM TESPİTİ:** Genel gidişat.
+- 🏋️ **ANTRENMAN ANALİZİ:** Ağırlıklar artıyor mu?
+- 🥗 **MUTFAK KONTROLÜ:** Makrolar yeterli mi?
+- 🫀 **TOPARLANMA YORUMU:** Uyku/HRV durumu.
+- ⚡ **BU HAFTA İÇİN 3 NET EMİR:** Net aksiyon maddeleri.
 """
-    report = None
-    candidate_models = [
-        "openai/gpt-oss-20b",
-        "openai/gpt-oss-120b",
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant"
-    ]
-    last_err = ""
-
-    for model_name in candidate_models:
-        try:
-            completion = client.chat.completions.create(
-                messages=[{"role": "system", "content": audit_prompt}],
-                model=model_name,
-                temperature=0.4,
-                max_tokens=900
-            )
-            report = completion.choices[0].message.content
-            if report:
-                break
-        except Exception as e:
-            last_err = str(e)
-            logger.error(f"Coach audit hatası ({model_name}): {e}")
-            continue
-
-    if not report:
-        report = f"Koç raporu oluşturulamadı kral: {last_err or 'Modeller yanıt vermedi.'}"
-
-    report = re.sub(r'<think>.*?</think>', '', report, flags=re.DOTALL).strip()
-    return {"audit_report": report}
+    try:
+        completion = client.chat.completions.create(
+            messages=[{"role": "system", "content": audit_prompt}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.4,
+            max_tokens=900
+        )
+        report = completion.choices[0].message.content
+        report = re.sub(r'<think>.*?</think>', '', report, flags=re.DOTALL).strip()
+        return {"audit_report": report, "is_error": False}
+    except Exception as e:
+        full_err = traceback.format_exc()
+        logger.error(f"Coach audit hatasi:\n{full_err}")
+        return {"audit_report": f"Sunucu Hatası: {str(e)}\n\n{full_err}", "is_error": True}
 
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
     if not client:
-        return {"user_message": data.user_message, "coach_reply": "Sunucuda GROQ_API_KEY bulunamadı. Lütfen ortam değişkeni olarak ekleyin."}
+        return {
+            "user_message": data.user_message,
+            "coach_reply": "GROQ_API_KEY bulunamadı! Lütfen Render panelinde Environment Variable olarak veya yerelde .env dosyasına ekle.",
+            "is_error": True
+        }
 
     user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
     profile_context = f"Kullanıcı Profili: {data.user_profile_summary}" if data.user_profile_summary else "Profil bilgisi girilmedi."
     health_context = f"Biyometrik Sağlık & Recovery Durumu: {data.health_summary}" if data.health_summary else "Sağlık verisi yok."
 
     system_prompt = f"""
-Sen sporcusunun durumunu çok iyi anlayan ama asla laubaliliğe ve bahanelere izin vermeyen bilge ve sert bir 'Looksmax & Hipertrofi Başantrenörü'sün.
-
-KULLANICI BİLGİLERİ & PROFİLİ:
-{profile_context}
-
-BİYOMETRİK VERİLERİ (UYKU, HRV, NABIZ):
-{health_context}
-
-KULLANICININ BU HAFTAKİ SETLERİ / OVERLOAD DURUMU:
-{user_context}
-
-KOÇLUK DAVRANIŞ KURALLARIN:
-1. ANLAYIŞ VE AKILCI YAKLAŞIM:
-   - Eğer kullanıcının uykusu kötüyse (<6 saat) veya HRV'si dipteyse: Durumu anla, vücudun toparlanamadığını belirt. 'Bugün ağır PR zorlama, sakatlanmanı istemiyorum, form odaklı ve RIR 2'de kal' de.
-2. SERT VE MOTİVASYONEL TOKAT (BAHANESİ YOKKEN YETERSİZSE):
-   - Eğer kullanıcının uykusu tam, recovery skoru yüksek ama antrenmanda ağırlık artıramamışsa veya kaytarıyorsa sert konuş: 'Oğlum kendine gel! Uykun tam, recovery zirvede, bahanen sıfır! Salonda piknik mi yapıyorsun? O barın altına gir ve hakkını ver!' diye kendine getir.
-3. HEDEF ODAKLI EMİRLER:
-   - Kullanıcıya her zaman bir sonraki idmanda tam olarak hangi kiloyu ve kaç tekrarı hedeflemesi gerektiğini net söyle.
+Sen sporcusunun durumunu çok iyi anlayan ama asla laubaliliğe izin vermeyen bilge ve sert bir 'Looksmax & Hipertrofi Başantrenörü'sün.
+KULLANICI: {profile_context}
+SAĞLIK: {health_context}
+SETLER: {user_context}
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
         messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
 
+    # Not: Standart Llama modelleri doğrudan base64 image_url kabul etmez. Görsel varsa kullanıcı mesajına not düşelim.
     if data.image_base64:
-        messages.append({"role": "user", "content": [
-            {"type": "text", "text": data.user_message},
-            {"type": "image_url", "image_url": {"url": data.image_base64}}
-        ]})
+        user_msg = f"[Kullanıcı bir fotoğraf yükledi]: {data.user_message}"
     else:
-        messages.append({"role": "user", "content": data.user_message})
+        user_msg = data.user_message
 
-    reply_text = None
-    last_error = ""
+    messages.append({"role": "user", "content": user_msg})
 
-    candidate_models = [
-        "openai/gpt-oss-20b",
-        "openai/gpt-oss-120b",
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant"
-    ]
-
-    for m in candidate_models:
-        try:
-            chat_completion = client.chat.completions.create(
-                messages=messages, model=m, temperature=0.4, max_tokens=600,
-            )
-            reply_text = chat_completion.choices[0].message.content
-            if reply_text:
-                break
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(f"[/chat] model {m} failed: {e}")
-            continue
-
-    if not reply_text:
-        reply_text = f"Koç bağlantısında bir hata oldu kral: {last_error or 'Modellere ulaşılamadı.'}"
-
-    reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
-    return {"user_message": data.user_message, "coach_reply": reply_text}
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=messages,
+            model="llama-3.3-70b-versatile",
+            temperature=0.4,
+            max_tokens=600,
+        )
+        reply_text = chat_completion.choices[0].message.content
+        reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
+        return {"user_message": data.user_message, "coach_reply": reply_text, "is_error": False}
+    except Exception as e:
+        full_err = traceback.format_exc()
+        logger.error(f"Chat hatasi:\n{full_err}")
+        # Hatanın tam halini doğrudan ekrana veriyoruz
+        return {
+            "user_message": data.user_message,
+            "coach_reply": f"Groq API Hatası: {str(e)}",
+            "is_error": True
+        }
 
 @app.post("/nutrition-chat")
 def nutrition_dialogue(data: NutritionChatInput):
