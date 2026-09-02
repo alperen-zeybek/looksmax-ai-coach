@@ -187,6 +187,31 @@ def strip_thinking_and_tables(text: str) -> str:
     
     return result if result else clean
 
+
+def violates_coach_format_rules(text: str) -> bool:
+    """AI Koc chat'inde bazen model karakterden cikip Ingilizce'ye ve
+    markdown baslik/numarali liste formatina kayabiliyor (orn. '## Weekly Plan',
+    '1. Bench Press - 4x8'). Bunu tespit edip bir kez retry atmak icin kullanilir."""
+    if not text:
+        return False
+
+    # Markdown baslik (## Baslik)
+    if re.search(r'^#{1,6}\s', text, re.MULTILINE):
+        return True
+
+    # 2+ numarali liste satiri ustuste (1. ... / 2. ... tarzi program dokumu)
+    numbered_lines = len(re.findall(r'^\s*\d+\.\s+\S', text, re.MULTILINE))
+    if numbered_lines >= 2:
+        return True
+
+    # Basit dil tespiti: yaygin Ingilizce kelime yogunlugu Turkce'den fazlaysa
+    english_hits = len(re.findall(r'\b(the|and|for|with|your|you|is|are|of|to|daily|weekly|week)\b', text, re.IGNORECASE))
+    turkish_hits = len(re.findall(r'\b(ve|için|ile|senin|sen|bir|bu|kral|gün|hafta|kas|antrenman)\b', text, re.IGNORECASE))
+    if english_hits >= 5 and english_hits > turkish_hits:
+        return True
+
+    return False
+
 # ================= 1. NUTRITION ENGINE (LLM + DETERMINISTIK) =================
 # =====================================================================
 # BU DOSYA, orijinal app.py icindeki
@@ -895,9 +920,10 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         <div style="background:#0a0c10; border:1px solid #1c2230; border-radius:9px; padding:10px 12px; display:flex; flex-direction:column; gap:8px;">
                             <label style="display:flex; align-items:center; gap:8px; font-size:0.8rem; color:#e5e7eb; cursor:pointer; font-weight:600;">
                                 <input type="checkbox" id="addToProgramCheck" onchange="toggleProgramDaySelect()" style="width:16px; height:16px; accent-color:#00f2fe; cursor:pointer;" />
-                                📋 Antrenman Programıma Ekle
+                                📋 Antrenman Programımla Eşleştir
                             </label>
-                            <select id="addToProgramDaySelect" style="display:none; background:#131722; border:1px solid #2b354d; color:#00f2fe; padding:8px 10px; border-radius:7px; font-weight:700; font-size:0.8rem; outline:none;"></select>
+                            <select id="addToProgramDaySelect" onchange="refreshProgramExerciseSelectOptions()" style="display:none; background:#131722; border:1px solid #2b354d; color:#00f2fe; padding:8px 10px; border-radius:7px; font-weight:700; font-size:0.8rem; outline:none;"></select>
+                            <select id="addToProgramExerciseSelect" onchange="applyProgramExerciseToForm()" style="display:none; background:#131722; border:1px solid #2b354d; color:#00f2fe; padding:8px 10px; border-radius:7px; font-weight:700; font-size:0.8rem; outline:none;"></select>
                         </div>
 
                         <button class="btn-log" onclick="addWorkoutLog()">Seti Kaydet</button>
@@ -2146,13 +2172,25 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (addToProgramChecked) {
                 const dayIdx = parseInt(document.getElementById("addToProgramDaySelect").value, 10);
                 if (!isNaN(dayIdx)) {
-                    addExerciseToProgramDay(dayIdx, name, setNum, `${reps}`, "");
+                    const prog = userProgram && userProgram.days ? userProgram : getUserProgram(currentUser.username);
+                    const dayExercises = (prog && prog.days && prog.days[dayIdx]) ? prog.days[dayIdx].exercises : [];
+                    const alreadyInProgram = dayExercises.some(e => e.name.trim().toLowerCase() === name.trim().toLowerCase());
+                    // Sadece programda henuz olmayan YENI bir hareket girildiyse programa ekle.
+                    // Zaten programdan secilmis bir hareketse dokunma - yoksa hedef set/tekrar
+                    // (orn "4x8-10"), o an girilen tek setin degerleriyle (orn "1x8") ustune yazilip bozulur.
+                    if (!alreadyInProgram) {
+                        addExerciseToProgramDay(dayIdx, name, setNum, `${reps}`, "");
+                    }
                 }
             }
 
             document.getElementById("exerciseSet").value = setNum + 1;
             document.getElementById("exerciseWeight").value = "";
-            document.getElementById("exerciseReps").value = "";
+            // Program'dan eslesen bir hareket girildiyse tekrar sayisi genelde sabittir (orn hep 8),
+            // bir sonraki set icin tekrar yazmaya gerek kalmasin diye temizlenmiyor.
+            if (!addToProgramChecked) {
+                document.getElementById("exerciseReps").value = "";
+            }
             loadUserWorkouts();
         }
 
@@ -2501,15 +2539,83 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             for (let i = 0; i < numDays; i++) {
                 const opt = document.createElement("option");
                 opt.value = i;
-                opt.innerText = `Gün ${i + 1}`;
+                const focus = (prog && prog.days && prog.days[i] && prog.days[i].focus) ? ` · ${prog.days[i].focus}` : "";
+                opt.innerText = `Gün ${i + 1}${focus}`;
                 select.appendChild(opt);
             }
             if (prevVal !== "" && Number(prevVal) < numDays) select.value = prevVal;
+            refreshProgramExerciseSelectOptions();
+        }
+
+        function refreshProgramExerciseSelectOptions() {
+            const daySelect = document.getElementById("addToProgramDaySelect");
+            const exSelect = document.getElementById("addToProgramExerciseSelect");
+            if (!daySelect || !exSelect || !currentUser) return;
+
+            const dayIdx = parseInt(daySelect.value, 10);
+            const prog = userProgram && userProgram.days ? userProgram : getUserProgram(currentUser.username);
+            exSelect.innerHTML = "";
+
+            const dayExercises = (prog && Array.isArray(prog.days) && !isNaN(dayIdx) && prog.days[dayIdx] && Array.isArray(prog.days[dayIdx].exercises))
+                ? prog.days[dayIdx].exercises : [];
+
+            if (dayExercises.length === 0) {
+                const opt = document.createElement("option");
+                opt.value = "";
+                opt.innerText = "Bu güne henüz hareket eklenmedi";
+                exSelect.appendChild(opt);
+                return;
+            }
+
+            const placeholderOpt = document.createElement("option");
+            placeholderOpt.value = "";
+            placeholderOpt.innerText = "— Hareket seç —";
+            exSelect.appendChild(placeholderOpt);
+
+            dayExercises.forEach((ex, exIdx) => {
+                const opt = document.createElement("option");
+                opt.value = exIdx;
+                opt.innerText = `${ex.name} (${ex.sets}×${ex.reps})`;
+                exSelect.appendChild(opt);
+            });
+        }
+
+        function applyProgramExerciseToForm() {
+            if (!currentUser) return;
+            const daySelect = document.getElementById("addToProgramDaySelect");
+            const exSelect = document.getElementById("addToProgramExerciseSelect");
+            if (!daySelect || !exSelect || exSelect.value === "") return;
+
+            const dayIdx = parseInt(daySelect.value, 10);
+            const exIdx = parseInt(exSelect.value, 10);
+            const prog = userProgram && userProgram.days ? userProgram : getUserProgram(currentUser.username);
+            if (!prog || !prog.days || !prog.days[dayIdx]) return;
+            const ex = prog.days[dayIdx].exercises[exIdx];
+            if (!ex) return;
+
+            // Hareket adi programdaki gibi otomatik doluyor
+            document.getElementById("exerciseName").value = ex.name;
+
+            // Tekrar: "8-10" gibi bir aralik ise ilk sayiyi al, tek sayiysa direkt kullan
+            const repsMatch = String(ex.reps).match(/\d+/);
+            document.getElementById("exerciseReps").value = repsMatch ? repsMatch[0] : "";
+
+            // Set no: bugun bu hareketten kac set girilmisse bir sonraki set numarasini oner
+            const currentDayDate = weekDaysData[selectedWorkoutDayIdx].fullDate;
+            const alreadyLogged = weeklyLogs.filter(
+                l => l.date === currentDayDate && l.exercise.trim().toLowerCase() === ex.name.trim().toLowerCase()
+            ).length;
+            document.getElementById("exerciseSet").value = alreadyLogged + 1;
+
+            // Sadece agirlik bos kalsin, kullanici doldursun
+            document.getElementById("exerciseWeight").value = "";
+            document.getElementById("exerciseWeight").focus();
         }
 
         function toggleProgramDaySelect() {
             const checked = document.getElementById("addToProgramCheck").checked;
             document.getElementById("addToProgramDaySelect").style.display = checked ? "block" : "none";
+            document.getElementById("addToProgramExerciseSelect").style.display = checked ? "block" : "none";
             if (checked) refreshProgramDaySelectOptions();
         }
 
@@ -2849,14 +2955,15 @@ KULLANICI VERİLERİ:
 - Aktif Sakatlıklar: {json.dumps(injuries, ensure_ascii=False) if injuries else "YOK"}
 {knowledge_block}
 KURALLAR:
-1. ASLA düşünme adımı, tablo veya veri matrisi üretme.
-2. Doğrudan net maddelerle koçluk karne raporunu dök:
+1. SADECE TÜRKÇE YAZ, tek bir İngilizce cümle bile kullanma (hareket isimleri hariç).
+2. ASLA düşünme adımı, tablo veya veri matrisi üretme.
+3. Doğrudan net maddelerle koçluk karne raporunu dök:
 - 🔥 **DURUM TESPİTİ:** Genel gidişat.
 - 🩹 **SAKATLIK & REHABİLİTASYON:** Varsa güvenli hareket reçetesi ve izolasyon.
 - 🏋️ **ANTRENMAN & OVERLOAD:** Ağırlıkların durumu ve zorlama emri.
 - 🥗 **MUTFAK & DİSİPLİN:** Makroların denetimi.
 - ⚡ **3 NET EMİR:** Bu hafta yapılacaklar.
-3. Bilgi bankasında ilgili bir pasaj varsa raporuna doğal şekilde harmanla, doğrudan alıntılama.
+4. Bilgi bankasında ilgili bir pasaj varsa raporuna doğal şekilde harmanla, doğrudan alıntılama.
 """
     try:
         active_model = get_best_available_model()
@@ -2864,7 +2971,7 @@ KURALLAR:
             messages=[{"role": "system", "content": audit_prompt}],
             model=active_model,
             temperature=0.3,
-            max_tokens=800
+            max_tokens=1300
         )
         raw_report = completion.choices[0].message.content or ""
         clean_report = strip_thinking_and_tables(raw_report)
@@ -2903,11 +3010,13 @@ SAKATLIK DURUMU: {injuries_context}
 SETLER: {user_context}
 {knowledge_block}
 FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
-1. ASLA DÜŞÜNME ADIMI, TABLO VEYA İŞLEM LİSTESİ YAZMA.
-2. Uzun uzun 'Konu / Durum / Öneri' tabloları dökmek KESİNLİKLE YASAKTIR.
-3. Yanıtını doğrudan, net, maddeli ve vurucu bir özet / aksiyon planı olarak ver.
-4. Sakatlık varsa: Güvenli alternatif açıyı söyle ve 1 rehabilitasyon egzersizi emret.
-5. Bilgi bankasında ilgili bir pasaj varsa onu kendi cümlelerinle harmanla, doğrudan alıntılama.
+1. SADECE TÜRKÇE YAZ. Tek bir İngilizce cümle, başlık veya kelime bile kullanma (özel isimler/hareket adları hariç, örn "Bench Press" kalabilir).
+2. ASLA markdown başlık (##, ###) kullanma. ASLA numaralı liste (1. 2. 3. ...) ile program/plan dökme.
+3. ASLA DÜŞÜNME ADIMI, TABLO VEYA İŞLEM LİSTESİ YAZMA.
+4. Uzun uzun 'Konu / Durum / Öneri' tabloları dökmek KESİNLİKLE YASAKTIR.
+5. Yanıtını doğrudan, net, kısa paragraflar ve tire (-) ile başlayan maddeler halinde, sohbet tonunda ver — resmi bir doküman gibi değil.
+6. Sakatlık varsa: Güvenli alternatif açıyı söyle ve 1 rehabilitasyon egzersizi emret.
+7. Bilgi bankasında ilgili bir pasaj varsa onu kendi cümlelerinle harmanla, doğrudan alıntılama.
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
@@ -2922,14 +3031,31 @@ FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
 
     try:
         active_model = get_best_available_model()
-        chat_completion = client.chat.completions.create(
-            messages=messages,
-            model=active_model,
-            temperature=0.3,
-            max_tokens=500,
-        )
-        raw_text = chat_completion.choices[0].message.content or ""
-        clean_text = strip_thinking_and_tables(raw_text)
+        clean_text = ""
+
+        for attempt in range(1, 3):  # ilk deneme + format ihlali olursa 1 retry
+            attempt_messages = list(messages)
+            if attempt > 1:
+                attempt_messages.append({
+                    "role": "system",
+                    "content": (
+                        "UYARI: ÖNCEKİ YANITIN KURALLARA UYMADI (İngilizce'ye kaydın ya da başlık/numaralı liste "
+                        "kullandın). BU SEFER SADECE TÜRKÇE, DÜZ CÜMLELER VE TİRE (-) İLE BAŞLAYAN MADDELER "
+                        "KULLAN. BAŞLIK (##), NUMARALI LİSTE (1. 2. 3.) VE İNGİLİZCE KESİNLİKLE YASAK."
+                    )
+                })
+
+            chat_completion = client.chat.completions.create(
+                messages=attempt_messages,
+                model=active_model,
+                temperature=0.3 if attempt == 1 else 0.15,
+                max_tokens=700,
+            )
+            raw_text = chat_completion.choices[0].message.content or ""
+            clean_text = strip_thinking_and_tables(raw_text)
+
+            if not violates_coach_format_rules(clean_text):
+                break
 
         if not clean_text:
             clean_text = "Hedefe odaklan kral. Formunu koru ve kontrollü devam et."
