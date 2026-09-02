@@ -65,15 +65,12 @@ def get_best_available_model() -> str:
 def strip_thinking_and_tables(text: str) -> str:
     if not text:
         return ""
-    # 1. <think> etiketlerini ve iceriklerini temizle
     clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     
-    # 2. Eger yanitta '### Özet', '## Özet' veya 'Özet:' varsa, oncesindeki analiz tablolarini atip direkt ozeti al
     summary_match = re.search(r'(?:###?\s*Özet|Özet:?)(.*)', clean, flags=re.DOTALL | re.IGNORECASE)
     if summary_match and len(summary_match.group(1).strip()) > 20:
         return summary_match.group(1).strip()
     
-    # 3. Model ozet basligi atmadan sadece tablo ve altina aciklama koyduysa, Markdown tablolarini temizle
     lines = clean.split('\n')
     filtered_lines = [l for l in lines if not l.strip().startswith('|') and not l.strip().startswith('+-')]
     result = '\n'.join(filtered_lines).strip()
