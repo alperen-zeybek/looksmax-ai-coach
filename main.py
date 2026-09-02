@@ -78,53 +78,152 @@ def strip_thinking_and_tables(text: str) -> str:
     return result if result else clean
 
 # ================= 1. NUTRITION ENGINE (LLM + DETERMINISTIK) =================
+# ================= MYFITNESSPAL DETERMINISTIK VERITABANI =================
 CANONICAL_FOODS = {
-    "yumurta": {"unit_type": "piece", "base_cal": 72.0, "base_pro": 6.3, "base_carb": 0.4, "base_fat": 4.8},
-    "haslanmis yumurta": {"unit_type": "piece", "base_cal": 72.0, "base_pro": 6.3, "base_carb": 0.4, "base_fat": 4.8},
-    "sahanda yumurta": {"unit_type": "piece", "base_cal": 92.0, "base_pro": 6.3, "base_carb": 0.4, "base_fat": 7.2},
-    "omlet": {"unit_type": "piece", "base_cal": 95.0, "base_pro": 6.5, "base_carb": 0.6, "base_fat": 7.5},
-    "yumurta beyazi": {"unit_type": "piece", "base_cal": 17.0, "base_pro": 3.6, "base_carb": 0.2, "base_fat": 0.1},
-    "tam bugday ekmegi": {"unit_type": "piece", "base_cal": 68.0, "base_pro": 3.5, "base_carb": 12.0, "base_fat": 0.9},
-    "ekmek": {"unit_type": "piece", "base_cal": 75.0, "base_pro": 2.4, "base_carb": 15.0, "base_fat": 0.8},
-    "beyaz ekmek": {"unit_type": "piece", "base_cal": 75.0, "base_pro": 2.4, "base_carb": 15.0, "base_fat": 0.8},
-    "lavas": {"unit_type": "piece", "base_cal": 160.0, "base_pro": 5.0, "base_carb": 30.0, "base_fat": 2.5},
-    "tavuk gogsu": {"unit_type": "gram_100", "base_cal": 120.0, "base_pro": 22.5, "base_carb": 0.0, "base_fat": 2.5},
-    "tavuk": {"unit_type": "gram_100", "base_cal": 135.0, "base_pro": 21.0, "base_carb": 0.0, "base_fat": 5.0},
-    "pirinc": {"unit_type": "gram_100", "base_cal": 350.0, "base_pro": 7.0, "base_carb": 78.0, "base_fat": 0.6},
-    "yulaf": {"unit_type": "gram_100", "base_cal": 370.0, "base_pro": 12.5, "base_carb": 60.0, "base_fat": 7.0},
-    "protein tozu": {"unit_type": "piece", "base_cal": 120.0, "base_pro": 24.0, "base_carb": 2.0, "base_fat": 1.5},
-    "whey": {"unit_type": "piece", "base_cal": 120.0, "base_pro": 24.0, "base_carb": 2.0, "base_fat": 1.5},
-    "muz": {"unit_type": "piece", "base_cal": 105.0, "base_pro": 1.3, "base_carb": 27.0, "base_fat": 0.3},
-    "elma": {"unit_type": "piece", "base_cal": 80.0, "base_pro": 0.4, "base_carb": 21.0, "base_fat": 0.3},
-    "fistik ezmesi": {"unit_type": "gram_100", "base_cal": 590.0, "base_pro": 25.0, "base_carb": 20.0, "base_fat": 50.0},
-    "zeytinyagi": {"unit_type": "piece", "base_cal": 120.0, "base_pro": 0.0, "base_carb": 0.0, "base_fat": 14.0},
-    "kiyma": {"unit_type": "gram_100", "base_cal": 220.0, "base_pro": 20.0, "base_carb": 0.0, "base_fat": 15.0},
-    "kofte": {"unit_type": "piece", "base_cal": 85.0, "base_pro": 7.0, "base_carb": 2.0, "base_fat": 5.5},
-    "patates": {"unit_type": "gram_100", "base_cal": 77.0, "base_pro": 2.0, "base_carb": 17.5, "base_fat": 0.1},
-    "sut": {"unit_type": "gram_100", "base_cal": 60.0, "base_pro": 3.2, "base_carb": 4.8, "base_fat": 3.1},
-    "yogurt": {"unit_type": "gram_100", "base_cal": 65.0, "base_pro": 3.5, "base_carb": 4.7, "base_fat": 3.3},
-    "lor peyniri": {"unit_type": "gram_100", "base_cal": 90.0, "base_pro": 17.0, "base_carb": 3.0, "base_fat": 1.0}
+    # Yumurta & Kahvaltilik
+    "yumurta": {"unit_type": "piece", "unit_weight": 50.0, "cal": 72.0, "pro": 6.3, "carb": 0.4, "fat": 4.8},
+    "sahanda yumurta": {"unit_type": "piece", "unit_weight": 60.0, "cal": 92.0, "pro": 6.3, "carb": 0.4, "fat": 7.2},
+    "haslanmis yumurta": {"unit_type": "piece", "unit_weight": 50.0, "cal": 72.0, "pro": 6.3, "carb": 0.4, "fat": 4.8},
+    "yumurta beyazi": {"unit_type": "piece", "unit_weight": 33.0, "cal": 17.0, "pro": 3.6, "carb": 0.2, "fat": 0.1},
+    "omlet": {"unit_type": "piece", "unit_weight": 60.0, "cal": 95.0, "pro": 6.5, "carb": 0.6, "fat": 7.5},
+    "lor peyniri": {"unit_type": "gram_100", "cal": 90.0, "pro": 17.0, "carb": 3.0, "fat": 1.0},
+    "beyaz peynir": {"unit_type": "gram_100", "cal": 250.0, "pro": 14.0, "carb": 2.0, "fat": 21.0},
+    "fistik ezmesi": {"unit_type": "gram_100", "cal": 590.0, "pro": 25.0, "carb": 20.0, "fat": 50.0},
+
+    # Karbonhidratlar & Ekmekler
+    "ekmek": {"unit_type": "piece", "unit_weight": 28.0, "cal": 75.0, "pro": 2.4, "carb": 15.0, "fat": 0.8},
+    "tam bugday ekmegi": {"unit_type": "piece", "unit_weight": 28.0, "cal": 68.0, "pro": 3.5, "carb": 12.0, "fat": 0.9},
+    "beyaz ekmek": {"unit_type": "piece", "unit_weight": 28.0, "cal": 75.0, "pro": 2.4, "carb": 15.0, "fat": 0.8},
+    "lavas": {"unit_type": "piece", "unit_weight": 60.0, "cal": 160.0, "pro": 5.0, "carb": 30.0, "fat": 2.5},
+    "pirinc": {"unit_type": "gram_100", "cal": 350.0, "pro": 7.0, "carb": 78.0, "fat": 0.6},
+    "yulaf": {"unit_type": "gram_100", "cal": 370.0, "pro": 12.5, "carb": 60.0, "fat": 7.0},
+    "patates": {"unit_type": "gram_100", "cal": 77.0, "pro": 2.0, "carb": 17.5, "fat": 0.1},
+    "makarna": {"unit_type": "gram_100", "cal": 360.0, "pro": 12.0, "carb": 72.0, "fat": 1.5},
+
+    # Et, Tavuk & Protein Kaynaklari
+    "tavuk gogsu": {"unit_type": "gram_100", "cal": 120.0, "pro": 22.5, "carb": 0.0, "fat": 2.5},
+    "tavuk": {"unit_type": "gram_100", "cal": 135.0, "pro": 21.0, "carb": 0.0, "fat": 5.0},
+    "kiyma": {"unit_type": "gram_100", "cal": 220.0, "pro": 20.0, "carb": 0.0, "fat": 15.0},
+    "kofte": {"unit_type": "piece", "unit_weight": 35.0, "cal": 85.0, "pro": 7.0, "carb": 2.0, "fat": 5.5},
+    "protein tozu": {"unit_type": "piece", "unit_weight": 30.0, "cal": 120.0, "pro": 24.0, "carb": 2.0, "fat": 1.5},
+    "whey": {"unit_type": "piece", "unit_weight": 30.0, "cal": 120.0, "pro": 24.0, "carb": 2.0, "fat": 1.5},
+
+    # Fast Food & Hazir Yemekler (Dilim / Porsiyon Standartlari)
+    "pizza": {"unit_type": "piece", "unit_weight": 110.0, "cal": 265.0, "pro": 11.0, "carb": 30.0, "fat": 10.0}, # 1 dilim orta boy pizza
+    "lahmacun": {"unit_type": "piece", "unit_weight": 130.0, "cal": 225.0, "pro": 9.5, "carb": 28.0, "fat": 8.0},
+    "hamburger": {"unit_type": "piece", "unit_weight": 220.0, "cal": 500.0, "pro": 28.0, "carb": 40.0, "fat": 24.0},
+
+    # Meyveler & Diger
+    "muz": {"unit_type": "piece", "unit_weight": 120.0, "cal": 105.0, "pro": 1.3, "carb": 27.0, "fat": 0.3},
+    "elma": {"unit_type": "piece", "unit_weight": 150.0, "cal": 80.0, "pro": 0.4, "carb": 21.0, "fat": 0.3},
+    "zeytinyagi": {"unit_type": "piece", "unit_weight": 10.0, "cal": 90.0, "pro": 0.0, "carb": 0.0, "fat": 10.0}, # 1 yemek kasigi
+    "sut": {"unit_type": "gram_100", "cal": 60.0, "pro": 3.2, "carb": 4.8, "fat": 3.1},
+    "yogurt": {"unit_type": "gram_100", "cal": 65.0, "pro": 3.5, "carb": 4.7, "fat": 3.3}
 }
 
 class ParsedFoodItem(BaseModel):
-    name: str = Field(description="Besinin turkce yalin adi (orn: sahanda yumurta, pirinc, tam bugday ekmegi, tavuk gogsu)")
-    amount: float = Field(description="Miktar sayisal degeri (orn: 1, 2, 150, 0.5)")
-    unit: str = Field(description="Birim turu: 'adet', 'gram', 'dilim', 'scoop', 'kasik', 'kase', 'porsiyon'")
-    estimated_grams: Optional[float] = Field(default=None, description="Adet veya porsiyonsa toplam tahmini gramaji")
+    name: str = Field(description="Veritabanindan eslesen besin adi")
+    amount: float = Field(description="Miktar sayisi (orn: 7, 150, 2)")
+    unit: str = Field(description="Birim: 'dilim', 'adet', 'gram', 'ml', 'porsiyon'")
 
 class ParsedMealResponse(BaseModel):
     items: List[ParsedFoodItem]
-
-def normalize_turkish(text: str) -> str:
-    t = text.lower()
-    t = t.replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ş", "s").replace("ö", "o").replace("ç", "c")
-    t = re.sub(r'[^a-z0-9\s]', ' ', t)
-    return " ".join(t.split()).strip()
 
 def parse_meal_with_llm(user_text: str) -> Optional[Dict[str, Any]]:
     if not client:
         return None
 
+    system_prompt = """
+Sen MyFitnessPal veri eslestirme motorusun (Food Matching Engine).
+Gorevin: Kullanicinin girdigi serbest metni analiz edip, her bir yiyecegin miktarini, birimini ve bizim CANONICAL_FOODS sozlugumuzde gecen en yakin anahtar adini cikarmak.
+
+ONEMLI KURALLAR:
+1. LLM olarak kalorileri sen HESAPLAMA! Sadece urun adini ('pizza', 'yumurta', 'tavuk gogsu'), miktarini ve birimini dogru tespit et.
+2. '7 dilim pizza' -> name='pizza', amount=7, unit='dilim'
+3. '150g pirinc' -> name='pirinc', amount=150, unit='gram'
+4. Ciktini YALNIZCA su JSON formatinda ver:
+{
+  "items": [
+    {"name": "pizza", "amount": 7, "unit": "dilim"}
+  ]
+}
+"""
+    try:
+        active_model = get_best_available_model()
+        completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_text}
+            ],
+            model=active_model,
+            response_format={"type": "json_object"},
+            temperature=0.0
+        )
+        parsed_json = json.loads(completion.choices[0].message.content)
+        data = ParsedMealResponse(**parsed_json)
+        
+        total_cal = 0.0
+        total_pro = 0.0
+        total_carb = 0.0
+        total_fat = 0.0
+        summary_items = []
+
+        for item in data.items:
+            norm_name = normalize_turkish(item.name)
+            matched_key = None
+            
+            # Veritabaninda tam ya da kismi eslesme ara
+            for key in CANONICAL_FOODS.keys():
+                if key == norm_name or key in norm_name or norm_name in key:
+                    matched_key = key
+                    break
+
+            if matched_key:
+                food = CANONICAL_FOODS[matched_key]
+                multiplier = 1.0
+
+                if food["unit_type"] == "piece":
+                    # Adet, dilim veya porsiyon bazli (orn: 7 dilim pizza)
+                    multiplier = item.amount
+                elif food["unit_type"] == "gram_100":
+                    # Gram bazli (orn: 150g pirinc)
+                    grams = item.amount if item.unit in ["gram", "g", "gr"] else (item.amount * 100.0)
+                    multiplier = grams / 100.0
+
+                c = food["cal"] * multiplier
+                p = food["pro"] * multiplier
+                cb = food["carb"] * multiplier
+                f = food["fat"] * multiplier
+
+                total_cal += c
+                total_pro += p
+                total_carb += cb
+                total_fat += f
+                summary_items.append(f"{item.amount:g} {item.unit} {item.name.title()}")
+            else:
+                # Veritabaninda hic yoksa standart guvenli orta deger (100g bazli)
+                grams = item.amount if item.unit in ["gram", "g", "gr"] else (item.amount * 100.0)
+                ratio = grams / 100.0
+                total_cal += 150.0 * ratio
+                total_pro += 5.0 * ratio
+                total_carb += 20.0 * ratio
+                total_fat += 5.0 * ratio
+                summary_items.append(f"{item.amount:g} {item.unit} {item.name.title()}")
+
+        if total_cal > 0:
+            return {
+                "food_name": " + ".join(summary_items),
+                "items_summary": ", ".join(summary_items),
+                "calories": round(total_cal),
+                "protein": round(total_pro, 1),
+                "carbs": round(total_carb, 1),
+                "fat": round(total_fat, 1)
+            }
+    except Exception as e:
+        logger.error(f"MFP Engine Hatasi: {e}")
+        traceback.print_exc()
+
+    return None
     system_prompt = """
 Sen profesyonel bir besin ve diyet parser'isin.
 Gorevin: Kullanicinin girdigi serbest metindeki ogunleri tespit edip YALNIZCA JSON formatinda ParsedMealResponse semasina uygun cikti vermek.
