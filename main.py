@@ -1070,32 +1070,39 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             return allWeeks[currentWeekKey] || [];
         }
         function saveUserWeeklyLogs(username, logs) {
-            const allWeeks = getAllUserWeeks(username);
-            allWeeks[currentWeekKey] = logs;
-            localStorage.setItem("user_weeks_" + username, JSON.stringify(allWeeks));
-        }
+    const allWeeks = getAllUserWeeks(username);
+    allWeeks[currentWeekKey] = logs;
+    safeLocalStorageSet("user_weeks_" + username, JSON.stringify(allWeeks));
+}
 
         function getUserWeeklyNutrition(username) {
             const allWeeks = JSON.parse(localStorage.getItem("user_nutri_weeks_" + username) || "{}");
             return allWeeks[currentWeekKey] || {};
         }
         function saveUserWeeklyNutrition(username, nutriData) {
-            const allWeeks = JSON.parse(localStorage.getItem("user_nutri_weeks_" + username) || "{}");
-            allWeeks[currentWeekKey] = nutriData;
-            localStorage.setItem("user_nutri_weeks_" + username, JSON.stringify(allWeeks));
-        }
-
+    const allWeeks = JSON.parse(localStorage.getItem("user_nutri_weeks_" + username) || "{}");
+    allWeeks[currentWeekKey] = nutriData;
+    safeLocalStorageSet("user_nutri_weeks_" + username, JSON.stringify(allWeeks));
+}
         function getUserProfileData(username) { return JSON.parse(localStorage.getItem("user_profile_" + username) || "{}"); }
-        function saveUserProfileData(username, profData) { localStorage.setItem("user_profile_" + username, JSON.stringify(profData)); }
+        function saveUserProfileData(username, profData) {
+    safeLocalStorageSet("user_profile_" + username, JSON.stringify(profData));
+}
 
         function getUserPhases(username) { return JSON.parse(localStorage.getItem("user_phases_" + username) || "[]"); }
-        function saveUserPhases(username, phases) { localStorage.setItem("user_phases_" + username, JSON.stringify(phases)); }
+        function saveUserPhases(username, phases) {
+    return safeLocalStorageSet("user_phases_" + username, JSON.stringify(phases));
+}
 
         function getUserHealthLogs(username) { return JSON.parse(localStorage.getItem("user_health_" + username) || "{}"); }
-        function saveUserHealthLogs(username, healthLogs) { localStorage.setItem("user_health_" + username, JSON.stringify(healthLogs)); }
+        function saveUserHealthLogs(username, healthLogs) {
+    safeLocalStorageSet("user_health_" + username, JSON.stringify(healthLogs));
+}
 
         function getUserInjuries(username) { return JSON.parse(localStorage.getItem("user_injuries_" + username) || "[]"); }
-        function saveUserInjuries(username, injuries) { localStorage.setItem("user_injuries_" + username, JSON.stringify(injuries)); }
+        function saveUserInjuries(username, injuries) {
+    safeLocalStorageSet("user_injuries_" + username, JSON.stringify(injuries));
+}
 
         let currentUser = JSON.parse(localStorage.getItem("active_user") || "null");
         let isRegisterMode = false;
@@ -1262,42 +1269,56 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         }
 
         function handleAuthSubmit() {
-            const u = document.getElementById("authUsername").value.trim();
-            const p = document.getElementById("authPassword").value.trim();
-            if (!u || !p) return alert("Kullanıcı adı ve şifre gir!");
-
-            const allUsers = getStorageUsers();
-
-            if (isRegisterMode) {
-                if (allUsers[u]) return alert("Bu kullanıcı adı zaten var!");
-                allUsers[u] = p;
-                saveStorageUsers(allUsers);
-                currentUser = { username: u };
-                localStorage.setItem("active_user", JSON.stringify(currentUser));
-                checkAuth();
-            } else {
-                if (!allUsers[u] || allUsers[u] !== p) {
-                    if (Object.keys(allUsers).length === 0 || !allUsers[u]) {
-                        allUsers[u] = p;
-                        saveStorageUsers(allUsers);
-                        currentUser = { username: u };
-                        localStorage.setItem("active_user", JSON.stringify(currentUser));
-                        checkAuth();
-                        return;
-                    }
-                    return alert("Kullanıcı adı veya şifre hatalı!");
-                }
-                currentUser = { username: u };
-                localStorage.setItem("active_user", JSON.stringify(currentUser));
-                checkAuth();
-            }
+    const u = document.getElementById("authUsername").value.trim();
+    const p = document.getElementById("authPassword").value.trim();
+    if (!u || !p) return alert("Kullanıcı adı ve şifre gir!");
+ 
+    const allUsers = getStorageUsers();
+ 
+    if (isRegisterMode) {
+        if (allUsers[u]) return alert("Bu kullanıcı adı zaten var! Giriş yapmayı dene.");
+        allUsers[u] = p;
+        if (!safeLocalStorageSet("app_registered_users", JSON.stringify(allUsers))) return;
+        currentUser = { username: u };
+        localStorage.setItem("active_user", JSON.stringify(currentUser));
+        checkAuth();
+    } else {
+        if (!allUsers[u]) {
+            return alert("Böyle bir kullanıcı bulunamadı. Önce 'Kayıt Ol' ile hesap açmalısın.");
         }
+        if (allUsers[u] !== p) {
+            return alert("Kullanıcı adı veya şifre hatalı!");
+        }
+        currentUser = { username: u };
+        localStorage.setItem("active_user", JSON.stringify(currentUser));
+        checkAuth();
+    }
+}
 
         function logout() {
             localStorage.removeItem("active_user");
             currentUser = null;
             location.reload();
         }
+        function safeLocalStorageSet(key, value) {
+    try {
+        localStorage.setItem(key, value);
+        return true;
+    } catch (e) {
+        if (e.name === "QuotaExceededError" || e.code === 22 || e.code === 1014) {
+            alert(
+                "⚠️ Depolama alanı doldu kral!\n\n" +
+                "Tarayıcın için ayrılan alan (fotoğraflar + veriler) limitine ulaştı. " +
+                "Kayıt gerçekleşmedi.\n\n" +
+                "Çözüm: Profil sekmesinden eski/gereksiz dönem fotoğraflarını sil, " +
+                "sonra tekrar dene."
+            );
+        } else {
+            alert("Kayıt sırasında beklenmeyen bir hata oluştu: " + e.message);
+        }
+        return false;
+    }
+}
 
         // ================= SAKATLIK & REHABILITASYON =================
         function saveInjuryLog() {
@@ -1661,20 +1682,27 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         }
 
         async function handleUniversalPhotoUpload(event) {
-            const file = event.target.files[0];
-            if (!file || !pendingUploadSlot) return;
-
-            const compressedBase64 = await compressImage(file, 800, 0.7);
-            const phase = userPhases.find(p => p.id === activePhaseId);
-            if (phase) {
-                if (!phase.photos) phase.photos = {};
-                phase.photos[pendingUploadSlot] = compressedBase64;
-                saveUserPhases(currentUser.username, userPhases);
-                renderActivePhasePhotos();
-            }
-            pendingUploadSlot = null;
-            document.getElementById("universalPhotoInput").value = "";
+    const file = event.target.files[0];
+    if (!file || !pendingUploadSlot) return;
+ 
+    const compressedBase64 = await compressImage(file, 640, 0.55);
+    const phase = userPhases.find(p => p.id === activePhaseId);
+    if (phase) {
+        if (!phase.photos) phase.photos = {};
+        const previousPhoto = phase.photos[pendingUploadSlot];
+        phase.photos[pendingUploadSlot] = compressedBase64;
+ 
+        const success = saveUserPhases(currentUser.username, userPhases);
+        if (!success) {
+            // Kayit basarisiz oldu, degisikligi geri al
+            phase.photos[pendingUploadSlot] = previousPhoto;
+        } else {
+            renderActivePhasePhotos();
         }
+    }
+    pendingUploadSlot = null;
+    document.getElementById("universalPhotoInput").value = "";
+}
 
         function removePhoto(event, slotKey) {
             event.stopPropagation();
