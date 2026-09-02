@@ -259,7 +259,27 @@ CANONICAL_FOODS = {
     # -- Takviye --
     "protein tozu": {"cal": 400, "pro": 80.0, "carb": 7.0, "fat": 5.0, "piece_g": 30},
     "whey": {"cal": 400, "pro": 80.0, "carb": 7.0, "fat": 5.0, "piece_g": 30},
+
+    # -- PAKETLİ / MARKALI ÜRÜNLER (cig/pismis kavrami yok, hazir tuketim
+    # halindeki gercek besin degerleri; "piece_g" = tipik paket/kutu boyutu) --
+    "redbull": {"cal": 45, "pro": 0.0, "carb": 11.0, "fat": 0.0, "piece_g": 250},
+    "red bull": {"cal": 45, "pro": 0.0, "carb": 11.0, "fat": 0.0, "piece_g": 250},
+    "enerji icecegi": {"cal": 45, "pro": 0.0, "carb": 11.0, "fat": 0.0, "piece_g": 250},
+    "kola": {"cal": 42, "pro": 0.0, "carb": 10.6, "fat": 0.0, "piece_g": 330},
+    "cola": {"cal": 42, "pro": 0.0, "carb": 10.6, "fat": 0.0, "piece_g": 330},
+    "gazoz": {"cal": 41, "pro": 0.0, "carb": 10.5, "fat": 0.0, "piece_g": 330},
+    "ayran": {"cal": 34, "pro": 1.7, "carb": 2.3, "fat": 1.6, "piece_g": 250},
+    "cips": {"cal": 536, "pro": 6.6, "carb": 53.0, "fat": 34.0, "piece_g": None},
+    "cikolata": {"cal": 545, "pro": 4.9, "carb": 61.0, "fat": 31.0, "piece_g": None},
+    "protein bar": {"cal": 350, "pro": 30.0, "carb": 35.0, "fat": 10.0, "piece_g": 60},
+    "biskuvi": {"cal": 480, "pro": 6.5, "carb": 68.0, "fat": 20.0, "piece_g": None},
 }
+
+# CANONICAL_FOODS icinde "cig/kuru" agirlik bazli olan (grams -> ratio/100 ile
+# hesaplanan) staple gida anahtarlari. Bunlarin disindaki her sey paketli/hazir
+# tuketim urunu sayilir; asagidaki eski genel varsayilan artik SADECE gercekten
+# hem canonical'da hem LLM'in kendi marka bilgisinde eslesme bulunamayan,
+# nadir/bilinmeyen kalemler icin devreye girer (bkz. parse_meal_with_llm).
 
 _SORTED_FOOD_KEYS = sorted(CANONICAL_FOODS.keys(), key=lambda k: -len(k))
 
@@ -274,17 +294,33 @@ def match_canonical_food(norm_name: str) -> Optional[Dict[str, Any]]:
 
 
 class ParsedFoodItem(BaseModel):
-    name: str = Field(description="Besinin turkce yalin adi (orn: sahanda yumurta, pirinc, tam bugday ekmegi, tavuk gogsu)")
+    name: str = Field(description="Besinin turkce yalin adi (orn: sahanda yumurta, pirinc, tam bugday ekmegi, tavuk gogsu, Red Bull, kola)")
     amount: float = Field(description="Kullanicinin belirttigi sayisal miktar (orn: 1, 2, 150, 0.5) - sadece bilgi amacli")
-    unit: str = Field(description="Kullanicinin belirttigi birim: 'adet', 'gram', 'dilim', 'scoop', 'kasik', 'kase', 'porsiyon'")
+    unit: str = Field(description="Kullanicinin belirttigi birim: 'adet', 'gram', 'dilim', 'scoop', 'kasik', 'kase', 'porsiyon', 'kutu', 'sise'")
     estimated_grams: float = Field(
         description=(
-            "ZORUNLU: Bu kalemin CIG (pisirilmeden ONCEKI) TOPLAM agirligi gram olarak. "
+            "ZORUNLU: Bu kalemin CIG (pisirilmeden ONCEKI) TOPLAM agirligi/hacmi gram olarak. "
             "Kullanici pismis bir porsiyon tarif etse bile (orn '1 kase pilav'), bunu CIG pirince "
             "cevirerek yaz (pismis pilav agirligini ~2.5-3'e bolerek cig karsiligi bul). "
-            "Ekmek, yumurta, meyve gibi zaten 'son hal'de tuketilen urunlerde direkt tuketilen agirligi yaz."
+            "Ekmek, yumurta, meyve gibi zaten 'son hal'de tuketilen urunlerde direkt tuketilen agirligi yaz. "
+            "Paketli/markali icecek-atistirmalik ise (Red Bull, kola, cips vb.) kutu/paket agirligini (ml=g kabul et) yaz."
         )
     )
+    is_packaged_or_branded: bool = Field(
+        default=False,
+        description=(
+            "true = bu kalem hazir/paketli/markali bir urun (enerji icecegi, gazli icecek, cips, cikolata, "
+            "protein bari, fast food, restoran yemegi gibi) VE 'cig agirlik' kavrami bu urune uygulanamaz. "
+            "false = ev yemegi / cig ham malzeme (et, tahil, sebze, yumurta, ekmek gibi)."
+        )
+    )
+    branded_calories: Optional[float] = Field(
+        default=None,
+        description="SADECE is_packaged_or_branded=true ise doldur: kullanicinin belirttigi TOPLAM miktar icin bilinen gercek kalori (kcal). Ornek: 250ml Red Bull = 113 kcal."
+    )
+    branded_protein: Optional[float] = Field(default=None, description="SADECE is_packaged_or_branded=true ise: TOPLAM protein (gram). Cogu icecek/atistirmalikta 0'a yakindir, uydurma.")
+    branded_carbs: Optional[float] = Field(default=None, description="SADECE is_packaged_or_branded=true ise: TOPLAM karbonhidrat (gram).")
+    branded_fat: Optional[float] = Field(default=None, description="SADECE is_packaged_or_branded=true ise: TOPLAM yag (gram).")
 
 
 class ParsedMealResponse(BaseModel):
@@ -307,36 +343,44 @@ def parse_meal_with_llm(user_text: str) -> Optional[Dict[str, Any]]:
         return None
 
     system_prompt = """
-Sen MyFitnessPal tarzi calisan, cok titiz bir Turk mutfagi beslenme parser'isin.
-Gorevin: Kullanicinin girdigi serbest metindeki HER besini tespit edip YALNIZCA JSON formatinda
-ParsedMealResponse semasina uygun cikti vermek.
+Sen MyFitnessPal tarzi calisan, cok titiz bir beslenme parser'isin. Hem ev yemegi/cig malzeme
+takibi hem de paketli/markali urunleri (enerji icecegi, gazli icecek, cips, cikolata, fast food vb.)
+dogru ayirt etmen gerekiyor. Gorevin: kullanicinin girdigi serbest metindeki HER besini tespit edip
+YALNIZCA JSON formatinda ParsedMealResponse semasina uygun cikti vermek.
 
-EN ONEMLI KURAL - GRAM TAHMINI (CIG AGIRLIK BAZLI CALISIYORUZ):
-Her kalem icin estimated_grams alanini MUTLAKA doldur. Bu deger besinin CIG (pisirilmeden onceki,
-paketten cikan) TOPLAM agirligidir.
+IKI FARKLI KATEGORI VAR, HER KALEM ICIN DOGRU OLANI SEC:
 
-Kullanici PISMIS bir porsiyon tarif ederse (orn "1 kase pilav", "1 porsiyon makarna"), bunu asagidaki
-donusum katsayilariyla CIG karsiligina cevir (pismis agirligi katsayiya bol):
+== KATEGORI A: EV YEMEGI / CIG HAM MALZEME (is_packaged_or_branded=false) ==
+Pirinc, bulgur, makarna, yulaf, tavuk, kirmizi et, yumurta, ekmek, yogurt, peynir, meyve, sebze gibi
+seyler. Bu kalemlerde estimated_grams (CIG agirlik) alanini doldurman yeterli, branded_* alanlarini
+BOS BIRAK (null). Donusum katsayilari:
 - Pirinc: pismis agirlik / 2.8  (orn 1 kase ~200g pismis pilav -> ~70g cig pirinc)
 - Bulgur: pismis agirlik / 2.5
 - Makarna: pismis agirlik / 2.2
 - Yulaf (sutle/suyla lapasi): pismis agirlik / 2.0
+Standart porsiyonlar: 1 adet yumurta=50g, 1 dilim ekmek=30g, 1 olcek protein tozu=30g,
+1 yemek kasigi zeytinyagi/fistik ezmesi=14g, 1 orta boy cig tavuk gogsu=165g, 1 kofte(cig)=60g.
 
-Diger standart porsiyon karsiliklari (cig/tuketilen hal, direkt kullan):
-- 1 adet haslanmis/sahanda yumurta = 50g
-- 1 dilim ekmek = 30g (ekmek zaten son hal, cevirme yapma)
-- 1 olcek (scoop) protein tozu = 30g
-- 1 yemek kasigi zeytinyagi/fistik ezmesi = 14g
-- 1 orta boy cig tavuk gogsu (pisirilmeden once) = 165g
-- 1 kofte (cig harc) = 60g
+== KATEGORI B: PAKETLI / MARKALI URUN (is_packaged_or_branded=true) ==
+Enerji icecegi (Red Bull vb.), kola/gazoz, cips, cikolata, bisküvi, protein bari, fast food,
+restoran yemegi, hazir atistirmalik gibi seyler. Bu urunlerde "cig agirlik" kavrami YOKTUR ve
+UYDURMA GENEL DEGER KULLANMA. Bunun yerine SENIN GERCEK DUNYA BILGINE dayanarak, urunun bilinen
+gercek besin degerlerini branded_calories/branded_protein/branded_carbs/branded_fat alanlarina
+TOPLAM miktar icin yaz. Ornekler (referans al):
+- 250ml Red Bull (1 kutu) ≈ 113 kcal, 0g protein, 27-28g karbonhidrat, 0g yag
+- 330ml kola (1 kutu) ≈ 139 kcal, 0g protein, 35g karbonhidrat, 0g yag
+- 1 orta boy cikolata (50g) ≈ 270 kcal, 2.5g protein, 30g karbonhidrat, 15g yag
+- 1 paket cips (30g) ≈ 160 kcal, 2g protein, 16g karbonhidrat, 10g yag
+ONEMLI: enerji icecekleri ve gazli icecekler pratikte 0g PROTEIN icerir, protein UYDURMA.
 
 KURALLAR:
-1. Gercekci, olculu gram degerleri ver. Asiri buyuk (orn 2000g) veya sifir deger UYDURMA.
+1. Gercekci, olculu degerler ver. Asiri buyuk veya sifir deger UYDURMA.
 2. Ayni mesajdaki her ayri besin icin ayri bir item olustur.
-3. Cikti formati kesinlikle su JSON seklinde olmalidir:
+3. Cikti formati kesinlikle su JSON seklinde olmalidir (Kategori A ve B ornekleri):
 {
   "items": [
-    {"name": "sahanda yumurta", "amount": 1, "unit": "adet", "estimated_grams": 50}
+    {"name": "sahanda yumurta", "amount": 1, "unit": "adet", "estimated_grams": 50, "is_packaged_or_branded": false},
+    {"name": "Red Bull", "amount": 1, "unit": "kutu", "estimated_grams": 250, "is_packaged_or_branded": true, "branded_calories": 113, "branded_protein": 0, "branded_carbs": 28, "branded_fat": 0}
   ]
 }
 """
@@ -364,22 +408,50 @@ KURALLAR:
             norm_name = normalize_turkish(item.name)
             matched = match_canonical_food(norm_name)
 
-            grams = item.estimated_grams if item.estimated_grams and item.estimated_grams > 0 else 100.0
-            grams = max(MIN_ITEM_GRAMS, min(MAX_ITEM_GRAMS, grams))
-            ratio = grams / 100.0
+            has_branded_data = item.is_packaged_or_branded and any(
+                v is not None for v in [item.branded_calories, item.branded_protein, item.branded_carbs, item.branded_fat]
+            )
 
             if matched:
-                total_cal += matched["cal"] * ratio
-                total_pro += matched["pro"] * ratio
-                total_carb += matched["carb"] * ratio
-                total_fat += matched["fat"] * ratio
+                # Yerel veritabanindaki deterministik deger her zaman en guvenilir kaynak
+                grams = item.estimated_grams if item.estimated_grams and item.estimated_grams > 0 else 100.0
+                grams = max(MIN_ITEM_GRAMS, min(MAX_ITEM_GRAMS, grams))
+                ratio = grams / 100.0
+                cal = matched["cal"] * ratio
+                pro = matched["pro"] * ratio
+                carb = matched["carb"] * ratio
+                fat = matched["fat"] * ratio
+                total_cal += cal
+                total_pro += pro
+                total_carb += carb
+                total_fat += fat
+                summary_items.append(f"{item.amount:g} {item.unit} {item.name.title()} (~{round(grams)}g)")
+
+            elif has_branded_data:
+                # Markali/paketli urun: LLM'in kendi urun bilgisine guven, "cig agirlik"
+                # varsayimini uygulama, genel ortalama kullanma
+                cal = max(0.0, item.branded_calories or 0.0)
+                pro = max(0.0, item.branded_protein or 0.0)
+                carb = max(0.0, item.branded_carbs or 0.0)
+                fat = max(0.0, item.branded_fat or 0.0)
+                total_cal += cal
+                total_pro += pro
+                total_carb += carb
+                total_fat += fat
+                grams_disp = item.estimated_grams if item.estimated_grams and item.estimated_grams > 0 else None
+                grams_txt = f" (~{round(grams_disp)}ml/g)" if grams_disp else ""
+                summary_items.append(f"{item.amount:g} {item.unit} {item.name.title()}{grams_txt}")
+
             else:
+                # Ne canonical eslesme ne LLM marka verisi var: son care genel varsayim
+                grams = item.estimated_grams if item.estimated_grams and item.estimated_grams > 0 else 100.0
+                grams = max(MIN_ITEM_GRAMS, min(MAX_ITEM_GRAMS, grams))
+                ratio = grams / 100.0
                 total_cal += 180.0 * ratio
                 total_pro += 8.0 * ratio
                 total_carb += 20.0 * ratio
                 total_fat += 6.0 * ratio
-
-            summary_items.append(f"{item.amount:g} {item.unit} {item.name.title()} (~{round(grams)}g cig)")
+                summary_items.append(f"{item.amount:g} {item.unit} {item.name.title()} (~{round(grams)}g, tahmini)")
 
         if total_cal > 0:
             return {
@@ -2895,6 +2967,51 @@ def nutrition_dialogue(data: NutritionChatInput):
     }
 
 
+def _coerce_int(value: Any, default: int = 3) -> int:
+    """LLM 'sets' alanina bazen '3-4', '3 set', 3.0 gibi seyler dondurebiliyor.
+    Pydantic'e gitmeden once temizleyip guvenli bir int'e ceviriyoruz."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(round(value))
+    if isinstance(value, str):
+        match = re.search(r'\d+', value)
+        if match:
+            return int(match.group())
+    return default
+
+
+def _sanitize_program_json(parsed_json: Dict[str, Any]) -> Dict[str, Any]:
+    """LLM ciktisindaki kucuk format sapmalarini (sets stringi, eksik note,
+    reps'in sayi olarak gelmesi vb.) pydantic validasyonundan ONCE duzeltir.
+    Boylece kucuk bir format hatasi yuzunden tum istek patlamiyor."""
+    days = parsed_json.get("days")
+    if not isinstance(days, list):
+        return parsed_json
+
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        day["day_name"] = str(day.get("day_name") or "Gün")
+        day["focus"] = str(day.get("focus") or "")
+        exercises = day.get("exercises")
+        if not isinstance(exercises, list):
+            day["exercises"] = []
+            continue
+        for ex in exercises:
+            if not isinstance(ex, dict):
+                continue
+            ex["name"] = str(ex.get("name") or "Hareket")
+            ex["sets"] = _coerce_int(ex.get("sets"), default=3)
+            ex["reps"] = str(ex.get("reps") if ex.get("reps") is not None else "8-10")
+            note_val = ex.get("note")
+            ex["note"] = "" if note_val is None else str(note_val)
+
+    return parsed_json
+
+
 class ProgramExercise(BaseModel):
     name: str = Field(description="Hareketin adi (orn: Bench Press, Squat, Lat Pulldown)")
     sets: int = Field(description="Set sayisi, orn 3, 4, 5")
@@ -2919,9 +3036,10 @@ class GenerateProgramInput(BaseModel):
     num_days: int = 5
 
 
-def generate_workout_program_with_llm(payload: GenerateProgramInput) -> Optional[Dict[str, Any]]:
+def generate_workout_program_with_llm(payload: GenerateProgramInput):
+    """Program uretir. (program_dict, None) basarili; (None, hata_mesaji) basarisiz doner."""
     if not client:
-        return None
+        return None, "GROQ_API_KEY bulunamadı."
 
     prof = payload.profile_data or {}
     injuries = payload.active_injuries or []
@@ -2966,27 +3084,45 @@ KURALLAR:
 5. AKTİF SAKATLIK VARSA O BÖLGEYİ ZORLAYAN HAREKETLERİ KESİNLİKLE PROGRAMA KOYMA, güvenli alternatifleri seç ve note alanına kısa uyarı yaz.
 6. Bugünkü toparlanma skoru düşükse (uyku az, HRV düşük, nabız yüksek gibi belirtiler varsa) o günün hacmini hafif azalt ve note'a belirt.
 7. Bilgi bankasında ilgili bir pasaj varsa (split mantığı, hacim önerisi, sakatlık protokolü vs.) program tasarımına doğal şekilde yansıt.
-8. ASLA açıklama, markdown, yorum ekleme. Sadece saf JSON döndür.
+8. "sets" alanı SADECE düz bir tam sayı olmalı (örn 4), ASLA '3-4' gibi bir aralık veya metin yazma. Aralık gerekiyorsa onu "reps" alanına yaz.
+9. "note" alanı olmayan hareketlerde boş string "" kullan, ASLA null/None döndürme.
+10. ASLA açıklama, markdown, yorum ekleme. Sadece saf JSON döndür.
 """
 
-    try:
-        active_model = get_best_available_model()
-        completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"{num_days} günlük programımı oluştur."}
-            ],
-            model=active_model,
-            response_format={"type": "json_object"},
-            temperature=0.4
-        )
-        parsed_json = json.loads(completion.choices[0].message.content)
-        data = WorkoutProgramResponse(**parsed_json)
-        return data.model_dump()
-    except Exception as e:
-        logger.error(f"LLM Program Uretim Hatasi: {e}")
-        traceback.print_exc()
-        return None
+    last_error = "Bilinmeyen hata"
+    max_attempts = 2
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            active_model = get_best_available_model()
+            completion = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"{num_days} günlük programımı oluştur."}
+                ],
+                model=active_model,
+                response_format={"type": "json_object"},
+                temperature=0.4 if attempt == 1 else 0.15  # tekrar denemede daha tutarli/duz cikti icin sicakligi dusur
+            )
+            raw_content = completion.choices[0].message.content
+            parsed_json = json.loads(raw_content)
+            parsed_json = _sanitize_program_json(parsed_json)
+            data = WorkoutProgramResponse(**parsed_json)
+
+            if not data.days:
+                raise ValueError("LLM boş bir gün listesi döndürdü.")
+            if any(len(d.exercises) == 0 for d in data.days):
+                raise ValueError("LLM en az bir günü hareketsiz bıraktı.")
+
+            return data.model_dump(), None
+
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"Program üretim denemesi {attempt}/{max_attempts} başarısız: {e}")
+
+    logger.error(f"LLM Program Uretim Hatasi (tum denemeler basarisiz): {last_error}")
+    traceback.print_exc()
+    return None, last_error
 
 
 @app.post("/generate-program")
@@ -2998,12 +3134,13 @@ def generate_program(payload: GenerateProgramInput):
             "error_detail": "GROQ_API_KEY bulunamadı! Lütfen sunucu ortam değişkenine veya .env dosyasına ekle."
         }
 
-    program = generate_workout_program_with_llm(payload)
+    program, error_detail = generate_workout_program_with_llm(payload)
     if not program:
         return {
             "program": None,
             "is_error": True,
-            "error_detail": "AI programı oluştururken bir hata oluştu. Lütfen tekrar dene."
+            "error_detail": f"AI programı oluştururken bir hata oluştu: {error_detail}" if error_detail
+                             else "AI programı oluştururken bir hata oluştu. Lütfen tekrar dene."
         }
 
     return {"program": program, "is_error": False}
