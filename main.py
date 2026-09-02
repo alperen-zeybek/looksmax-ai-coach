@@ -62,7 +62,7 @@ def get_best_available_model() -> str:
     
     return "llama-3.1-8b-instant"
 
-# ================= 1. NUTRITION ENGINE (LLM + DETERMINISTIK HESAPLAMA) =================
+# ================= 1. NUTRITION ENGINE (LLM + DETERMINISTIK) =================
 CANONICAL_FOODS = {
     "yumurta": {"unit_type": "piece", "base_cal": 72.0, "base_pro": 6.3, "base_carb": 0.4, "base_fat": 4.8},
     "haslanmis yumurta": {"unit_type": "piece", "base_cal": 72.0, "base_pro": 6.3, "base_carb": 0.4, "base_fat": 4.8},
@@ -150,7 +150,6 @@ KURALLAR:
             norm_name = normalize_turkish(item.name)
             matched = None
             
-            # Tam ya da yakin eslesme ara
             for key, val in CANONICAL_FOODS.items():
                 if key == norm_name or key in norm_name or norm_name in key:
                     matched = val
@@ -231,6 +230,7 @@ class ChatInput(BaseModel):
     workout_summary: Optional[str] = ""
     user_profile_summary: Optional[str] = ""
     health_summary: Optional[str] = ""
+    injuries_summary: Optional[str] = ""
     history: List[dict] = []
 
 class NutritionChatInput(BaseModel):
@@ -255,6 +255,7 @@ class CoachAuditInput(BaseModel):
     recent_workouts: Optional[list] = []
     recent_nutrition: Optional[dict] = {}
     recent_health: Optional[dict] = {}
+    active_injuries: Optional[list] = []
 
 HTML_INTERFACE = r"""<!DOCTYPE html>
 <html lang="tr">
@@ -311,7 +312,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .panel-header { font-size: 0.95rem; font-weight: 800; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
         .badge-cyan { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
         
-        .overload-col-left { width: 45%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
+        .overload-col-left { width: 45%; display: flex; flex-direction: column; gap: 16px; height: 100%; overflow-y: auto; padding-right: 4px; }
         .overload-col-right { width: 55%; display: flex; flex-direction: column; gap: 16px; height: 100%; }
 
         .input-form { display: flex; flex-direction: column; gap: 10px; }
@@ -451,7 +452,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
 
             <div class="modal-step">
-                <b>💡 Otomatikleştirme:</b> Kestirmeler $\rightarrow$ Otomasyon sekmesinden <i>"Sabah Alarmı Durdurulduğunda"</i> bu kestirmeyi seçerseniz her sabah verileriniz panele otomatik yüklenir.
+                <b>💡 Otomatikleştirme:</b> Kestirmeler $\rightarrow$ Otomasyon sekmesinden <i>"Sabah Alarmı Durdurulduğunda"</i> bu kestirmeyi seçerseniz verileriniz her sabah otomatik panele düşer.
             </div>
 
             <button class="btn-log" onclick="toggleGuideModal(false)" style="margin-top:0;">Anladım Kral 🦍</button>
@@ -467,7 +468,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             
             <div id="auditLoadingState" style="text-align:center; padding:30px; display:none;">
                 <div style="font-size:2.2rem; margin-bottom:8px;">🦍</div>
-                <div style="font-weight:700; color:#f59e0b;">Koç tüm antrenman, makro, uyku ve vücut verilerini denetliyor...</div>
+                <div style="font-weight:700; color:#f59e0b;">Koç tüm antrenman, sakatlık, makro ve uyku verilerini denetliyor...</div>
             </div>
 
             <div class="audit-content-area" id="auditContentText">
@@ -496,14 +497,14 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         <div class="view-panel active" id="hubView">
             <div class="hub-title">
                 <h1>Looksmax HUB</h1>
-                <p>Hipertrofi, beslenme, biyometrik toparlanma ve fizik takibini tek yerden yönet.</p>
+                <p>Hipertrofi, beslenme, biyometrik toparlanma, rehabilitasyon ve fizik takibi.</p>
             </div>
             <div class="hub-grid">
                 <div class="hub-card" onclick="openView('coach')">
                     <div>
                         <div class="card-icon">🤖</div>
                         <div class="card-heading">AI Koç & Vision</div>
-                        <div class="card-desc">Anlayışlı ama tavizsiz hipertrofi koçluğu, form kontrolü ve anlık taktikler.</div>
+                        <div class="card-desc">Sakatlık duyarlı hipertrofi koçluğu, form kontrolü ve anlık taktikler.</div>
                     </div>
                     <div class="card-action">Koçla Konuş →</div>
                 </div>
@@ -538,8 +539,8 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 <div class="hub-card" onclick="openView('health')">
                     <div>
                         <div class="card-icon">🫀</div>
-                        <div class="card-heading">Recovery & Health</div>
-                        <div class="card-desc">Apple Watch ile HRV, uyku ve nabız analizi. Günlük CNS toparlanma puanı.</div>
+                        <div class="card-heading">Recovery & Sakatlık</div>
+                        <div class="card-desc">Apple Watch ile HRV, uyku, nabız ve Aktif Sakatlık / Rehabilitasyon takibi.</div>
                     </div>
                     <div class="card-action">Sağlık Takip →</div>
                 </div>
@@ -549,7 +550,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
-                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload başantrenörünüm. Sorunu sor veya sağ üstteki <b>🧠 Koçun Raporu</b> butonuna basıp haftalık genel karneni al.</div>
+                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload başantrenörünüm. Sakatlığın varsa asla üstüne körü körüne gitmem; rehabilitasyon hareketlerini yazarım, toparlanman iyiyse hakkını vermeni sağlarım. Sorunu sor veya sağ üstteki <b>🧠 Koçun Raporu</b> butonuna bas.</div>
                 </div>
 
                 <div class="preview-box" id="previewBox">
@@ -825,6 +826,35 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     </div>
                 </div>
 
+                <!-- AKTIF SAKATLIK & REHABILITASYON PANELI -->
+                <div class="panel-card" style="border: 1px solid rgba(239, 68, 68, 0.4);">
+                    <div class="panel-header">
+                        <span style="color:#ef4444;">🩹 Aktif Sakatlık & Rehabilitasyon</span>
+                        <span class="badge-cyan" id="activeInjuryCountBadge" style="border-color:#ef4444; color:#ef4444;">0 Aktif</span>
+                    </div>
+                    <div class="input-form">
+                        <div class="form-grid-2x2">
+                            <select id="injuryArea">
+                                <option value="Omuz (Rotator Cuff / Ön Omuz)">Omuz (Rotator / Ön Omuz)</option>
+                                <option value="Dirsek (Tendinit / Medial-Lateral)">Dirsek (Tendinit)</option>
+                                <option value="Bel (Lower Back / Disk)">Bel (Lower Back)</option>
+                                <option value="Diz (Patellar / Menisküs)">Diz (Patellar / Eklem)</option>
+                                <option value="Bilek (Wrist)">Bilek (Wrist)</option>
+                                <option value="Göğüs (Pec Bağlantısı)">Göğüs (Pec Bağlantısı)</option>
+                                <option value="Diğer">Diğer Bölge</option>
+                            </select>
+                            <select id="injurySeverity">
+                                <option value="Hafif Sızı (RIR 2-3 Koru)">Hafif Sızı (1-3 / 10)</option>
+                                <option value="Orta Derece Rahatsızlık (Hareketi Değiştir)">Orta Rahatsızlık (4-6 / 10)</option>
+                                <option value="Ciddi Ağrı (O Bölgeyi Tamamen Dinlendir)">Ciddi Ağrı (7-10 / 10)</option>
+                            </select>
+                        </div>
+                        <input type="text" id="injuryDetails" placeholder="Tetikleyen hareket veya detay (Örn: 30kg Dumbbell Press'te batma)" />
+                        <button class="btn-log" onclick="saveInjuryLog()" style="background:#ef4444; color:#fff;">Sakatlığı Kaydet & Koça Bildir</button>
+                    </div>
+                    <div class="history-list" id="injuryListDisplay" style="max-height:160px; margin-top:4px;"></div>
+                </div>
+
                 <div class="panel-card">
                     <div class="panel-header">
                         <span>📲 Günlük Biyometrik Veri Girişi</span>
@@ -970,6 +1000,9 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         function getUserHealthLogs(username) { return JSON.parse(localStorage.getItem("user_health_" + username) || "{}"); }
         function saveUserHealthLogs(username, healthLogs) { localStorage.setItem("user_health_" + username, JSON.stringify(healthLogs)); }
 
+        function getUserInjuries(username) { return JSON.parse(localStorage.getItem("user_injuries_" + username) || "[]"); }
+        function saveUserInjuries(username, injuries) { localStorage.setItem("user_injuries_" + username, JSON.stringify(injuries)); }
+
         let currentUser = JSON.parse(localStorage.getItem("active_user") || "null");
         let isRegisterMode = false;
         let weeklyLogs = [];
@@ -1056,13 +1089,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             const wLogs = getUserWeeklyLogs(currentUser.username) || [];
             const nutri = getUserWeeklyNutrition(currentUser.username) || {};
             const health = getUserHealthLogs(currentUser.username) || {};
+            const injuries = getUserInjuries(currentUser.username) || [];
 
             const hasProfile = prof.weight || prof.height;
             const hasWorkouts = Array.isArray(wLogs) && wLogs.length > 0;
             const hasNutri = Object.keys(nutri).length > 0;
             const hasHealth = Object.keys(health).length > 0;
+            const hasInjuries = injuries.length > 0;
 
-            if (!hasProfile && !hasWorkouts && !hasNutri && !hasHealth) {
+            if (!hasProfile && !hasWorkouts && !hasNutri && !hasHealth && !hasInjuries) {
                 loadEl.style.display = "none";
                 textEl.style.display = "block";
                 textEl.innerHTML = "<b>Henüz yeterli veri girişi yapmadın kral.</b><br><br>Sana özel haftalık karne çıkarabilmem için:<br>• <b>Profil</b> bilgilerini kaydetmeli,<br>• <b>Overload</b> sekmesinden birkaç set veya <b>Beslenme</b> öğünü girmelisin.<br><br>Verilerini girdikten sonra tekrar dene!";
@@ -1077,7 +1112,8 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         profile_data: prof,
                         recent_workouts: wLogs,
                         recent_nutrition: nutri,
-                        recent_health: health
+                        recent_health: health,
+                        active_injuries: injuries
                     })
                 });
                 const data = await res.json();
@@ -1105,7 +1141,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (viewName === 'overload') setTimeout(updateChart, 150);
             if (viewName === 'nutrition') { renderNutriDayTabs(); renderSelectedDayNutrition(); }
             if (viewName === 'profile') { loadUserProfileUI(); loadUserPhasesUI(); }
-            if (viewName === 'health') { loadHealthUI(); }
+            if (viewName === 'health') { loadHealthUI(); renderInjuriesUI(); }
         }
 
         function checkAuth() {
@@ -1120,6 +1156,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 loadUserProfileUI();
                 loadUserPhasesUI();
                 loadHealthUI();
+                renderInjuriesUI();
             }
         }
 
@@ -1166,6 +1203,61 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             localStorage.removeItem("active_user");
             currentUser = null;
             location.reload();
+        }
+
+        // ================= SAKATLIK & REHABILITASYON =================
+        function saveInjuryLog() {
+            if (!currentUser) return;
+            const area = document.getElementById("injuryArea").value;
+            const severity = document.getElementById("injurySeverity").value;
+            const details = document.getElementById("injuryDetails").value.trim();
+
+            const injuries = getUserInjuries(currentUser.username);
+            injuries.unshift({
+                id: Date.now(),
+                area: area,
+                severity: severity,
+                details: details || "Detay belirtilmedi",
+                date: todayKey
+            });
+            saveUserInjuries(currentUser.username, injuries);
+            document.getElementById("injuryDetails").value = "";
+            renderInjuriesUI();
+            alert("Sakatlık kaydı alındı! AI Koç antrenman ve önerilerini bu kısıtlamaya göre uyarlayacak kral.");
+        }
+
+        function resolveInjury(id) {
+            let injuries = getUserInjuries(currentUser.username);
+            injuries = injuries.filter(inj => inj.id !== id);
+            saveUserInjuries(currentUser.username, injuries);
+            renderInjuriesUI();
+        }
+
+        function renderInjuriesUI() {
+            const list = document.getElementById("injuryListDisplay");
+            const badge = document.getElementById("activeInjuryCountBadge");
+            if (!list || !currentUser) return;
+            
+            const injuries = getUserInjuries(currentUser.username);
+            badge.innerText = `${injuries.length} Aktif`;
+            list.innerHTML = "";
+
+            if (injuries.length === 0) {
+                list.innerHTML = `<div style="font-size:0.75rem; color:#6b7280; text-align:center; padding:10px;">Aktif sakatlık kaydı yok. Vücut sağlam! 🦍</div>`;
+                return;
+            }
+
+            injuries.forEach(inj => {
+                list.innerHTML += `
+                    <div class="log-item" style="border-left: 3px solid #ef4444; flex-direction:column; align-items:flex-start; gap:4px;">
+                        <div style="display:flex; justify-content:space-between; width:100%; align-items:center;">
+                            <span style="font-weight:700; color:#ef4444; font-size:0.8rem;">🚨 ${inj.area}</span>
+                            <button onclick="resolveInjury(${inj.id})" style="color:#10b981; font-weight:700; font-size:0.75rem;">İyileşti ✓</button>
+                        </div>
+                        <div style="font-size:0.75rem; color:#d1d5db;">${inj.details} <span style="color:#9ca3af;">(${inj.severity})</span></div>
+                    </div>
+                `;
+            });
         }
 
         // ================= HEALTH & RECOVERY =================
@@ -1855,6 +1947,9 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             const todayH = userHealthLogs[todayKey];
             const healthSummary = todayH ? `Uyku: ${todayH.sleep_hours}s, HRV: ${todayH.hrv_ms}ms, Dinlenik Nabız: ${todayH.resting_hr}bpm` : "Bugünkü sağlık/toparlanma verisi henüz girilmedi.";
 
+            const injuries = getUserInjuries(currentUser.username);
+            const injuriesSummary = injuries.length > 0 ? injuries.map(i => `${i.area} (${i.severity}: ${i.details})`).join(" | ") : "Aktif sakatlık yok.";
+
             try {
                 const response = await fetch("/chat", {
                     method: "POST",
@@ -1864,6 +1959,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         workout_summary: lastSets,
                         user_profile_summary: profSummary,
                         health_summary: healthSummary,
+                        injuries_summary: injuriesSummary,
                         image_base64: currentImg,
                         history: conversationHistory
                     })
@@ -2000,6 +2096,7 @@ def full_coach_audit(payload: CoachAuditInput):
     workouts = payload.recent_workouts or []
     nutrition = payload.recent_nutrition or {}
     health = payload.recent_health or {}
+    injuries = payload.active_injuries or []
 
     audit_prompt = f"""
 Sen hem halden anlayan bilge bir mentor, hem de sıfır bahane kabul eden sert ve disiplinli bir 'Looksmax & Hipertrofi Başantrenörü'sün.
@@ -2008,10 +2105,15 @@ Kullanıcının TÜM verileri:
 2. SETLER: {json.dumps(workouts, ensure_ascii=False) if workouts else "GİRİLMEDİ"}
 3. BESLENME: {json.dumps(nutrition, ensure_ascii=False) if nutrition else "GİRİLMEDİ"}
 4. SAĞLIK: {json.dumps(health, ensure_ascii=False) if health else "GİRİLMEDİ"}
+5. AKTİF SAKATLIKLAR & AĞRILAR: {json.dumps(injuries, ensure_ascii=False) if injuries else "TEMİZ (SAKATLIK YOK)"}
+
+ÖZEL REHABİLİTASYON KURALI:
+- Eğer aktif sakatlık varsa (özellikle omuz, dirsek, bel, diz): Sporcuyu sakat bölgeyi ezen bileşik hareketlerden koru. Yerine alternatif güvenli açıları ve 1-2 adet rehabilitasyon egzersizini net olarak reçete et!
 
 RAPOR FORMATI:
 - 🔥 **DURUM TESPİTİ:** Genel gidişat.
-- 🏋️ **ANTRENMAN ANALİZİ:** Ağırlıklar artıyor mu?
+- 🩹 **SAKATLIK & REHABİLİTASYON DEĞERLENDİRMESİ:** Sakatlığa göre antrenman modifikasyonu ve güvenli hareket alternatifleri.
+- 🏋️ **ANTRENMAN & OVERLOAD ANALİZİ:** Ağırlıklar artıyor mu?
 - 🥗 **MUTFAK KONTROLÜ:** Makrolar yeterli mi?
 - 🫀 **TOPARLANMA YORUMU:** Uyku/HRV durumu.
 - ⚡ **BU HAFTA İÇİN 3 NET EMİR:** Net aksiyon maddeleri.
@@ -2044,12 +2146,17 @@ def coach_dialogue(data: ChatInput):
     user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
     profile_context = f"Kullanıcı Profili: {data.user_profile_summary}" if data.user_profile_summary else "Profil bilgisi girilmedi."
     health_context = f"Biyometrik Sağlık & Recovery Durumu: {data.health_summary}" if data.health_summary else "Sağlık verisi yok."
+    injuries_context = f"Aktif Sakatlıklar: {data.injuries_summary}" if data.injuries_summary else "Aktif sakatlık kaydı yok."
 
     system_prompt = f"""
 Sen sporcusunun durumunu çok iyi anlayan ama asla laubaliliğe izin vermeyen bilge ve sert bir 'Looksmax & Hipertrofi Başantrenörü'sün.
 KULLANICI: {profile_context}
 SAĞLIK: {health_context}
+SAKATLIK DURUMU: {injuries_context}
 SETLER: {user_context}
+
+ÖNEMLİ KURAL:
+Eğer sporcunun sakatlığı varsa (örn: omuz, dirsek, bel, diz), o bölgeyi tetikleyecek ağır presleri ve çekişleri hemen iptal et. Güvenli alternatif açı (örn: bar yerine nötr dumbbell) ve rehabilitasyon/ısınma protokolü öner!
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
