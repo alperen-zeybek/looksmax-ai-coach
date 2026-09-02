@@ -78,42 +78,108 @@ def strip_thinking_and_tables(text: str) -> str:
     return result if result else clean
 
 # ================= 1. NUTRITION ENGINE (LLM + DETERMINISTIK) =================
+# =====================================================================
+# BU DOSYA, orijinal app.py icindeki
+#   "# ================= 1. NUTRITION ENGINE ================="
+# baslayan bolumden, parse_meal_with_llm fonksiyonunun SONUNA (yani
+#   "# ================= 2. RECOVERY ENGINE ================="
+# satirindan hemen ONCESINE) kadar olan tum blogun YERINE gecmelidir.
+# Geri kalan kod (recovery engine, endpoint'ler, HTML, vs.) AYNEN KALIR.
+#
+# NOT: Bu versiyon CIG (pismemis) agirlik bazlidir. Tahil/et gibi pisince
+# agirlik/yogunluk degisen besinlerde LLM, kullanicinin tarif ettigi
+# porsiyonu (istersen pismis tarif etsin) CIG karsiliga cevirmesi icin
+# yonlendiriliyor (asagidaki sistem promptunda donusum katsayilari var).
+# =====================================================================
+
+# ================= 1. NUTRITION ENGINE (LLM + DETERMINISTIK, CIG GRAM BAZLI) =================
+
 CANONICAL_FOODS = {
-    "yumurta": {"unit_type": "piece", "base_cal": 72.0, "base_pro": 6.3, "base_carb": 0.4, "base_fat": 4.8},
-    "haslanmis yumurta": {"unit_type": "piece", "base_cal": 72.0, "base_pro": 6.3, "base_carb": 0.4, "base_fat": 4.8},
-    "sahanda yumurta": {"unit_type": "piece", "base_cal": 92.0, "base_pro": 6.3, "base_carb": 0.4, "base_fat": 7.2},
-    "omlet": {"unit_type": "piece", "base_cal": 95.0, "base_pro": 6.5, "base_carb": 0.6, "base_fat": 7.5},
-    "yumurta beyazi": {"unit_type": "piece", "base_cal": 17.0, "base_pro": 3.6, "base_carb": 0.2, "base_fat": 0.1},
-    "tam bugday ekmegi": {"unit_type": "piece", "base_cal": 68.0, "base_pro": 3.5, "base_carb": 12.0, "base_fat": 0.9},
-    "ekmek": {"unit_type": "piece", "base_cal": 75.0, "base_pro": 2.4, "base_carb": 15.0, "base_fat": 0.8},
-    "beyaz ekmek": {"unit_type": "piece", "base_cal": 75.0, "base_pro": 2.4, "base_carb": 15.0, "base_fat": 0.8},
-    "lavas": {"unit_type": "piece", "base_cal": 160.0, "base_pro": 5.0, "base_carb": 30.0, "base_fat": 2.5},
-    "tavuk gogsu": {"unit_type": "gram_100", "base_cal": 120.0, "base_pro": 22.5, "base_carb": 0.0, "base_fat": 2.5},
-    "tavuk": {"unit_type": "gram_100", "base_cal": 135.0, "base_pro": 21.0, "base_carb": 0.0, "base_fat": 5.0},
-    "pirinc": {"unit_type": "gram_100", "base_cal": 350.0, "base_pro": 7.0, "base_carb": 78.0, "base_fat": 0.6},
-    "yulaf": {"unit_type": "gram_100", "base_cal": 370.0, "base_pro": 12.5, "base_carb": 60.0, "base_fat": 7.0},
-    "protein tozu": {"unit_type": "piece", "base_cal": 120.0, "base_pro": 24.0, "base_carb": 2.0, "base_fat": 1.5},
-    "whey": {"unit_type": "piece", "base_cal": 120.0, "base_pro": 24.0, "base_carb": 2.0, "base_fat": 1.5},
-    "muz": {"unit_type": "piece", "base_cal": 105.0, "base_pro": 1.3, "base_carb": 27.0, "base_fat": 0.3},
-    "elma": {"unit_type": "piece", "base_cal": 80.0, "base_pro": 0.4, "base_carb": 21.0, "base_fat": 0.3},
-    "fistik ezmesi": {"unit_type": "gram_100", "base_cal": 590.0, "base_pro": 25.0, "base_carb": 20.0, "base_fat": 50.0},
-    "zeytinyagi": {"unit_type": "piece", "base_cal": 120.0, "base_pro": 0.0, "base_carb": 0.0, "base_fat": 14.0},
-    "kiyma": {"unit_type": "gram_100", "base_cal": 220.0, "base_pro": 20.0, "base_carb": 0.0, "base_fat": 15.0},
-    "kofte": {"unit_type": "piece", "base_cal": 85.0, "base_pro": 7.0, "base_carb": 2.0, "base_fat": 5.5},
-    "patates": {"unit_type": "gram_100", "base_cal": 77.0, "base_pro": 2.0, "base_carb": 17.5, "base_fat": 0.1},
-    "sut": {"unit_type": "gram_100", "base_cal": 60.0, "base_pro": 3.2, "base_carb": 4.8, "base_fat": 3.1},
-    "yogurt": {"unit_type": "gram_100", "base_cal": 65.0, "base_pro": 3.5, "base_carb": 4.7, "base_fat": 3.3},
-    "lor peyniri": {"unit_type": "gram_100", "base_cal": 90.0, "base_pro": 17.0, "base_carb": 3.0, "base_fat": 1.0}
+    # -- Yumurta (cig ile pismis arasi fark az, tek deger yeterli) --
+    "haslanmis yumurta": {"cal": 155, "pro": 13.0, "carb": 1.1, "fat": 11.0, "piece_g": 50},
+    "sahanda yumurta": {"cal": 155, "pro": 13.0, "carb": 1.1, "fat": 11.0, "piece_g": 50},
+    "omlet": {"cal": 155, "pro": 13.0, "carb": 1.1, "fat": 11.0, "piece_g": 100},
+    "yumurta beyazi": {"cal": 52, "pro": 11.0, "carb": 0.7, "fat": 0.2, "piece_g": 33},
+    "yumurta": {"cal": 155, "pro": 13.0, "carb": 1.1, "fat": 11.0, "piece_g": 50},
+
+    # -- Ekmek (zaten pisirilmis urun olarak satilir, cig karsiligi yok) --
+    "tam bugday ekmegi": {"cal": 247, "pro": 13.0, "carb": 41.0, "fat": 3.4, "piece_g": 30},
+    "cavdar ekmegi": {"cal": 259, "pro": 8.5, "carb": 48.0, "fat": 3.3, "piece_g": 30},
+    "beyaz ekmek": {"cal": 265, "pro": 9.0, "carb": 49.0, "fat": 3.2, "piece_g": 30},
+    "lavas": {"cal": 280, "pro": 9.0, "carb": 55.0, "fat": 2.0, "piece_g": 80},
+    "ekmek": {"cal": 265, "pro": 9.0, "carb": 49.0, "fat": 3.2, "piece_g": 30},
+
+    # -- CIG tahil / karbonhidrat (paketten cikan hal, pisirilmemis) --
+    "pirinc": {"cal": 365, "pro": 7.1, "carb": 80.0, "fat": 0.6, "piece_g": None},
+    "bulgur": {"cal": 342, "pro": 12.3, "carb": 76.0, "fat": 1.3, "piece_g": None},
+    "makarna": {"cal": 371, "pro": 13.0, "carb": 75.0, "fat": 1.5, "piece_g": None},
+    "yulaf": {"cal": 389, "pro": 16.9, "carb": 66.0, "fat": 6.9, "piece_g": None},
+
+    # -- CIG et / protein --
+    "tavuk gogsu": {"cal": 120, "pro": 22.5, "carb": 0.0, "fat": 2.6, "piece_g": None},
+    "tavuk": {"cal": 215, "pro": 18.6, "carb": 0.0, "fat": 15.0, "piece_g": None},
+    "kirmizi et": {"cal": 143, "pro": 21.0, "carb": 0.0, "fat": 6.0, "piece_g": None},
+    "kiyma": {"cal": 254, "pro": 17.2, "carb": 0.0, "fat": 20.0, "piece_g": None},
+    "kofte": {"cal": 200, "pro": 15.0, "carb": 5.0, "fat": 14.0, "piece_g": 60},
+    "somon": {"cal": 208, "pro": 20.0, "carb": 0.0, "fat": 13.0, "piece_g": None},
+    "balik": {"cal": 97, "pro": 18.0, "carb": 0.0, "fat": 2.5, "piece_g": None},
+
+    # -- Sut urunleri --
+    "suzme yogurt": {"cal": 97, "pro": 9.0, "carb": 4.0, "fat": 5.0, "piece_g": None},
+    "yogurt": {"cal": 65, "pro": 3.5, "carb": 4.7, "fat": 3.3, "piece_g": None},
+    "kasar peyniri": {"cal": 371, "pro": 25.0, "carb": 2.0, "fat": 29.0, "piece_g": 20},
+    "beyaz peynir": {"cal": 264, "pro": 17.0, "carb": 1.5, "fat": 21.0, "piece_g": 30},
+    "lor peyniri": {"cal": 98, "pro": 11.0, "carb": 3.4, "fat": 4.3, "piece_g": None},
+    "sut": {"cal": 61, "pro": 3.2, "carb": 4.8, "fat": 3.3, "piece_g": None},
+
+    # -- Meyve --
+    "muz": {"cal": 89, "pro": 1.1, "carb": 23.0, "fat": 0.3, "piece_g": 118},
+    "elma": {"cal": 52, "pro": 0.3, "carb": 14.0, "fat": 0.2, "piece_g": 182},
+
+    # -- Sebze / Baklagil (cig) --
+    "patates": {"cal": 77, "pro": 2.0, "carb": 17.5, "fat": 0.1, "piece_g": None},
+    "nohut": {"cal": 364, "pro": 19.0, "carb": 61.0, "fat": 6.0, "piece_g": None},
+
+    # -- Yag / Kuruyemis / Ek --
+    "zeytinyagi": {"cal": 884, "pro": 0.0, "carb": 0.0, "fat": 100.0, "piece_g": 14},
+    "fistik ezmesi": {"cal": 588, "pro": 25.0, "carb": 20.0, "fat": 50.0, "piece_g": None},
+    "badem": {"cal": 579, "pro": 21.0, "carb": 22.0, "fat": 50.0, "piece_g": None},
+    "ceviz": {"cal": 654, "pro": 15.0, "carb": 14.0, "fat": 65.0, "piece_g": None},
+
+    # -- Takviye --
+    "protein tozu": {"cal": 400, "pro": 80.0, "carb": 7.0, "fat": 5.0, "piece_g": 30},
+    "whey": {"cal": 400, "pro": 80.0, "carb": 7.0, "fat": 5.0, "piece_g": 30},
 }
+
+_SORTED_FOOD_KEYS = sorted(CANONICAL_FOODS.keys(), key=lambda k: -len(k))
+
+
+def match_canonical_food(norm_name: str) -> Optional[Dict[str, Any]]:
+    if norm_name in CANONICAL_FOODS:
+        return CANONICAL_FOODS[norm_name]
+    for key in _SORTED_FOOD_KEYS:
+        if re.search(rf'\b{re.escape(key)}\b', norm_name) or re.search(rf'\b{re.escape(norm_name)}\b', key):
+            return CANONICAL_FOODS[key]
+    return None
+
 
 class ParsedFoodItem(BaseModel):
     name: str = Field(description="Besinin turkce yalin adi (orn: sahanda yumurta, pirinc, tam bugday ekmegi, tavuk gogsu)")
-    amount: float = Field(description="Miktar sayisal degeri (orn: 1, 2, 150, 0.5)")
-    unit: str = Field(description="Birim turu: 'adet', 'gram', 'dilim', 'scoop', 'kasik', 'kase', 'porsiyon'")
-    estimated_grams: Optional[float] = Field(default=None, description="Adet veya porsiyonsa toplam tahmini gramaji")
+    amount: float = Field(description="Kullanicinin belirttigi sayisal miktar (orn: 1, 2, 150, 0.5) - sadece bilgi amacli")
+    unit: str = Field(description="Kullanicinin belirttigi birim: 'adet', 'gram', 'dilim', 'scoop', 'kasik', 'kase', 'porsiyon'")
+    estimated_grams: float = Field(
+        description=(
+            "ZORUNLU: Bu kalemin CIG (pisirilmeden ONCEKI) TOPLAM agirligi gram olarak. "
+            "Kullanici pismis bir porsiyon tarif etse bile (orn '1 kase pilav'), bunu CIG pirince "
+            "cevirerek yaz (pismis pilav agirligini ~2.5-3'e bolerek cig karsiligi bul). "
+            "Ekmek, yumurta, meyve gibi zaten 'son hal'de tuketilen urunlerde direkt tuketilen agirligi yaz."
+        )
+    )
+
 
 class ParsedMealResponse(BaseModel):
     items: List[ParsedFoodItem]
+
 
 def normalize_turkish(text: str) -> str:
     t = text.lower()
@@ -121,23 +187,46 @@ def normalize_turkish(text: str) -> str:
     t = re.sub(r'[^a-z0-9\s]', ' ', t)
     return " ".join(t.split()).strip()
 
+
+MIN_ITEM_GRAMS = 5.0
+MAX_ITEM_GRAMS = 1200.0
+
+
 def parse_meal_with_llm(user_text: str) -> Optional[Dict[str, Any]]:
     if not client:
         return None
 
     system_prompt = """
-Sen profesyonel bir besin ve diyet parser'isin.
-Gorevin: Kullanicinin girdigi serbest metindeki ogunleri tespit edip YALNIZCA JSON formatinda ParsedMealResponse semasina uygun cikti vermek.
+Sen MyFitnessPal tarzi calisan, cok titiz bir Turk mutfagi beslenme parser'isin.
+Gorevin: Kullanicinin girdigi serbest metindeki HER besini tespit edip YALNIZCA JSON formatinda
+ParsedMealResponse semasina uygun cikti vermek.
+
+EN ONEMLI KURAL - GRAM TAHMINI (CIG AGIRLIK BAZLI CALISIYORUZ):
+Her kalem icin estimated_grams alanini MUTLAKA doldur. Bu deger besinin CIG (pisirilmeden onceki,
+paketten cikan) TOPLAM agirligidir.
+
+Kullanici PISMIS bir porsiyon tarif ederse (orn "1 kase pilav", "1 porsiyon makarna"), bunu asagidaki
+donusum katsayilariyla CIG karsiligina cevir (pismis agirligi katsayiya bol):
+- Pirinc: pismis agirlik / 2.8  (orn 1 kase ~200g pismis pilav -> ~70g cig pirinc)
+- Bulgur: pismis agirlik / 2.5
+- Makarna: pismis agirlik / 2.2
+- Yulaf (sutle/suyla lapasi): pismis agirlik / 2.0
+
+Diger standart porsiyon karsiliklari (cig/tuketilen hal, direkt kullan):
+- 1 adet haslanmis/sahanda yumurta = 50g
+- 1 dilim ekmek = 30g (ekmek zaten son hal, cevirme yapma)
+- 1 olcek (scoop) protein tozu = 30g
+- 1 yemek kasigi zeytinyagi/fistik ezmesi = 14g
+- 1 orta boy cig tavuk gogsu (pisirilmeden once) = 165g
+- 1 kofte (cig harc) = 60g
 
 KURALLAR:
-1. '1 adet sahanda yumurta' dendiginde: name='sahanda yumurta', amount=1, unit='adet', estimated_grams=60 olmalidir. ASLA 100g olarak algilama!
-2. '2 yumurta' dendiginde unit='adet' olmalidir.
-3. '4 dilim ekmek' dendiginde amount=4, unit='dilim' olmalidir.
-4. '1 olcek protein tozu' dendiginde amount=1, unit='scoop' olmalidir.
-5. Cikti formati kesinlikle su JSON seklinde olmalidir:
+1. Gercekci, olculu gram degerleri ver. Asiri buyuk (orn 2000g) veya sifir deger UYDURMA.
+2. Ayni mesajdaki her ayri besin icin ayri bir item olustur.
+3. Cikti formati kesinlikle su JSON seklinde olmalidir:
 {
   "items": [
-    {"name": "sahanda yumurta", "amount": 1, "unit": "adet", "estimated_grams": 60}
+    {"name": "sahanda yumurta", "amount": 1, "unit": "adet", "estimated_grams": 50}
   ]
 }
 """
@@ -154,7 +243,7 @@ KURALLAR:
         )
         parsed_json = json.loads(completion.choices[0].message.content)
         data = ParsedMealResponse(**parsed_json)
-        
+
         total_cal = 0.0
         total_pro = 0.0
         total_carb = 0.0
@@ -163,38 +252,28 @@ KURALLAR:
 
         for item in data.items:
             norm_name = normalize_turkish(item.name)
-            matched = None
-            
-            for key, val in CANONICAL_FOODS.items():
-                if key == norm_name or key in norm_name or norm_name in key:
-                    matched = val
-                    break
-            
-            if matched:
-                multiplier = 1.0
-                if matched["unit_type"] == "piece":
-                    multiplier = item.amount
-                elif matched["unit_type"] == "gram_100":
-                    grams = item.amount if item.unit in ["gram", "g", "gr"] else (item.estimated_grams or 100.0)
-                    multiplier = grams / 100.0
+            matched = match_canonical_food(norm_name)
 
-                total_cal += matched["base_cal"] * multiplier
-                total_pro += matched["base_pro"] * multiplier
-                total_carb += matched["base_carb"] * multiplier
-                total_fat += matched["base_fat"] * multiplier
-                summary_items.append(f"{item.amount:g} {item.unit} {item.name.title()}")
+            grams = item.estimated_grams if item.estimated_grams and item.estimated_grams > 0 else 100.0
+            grams = max(MIN_ITEM_GRAMS, min(MAX_ITEM_GRAMS, grams))
+            ratio = grams / 100.0
+
+            if matched:
+                total_cal += matched["cal"] * ratio
+                total_pro += matched["pro"] * ratio
+                total_carb += matched["carb"] * ratio
+                total_fat += matched["fat"] * ratio
             else:
-                grams = item.amount if item.unit in ["gram", "g", "gr"] else (item.estimated_grams or 100.0)
-                ratio = grams / 100.0
-                total_cal += 150.0 * ratio
-                total_pro += 10.0 * ratio
-                total_carb += 15.0 * ratio
-                total_fat += 5.0 * ratio
-                summary_items.append(f"{item.amount:g} {item.unit} {item.name.title()}")
+                total_cal += 180.0 * ratio
+                total_pro += 8.0 * ratio
+                total_carb += 20.0 * ratio
+                total_fat += 6.0 * ratio
+
+            summary_items.append(f"{item.amount:g} {item.unit} {item.name.title()} (~{round(grams)}g cig)")
 
         if total_cal > 0:
             return {
-                "food_name": " + ".join(summary_items),
+                "food_name": " + ".join(s.split(" (~")[0] for s in summary_items),
                 "items_summary": ", ".join(summary_items),
                 "calories": round(total_cal),
                 "protein": round(total_pro, 1),
