@@ -34,7 +34,7 @@ else:
 
 app = FastAPI(title="Looksmax Hub - Elite Performance & Coaching Engine")
 
-# ================= 0. DINAMIK MODEL SECICI =================
+# ================= 0. DINAMIK MODEL SECICI & CIKTI TEMIZLEYICI =================
 def get_best_available_model() -> str:
     preferences = [
         "llama-3.1-8b-instant",
@@ -61,6 +61,24 @@ def get_best_available_model() -> str:
         logger.warning(f"Dinamik model secilemedi, varsayilana donuluyor: {e}")
     
     return "llama-3.1-8b-instant"
+
+def strip_thinking_and_tables(text: str) -> str:
+    if not text:
+        return ""
+    # 1. <think> etiketlerini ve iceriklerini temizle
+    clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    
+    # 2. Eger yanitta '### Özet', '## Özet' veya 'Özet:' varsa, oncesindeki analiz tablolarini atip direkt ozeti al
+    summary_match = re.search(r'(?:###?\s*Özet|Özet:?)(.*)', clean, flags=re.DOTALL | re.IGNORECASE)
+    if summary_match and len(summary_match.group(1).strip()) > 20:
+        return summary_match.group(1).strip()
+    
+    # 3. Model ozet basligi atmadan sadece tablo ve altina aciklama koyduysa, Markdown tablolarini temizle
+    lines = clean.split('\n')
+    filtered_lines = [l for l in lines if not l.strip().startswith('|') and not l.strip().startswith('+-')]
+    result = '\n'.join(filtered_lines).strip()
+    
+    return result if result else clean
 
 # ================= 1. NUTRITION ENGINE (LLM + DETERMINISTIK) =================
 CANONICAL_FOODS = {
@@ -115,10 +133,10 @@ Sen profesyonel bir besin ve diyet parser'isin.
 Gorevin: Kullanicinin girdigi serbest metindeki ogunleri tespit edip YALNIZCA JSON formatinda ParsedMealResponse semasina uygun cikti vermek.
 
 KURALLAR:
-1. '1 adet sahanda yumurta' dendiginde: name='sahanda yumurta', amount=1, unit='adet', estimated_grams=60 olmalidir. ASLA bunu 100g olarak algilama!
+1. '1 adet sahanda yumurta' dendiginde: name='sahanda yumurta', amount=1, unit='adet', estimated_grams=60 olmalidir. ASLA 100g olarak algilama!
 2. '2 yumurta' dendiginde unit='adet' olmalidir.
 3. '4 dilim ekmek' dendiginde amount=4, unit='dilim' olmalidir.
-4. '1 olcek / scoop protein tozu' dendiginde amount=1, unit='scoop' olmalidir.
+4. '1 olcek protein tozu' dendiginde amount=1, unit='scoop' olmalidir.
 5. Cikti formati kesinlikle su JSON seklinde olmalidir:
 {
   "items": [
@@ -550,7 +568,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
-                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload başantrenörünüm. Sakatlığın varsa asla üstüne körü körüne gitmem; rehabilitasyon hareketlerini yazarım, toparlanman iyiyse hakkını vermeni sağlarım. Sorunu sor veya sağ üstteki <b>🧠 Koçun Raporu</b> butonuna bas.</div>
+                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload başantrenörünüm. Sakatlığın varsa doğrudan güvenli açı ve rehab protokolü veririm; toparlanman iyiyse hedefleri koyar geçerim. Sorunu sor veya sağ üstteki <b>🧠 Koçun Raporu</b> butonuna bas.</div>
                 </div>
 
                 <div class="preview-box" id="previewBox">
@@ -1971,10 +1989,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     loadEl.className = "msg coach error";
                     loadEl.innerHTML = `⚠️ <b>HATA DETAYI:</b><br>${data.coach_reply}`;
                 } else {
-                    let replyFormatted = (data.coach_reply || "").replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
-                    loadEl.innerHTML = replyFormatted || "Yanıt alındı.";
+                    let replyText = data.coach_reply || "Hedefe odaklan kral. Formunu koru ve kontrollü devam et.";
+                    let replyFormatted = replyText.replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
+                    loadEl.innerHTML = replyFormatted;
                     conversationHistory.push({ role: "user", content: currentText });
-                    conversationHistory.push({ role: "assistant", content: data.coach_reply });
+                    conversationHistory.push({ role: "assistant", content: replyText });
                     if (conversationHistory.length > 8) conversationHistory = conversationHistory.slice(-8);
                 }
             } catch (err) {
@@ -2088,7 +2107,7 @@ def sync_apple_health_webhook(payload: HealthSyncInput):
 def full_coach_audit(payload: CoachAuditInput):
     if not client:
         return {
-            "audit_report": "GROQ_API_KEY bulunamadı! Lütfen sunucu ortam değişkenine (Environment Variable) veya .env dosyasına ekle.",
+            "audit_report": "GROQ_API_KEY bulunamadı! Lütfen sunucu ortam değişkenine veya .env dosyasına ekle.",
             "is_error": True
         }
 
@@ -2100,35 +2119,33 @@ def full_coach_audit(payload: CoachAuditInput):
 
     audit_prompt = f"""
 Sen hem halden anlayan bilge bir mentor, hem de sıfır bahane kabul eden sert ve disiplinli bir 'Looksmax & Hipertrofi Başantrenörü'sün.
-Kullanıcının TÜM verileri:
-1. SPORCU PROFİLİ: Ad: {prof.get('fullName', 'Bilinmiyor')}, Boy: {prof.get('height', '-')}cm, Kilo: {prof.get('weight', '-')}kg, Hedef: {prof.get('goal', '-')}
-2. SETLER: {json.dumps(workouts, ensure_ascii=False) if workouts else "GİRİLMEDİ"}
-3. BESLENME: {json.dumps(nutrition, ensure_ascii=False) if nutrition else "GİRİLMEDİ"}
-4. SAĞLIK: {json.dumps(health, ensure_ascii=False) if health else "GİRİLMEDİ"}
-5. AKTİF SAKATLIKLAR & AĞRILAR: {json.dumps(injuries, ensure_ascii=False) if injuries else "TEMİZ (SAKATLIK YOK)"}
+KULLANICI VERİLERİ:
+- Profil: {prof.get('fullName', 'Bilinmiyor')}, Boy: {prof.get('height', '-')}cm, Kilo: {prof.get('weight', '-')}kg, Hedef: {prof.get('goal', '-')}
+- Setler: {json.dumps(workouts, ensure_ascii=False) if workouts else "GİRİLMEDİ"}
+- Beslenme: {json.dumps(nutrition, ensure_ascii=False) if nutrition else "GİRİLMEDİ"}
+- Sağlık: {json.dumps(health, ensure_ascii=False) if health else "GİRİLMEDİ"}
+- Aktif Sakatlıklar: {json.dumps(injuries, ensure_ascii=False) if injuries else "YOK"}
 
-ÖZEL REHABİLİTASYON KURALI:
-- Eğer aktif sakatlık varsa (özellikle omuz, dirsek, bel, diz): Sporcuyu sakat bölgeyi ezen bileşik hareketlerden koru. Yerine alternatif güvenli açıları ve 1-2 adet rehabilitasyon egzersizini net olarak reçete et!
-
-RAPOR FORMATI:
+KURALLAR:
+1. ASLA düşünme adımı, tablo veya veri matrisi üretme.
+2. Doğrudan net maddelerle koçluk karne raporunu dök:
 - 🔥 **DURUM TESPİTİ:** Genel gidişat.
-- 🩹 **SAKATLIK & REHABİLİTASYON DEĞERLENDİRMESİ:** Sakatlığa göre antrenman modifikasyonu ve güvenli hareket alternatifleri.
-- 🏋️ **ANTRENMAN & OVERLOAD ANALİZİ:** Ağırlıklar artıyor mu?
-- 🥗 **MUTFAK KONTROLÜ:** Makrolar yeterli mi?
-- 🫀 **TOPARLANMA YORUMU:** Uyku/HRV durumu.
-- ⚡ **BU HAFTA İÇİN 3 NET EMİR:** Net aksiyon maddeleri.
+- 🩹 **SAKATLIK & REHABİLİTASYON:** Varsa güvenli hareket reçetesi ve izolasyon.
+- 🏋️ **ANTRENMAN & OVERLOAD:** Ağırlıkların durumu ve zorlama emri.
+- 🥗 **MUTFAK & DİSİPLİN:** Makroların denetimi.
+- ⚡ **3 NET EMİR:** Bu hafta yapılacaklar.
 """
     try:
         active_model = get_best_available_model()
         completion = client.chat.completions.create(
             messages=[{"role": "system", "content": audit_prompt}],
             model=active_model,
-            temperature=0.4,
-            max_tokens=900
+            temperature=0.3,
+            max_tokens=800
         )
-        report = completion.choices[0].message.content
-        report = re.sub(r'<think>.*?</think>', '', report, flags=re.DOTALL).strip()
-        return {"audit_report": report, "is_error": False}
+        raw_report = completion.choices[0].message.content or ""
+        clean_report = strip_thinking_and_tables(raw_report)
+        return {"audit_report": clean_report, "is_error": False}
     except Exception as e:
         full_err = traceback.format_exc()
         logger.error(f"Coach audit hatasi:\n{full_err}")
@@ -2139,7 +2156,7 @@ def coach_dialogue(data: ChatInput):
     if not client:
         return {
             "user_message": data.user_message,
-            "coach_reply": "GROQ_API_KEY bulunamadı! Lütfen Render panelinde Environment Variable olarak veya yerelde .env dosyasına ekle.",
+            "coach_reply": "GROQ_API_KEY bulunamadı! Lütfen sunucu ortam değişkenine veya .env dosyasına ekle.",
             "is_error": True
         }
 
@@ -2149,14 +2166,17 @@ def coach_dialogue(data: ChatInput):
     injuries_context = f"Aktif Sakatlıklar: {data.injuries_summary}" if data.injuries_summary else "Aktif sakatlık kaydı yok."
 
     system_prompt = f"""
-Sen sporcusunun durumunu çok iyi anlayan ama asla laubaliliğe izin vermeyen bilge ve sert bir 'Looksmax & Hipertrofi Başantrenörü'sün.
+Sen sporcusunu çok iyi anlayan ama asla laubaliliğe izin vermeyen bilge ve disiplinli bir 'Looksmax & Hipertrofi Başantrenörü'sün.
 KULLANICI: {profile_context}
 SAĞLIK: {health_context}
 SAKATLIK DURUMU: {injuries_context}
 SETLER: {user_context}
 
-ÖNEMLİ KURAL:
-Eğer sporcunun sakatlığı varsa (örn: omuz, dirsek, bel, diz), o bölgeyi tetikleyecek ağır presleri ve çekişleri hemen iptal et. Güvenli alternatif açı (örn: bar yerine nötr dumbbell) ve rehabilitasyon/ısınma protokolü öner!
+FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
+1. ASLA DÜŞÜNME ADIMI, TABLO VEYA İŞLEM LİSTESİ YAZMA.
+2. Uzun uzun 'Konu / Durum / Öneri' tabloları dökmek KESİNLİKLE YASAKTIR.
+3. Yanıtını doğrudan, net, maddeli ve vurucu bir özet / aksiyon planı olarak ver.
+4. Sakatlık varsa: Güvenli alternatif açıyı söyle ve 1 rehabilitasyon egzersizi emret.
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
@@ -2174,12 +2194,16 @@ Eğer sporcunun sakatlığı varsa (örn: omuz, dirsek, bel, diz), o bölgeyi te
         chat_completion = client.chat.completions.create(
             messages=messages,
             model=active_model,
-            temperature=0.4,
-            max_tokens=600,
+            temperature=0.3,
+            max_tokens=500,
         )
-        reply_text = chat_completion.choices[0].message.content
-        reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
-        return {"user_message": data.user_message, "coach_reply": reply_text, "is_error": False}
+        raw_text = chat_completion.choices[0].message.content or ""
+        clean_text = strip_thinking_and_tables(raw_text)
+
+        if not clean_text:
+            clean_text = "Hedefe odaklan kral. Formunu koru ve kontrollü devam et."
+
+        return {"user_message": data.user_message, "coach_reply": clean_text, "is_error": False}
     except Exception as e:
         full_err = traceback.format_exc()
         logger.error(f"Chat hatasi:\n{full_err}")
