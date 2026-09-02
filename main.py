@@ -2600,12 +2600,9 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             const repsMatch = String(ex.reps).match(/\d+/);
             document.getElementById("exerciseReps").value = repsMatch ? repsMatch[0] : "";
 
-            // Set no: bugun bu hareketten kac set girilmisse bir sonraki set numarasini oner
-            const currentDayDate = weekDaysData[selectedWorkoutDayIdx].fullDate;
-            const alreadyLogged = weeklyLogs.filter(
-                l => l.date === currentDayDate && l.exercise.trim().toLowerCase() === ex.name.trim().toLowerCase()
-            ).length;
-            document.getElementById("exerciseSet").value = alreadyLogged + 1;
+            // Set: programda yazan hedef set sayisi neyse (orn "4x8" -> 4) direkt onu yaz
+            const setsMatch = String(ex.sets).match(/\d+/);
+            document.getElementById("exerciseSet").value = setsMatch ? setsMatch[0] : (ex.sets || 1);
 
             // Sadece agirlik bos kalsin, kullanici doldursun
             document.getElementById("exerciseWeight").value = "";
@@ -3181,11 +3178,21 @@ def generate_workout_program_with_llm(payload: GenerateProgramInput):
         if health else "Bugüne ait toparlanma verisi girilmedi."
     )
 
-    program_query = f"{prof.get('goal', 'Recomposition')} hedefi icin {num_days} gunluk antrenman programi split {injuries_text}"
-    knowledge_snippets = retrieve_knowledge_context(program_query, k=4)
+    goal = prof.get('goal', 'Recomposition')
+    goal_query_hints = {
+        "Lean Bulk": "hacim artirma kas kutlesi kazanma bulk progressive overload agir bilesik hareketler",
+        "Aggressive Cut": "yag yakimi kalori acigi cut kas koruma kondisyon metabolik finisher",
+        "Recomposition": "recomposition kas koruma yag kaybi dengeli hacim orta tekrar",
+        "Maintenance": "idame antrenmani dengeli hacim surdurulebilir program",
+    }.get(goal, "hipertrofi antrenman programlama hacim periyotlama")
+
+    program_query = f"{goal} {goal_query_hints} {num_days} gunluk split antrenman programi {injuries_text}"
+    knowledge_snippets = retrieve_knowledge_context(program_query, k=6)
     knowledge_block = (
-        f"\nBİLGİ BANKASI (kaynak dokümanlardan ilgili pasajlar — varsa program tasarımına dayanak yap, "
-        f"yoksa görmezden gel, kaynak adını kullanıcıya söyleme):\n{knowledge_snippets}\n"
+        f"\nBİLGİ BANKASI (yüklenen PDF/makalelerden bu isteğe en ilgili pasajlar):\n{knowledge_snippets}\n"
+        f"YUKARIDAKİ BİLGİ BANKASI VARSA, programı bunun üzerine kur — split mantığı, hacim/yoğunluk önerisi, "
+        f"periyotlama ya da sakatlık protokolü kaynaklarda geçiyorsa jenerik şablonlar yerine ONU esas al. "
+        f"Kaynak adını veya bu başlığı kullanıcıya asla söyleme.\n"
         if knowledge_snippets else ""
     )
 
@@ -3196,7 +3203,7 @@ WorkoutProgramResponse şemasına uygun cikti vermek.
 
 KULLANICI PROFİLİ:
 - Boy: {prof.get('height', '-')}cm, Kilo: {prof.get('weight', '-')}kg, Yaş: {prof.get('age', '-')}, Yağ Oranı: %{prof.get('bodyfat', '-')}
-- Hedef: {prof.get('goal', 'Recomposition')}
+- Hedef: {goal}
 - Aktivite Seviyesi: {prof.get('activity', '-')}
 
 AKTİF SAKATLIKLAR: {injuries_text}
@@ -3205,11 +3212,15 @@ BUGÜNKÜ TOPARLANMA: {health_text}
 KURALLAR:
 1. Tam olarak {num_days} gün oluştur (days dizisinde {num_days} eleman olmalı). Dinlenme günü ekleme, sadece antrenman günleri.
 2. Split seçimini gün sayısına göre mantıklı yap: 3 gün=Full Body veya Push/Pull/Legs, 4 gün=Upper/Lower x2, 5 gün=Bro Split (Göğüs, Sırt, Bacak, Omuz, Kol), 6 gün=Push/Pull/Legs x2.
-3. Her gün için 5-7 hareket, her hareket için gerçekçi set (3-5) ve tekrar aralığı (örn '8-10', '12-15') belirle.
-4. Kullanıcının hedefine göre uyarla: Aggressive Cut ise daha fazla bileşik hareket ve kondisyon dokunuşu; Lean Bulk ise hacim ve progressive overload odaklı.
+3. Her gün için 5-7 hareket belirle.
+4. HEDEFE GÖRE BİLİMSEL OLARAK FARKLILAŞTIR (bu kurala sıkı uy):
+   - Hedef "Lean Bulk" ise: Hacim ve progressive overload önceliklidir. Ağır bileşik hareketlere (bench, squat, deadlift, row, overhead press) ağırlık ver, set sayısını orta-yüksek tut (4-5 set), tekrar aralığını güç-hipertrofi karışımı seç (örn '6-10'), kas kütlesi için ekstra izolasyon hareketi eklemekten çekinme.
+   - Hedef "Aggressive Cut" ise: Kullanıcı kalori açığında olduğu için toparlanma kapasitesi kısıtlıdır. Hacmi ölçülü tut (aşırı yorma, 3-4 set), tekrar aralığını biraz yükselt (örn '10-15') hem kas korumak hem ekstra kalori harcamak için, günün sonuna kısa bir kondisyon/metabolik finisher hareketi ekle, notlarda dinlenme sürelerini kısaltmayı öner.
+   - Hedef "Recomposition" ise: Kas koruma ve yağ kaybı dengeli hedeflenir. Orta hacim (3-4 set), orta tekrar aralığı (örn '8-12'), bileşik ve izolasyon hareketlerini dengeli dağıt.
+   - Hedef "Maintenance" ise: Sürdürülebilir, aşırı yormayan orta hacim (3 set) ve çeşitlilik önceliklidir.
 5. AKTİF SAKATLIK VARSA O BÖLGEYİ ZORLAYAN HAREKETLERİ KESİNLİKLE PROGRAMA KOYMA, güvenli alternatifleri seç ve note alanına kısa uyarı yaz.
 6. Bugünkü toparlanma skoru düşükse (uyku az, HRV düşük, nabız yüksek gibi belirtiler varsa) o günün hacmini hafif azalt ve note'a belirt.
-7. Bilgi bankasında ilgili bir pasaj varsa (split mantığı, hacim önerisi, sakatlık protokolü vs.) program tasarımına doğal şekilde yansıt.
+7. Bilgi bankasında ilgili bir pasaj varsa program tasarımının TEMELİ bu olsun — jenerik şablon değil, kaynaktaki metodolojiyi yansıt.
 8. "sets" alanı SADECE düz bir tam sayı olmalı (örn 4), ASLA '3-4' gibi bir aralık veya metin yazma. Aralık gerekiyorsa onu "reps" alanına yaz.
 9. "note" alanı olmayan hareketlerde boş string "" kullan, ASLA null/None döndürme.
 10. ASLA açıklama, markdown, yorum ekleme. Sadece saf JSON döndür.
