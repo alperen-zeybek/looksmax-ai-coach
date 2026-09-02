@@ -6,15 +6,22 @@ import urllib.request
 import urllib.parse
 import logging
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from groq import Groq
 
+# Yerel ortamda .env varsa otomatik yuklesin (kodun icine key yazmaya gerek yok)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("looksmax-hub")
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 app = FastAPI(title="Looksmax Hub - Elite Performance & Coaching Engine")
@@ -116,7 +123,6 @@ def fetch_open_food_facts(query: str):
 
 def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
     norm_text = normalize_turkish(user_text)
-    
     unit_pattern = r'(?:kg|kilo|kilogram|g|gr|gram|adet|tane|dilim|olcek|scoop|kase|tabak|porsiyon|kasik|bardak)'
     norm_text = re.sub(rf'(\d+(?:[.,]\d+)?\s*{unit_pattern}?)', r',\1', norm_text)
     raw_tokens = [t.strip() for t in re.split(r'[,+\n]|(?:\s+ve\s+)', norm_text) if t.strip()]
@@ -133,7 +139,6 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
 
         qty = None
         unit = None
-
         m_num = re.search(rf'^(\d+(?:[.,]\d+)?)\s*({unit_pattern})?', token)
         if m_num:
             qty = float(m_num.group(1).replace(",", "."))
@@ -146,7 +151,6 @@ def parse_and_calculate_meal(user_text: str) -> Optional[Dict[str, Any]]:
             continue
 
         food_data = search_local_food(food_query)
-        
         if food_data:
             multiplier_gram = 0.0
             display_title = ""
@@ -328,7 +332,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .view-panel { display: none; width: 100%; height: 100%; padding: 20px; }
         .view-panel.active { display: flex; }
 
-        /* --- 1. MODÜL SEÇİM EKRANI (HUB) --- */
         #hubView { justify-content: center; align-items: center; flex-direction: column; gap: 24px; }
         .hub-title { text-align: center; }
         .hub-title h1 { font-size: 2.2rem; font-weight: 800; color: #fff; margin-bottom: 4px; letter-spacing: 0.5px; }
@@ -343,7 +346,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .card-action { align-self: flex-start; background: #1a2232; color: #00f2fe; border: 1px solid #2d3b54; padding: 7px 12px; border-radius: 8px; font-weight: 700; font-size: 0.75rem; transition: 0.2s; }
         .hub-card:hover .card-action { background: #00f2fe; color: #000; }
 
-        /* --- ORTAK PANEL STİLLERİ --- */
         .panel-card { background: #131722; border: 1px solid #1f2738; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
         .panel-header { font-size: 0.95rem; font-weight: 800; color: #00f2fe; display: flex; justify-content: space-between; align-items: center; }
         .badge-cyan { font-size: 0.75rem; background: rgba(0, 242, 254, 0.1); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 4px 8px; border-radius: 6px; font-weight: 600; }
@@ -372,7 +374,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .log-item .ex-val { color: #38bdf8; font-weight: 700; }
         .log-item button { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.85rem; padding: 2px 4px; }
 
-        /* --- 2. AI KOÇ EKRANI --- */
         #coachView { flex-direction: column; max-width: 950px; }
         .chat-container { flex: 1; display: flex; flex-direction: column; background: #131722; border-radius: 16px; border: 1px solid #1f2738; overflow: hidden; }
         .messages { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
@@ -392,7 +393,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         input[type="file"] { display: none; }
         .send-btn { background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; border: none; font-weight: 800; padding: 12px 24px; border-radius: 10px; cursor: pointer; }
 
-        /* --- 4. GÜNLÜK BESLENME EKRANI --- */
         #nutritionView { gap: 20px; max-width: 1350px; }
         .macro-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
         .macro-card { background: #0a0c10; border: 1px solid #1c2230; padding: 14px; border-radius: 12px; text-align: center; }
@@ -404,7 +404,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .macro-c-fat { color: #ec4899; }
         .meal-items-subtext { font-size: 0.75rem; color: #38bdf8; margin-top: 4px; font-weight: 500; }
 
-        /* --- 5. BEFORE/AFTER STİLLERİ --- */
         #profileView { gap: 20px; max-width: 1400px; }
         .phase-header-bar { display: flex; justify-content: space-between; align-items: center; background: #0a0c10; padding: 10px 14px; border-radius: 10px; border: 1px solid #1c2230; margin-bottom: 10px; }
         .phase-selector { background: #141923; border: 1px solid #2b354d; color: #00f2fe; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-size: 0.85rem; outline: none; }
@@ -416,7 +415,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .btn-remove-photo { position: absolute; top: 8px; right: 8px; background: rgba(239, 68, 68, 0.9); border: none; color: white; width: 22px; height: 22px; border-radius: 50%; font-size: 0.75rem; font-weight: 800; cursor: pointer; z-index: 3; display: none; }
         .slot-placeholder { z-index: 1; text-align: center; color: #6b7280; font-size: 0.75rem; }
 
-        /* --- 6. HEALTH & RECOVERY STİLLERİ --- */
         #healthView { gap: 20px; max-width: 1400px; }
         .recovery-banner { background: #0a0c10; border: 1px solid #1c2230; border-radius: 14px; padding: 18px; display: flex; align-items: center; gap: 20px; }
         .recovery-circle { width: 84px; height: 84px; border-radius: 50%; border: 4px solid #00f2fe; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 1.45rem; font-weight: 800; color: #fff; flex-shrink: 0; }
@@ -427,7 +425,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         .guide-btn-card { background: linear-gradient(135deg, #131b2a 0%, #0d121c 100%); border: 1px solid #1f2e47; padding: 16px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: 0.2s; }
         .guide-btn-card:hover { border-color: #00f2fe; transform: translateY(-2px); }
 
-        /* --- POPUP / MODAL STİLLERİ --- */
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); display: none; justify-content: center; align-items: center; z-index: 10000; backdrop-filter: blur(6px); }
         .modal-box { background: #131722; border: 1px solid #222d42; border-radius: 18px; width: 90%; max-width: 620px; padding: 26px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 16px 50px rgba(0,242,254,0.18); position: relative; max-height: 90vh; overflow-y: auto; }
         .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e2638; padding-bottom: 12px; }
@@ -453,7 +450,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 </head>
 <body>
 
-    <!-- AUTH OVERLAY -->
     <div class="auth-overlay" id="authOverlay">
         <div class="auth-box">
             <h2 id="authTitle">⚡ LOOKSMAX PRO</h2>
@@ -464,7 +460,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- APPLE WATCH MODAL / REHBER POPUP -->
     <div class="modal-overlay" id="appleWatchModal" onclick="closeGuideModal(event)">
         <div class="modal-box" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -501,7 +496,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- GENEL KOÇ GERİ BİLDİRİMİ (AUDIT) MODALI -->
     <div class="modal-overlay" id="coachAuditModal" onclick="closeAuditModal(event)">
         <div class="modal-box" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -537,7 +531,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
     <div class="content-container">
 
-        <!-- 1. GİRİŞ SEÇİM EKRANI (DASHBOARD HUB) -->
         <div class="view-panel active" id="hubView">
             <div class="hub-title">
                 <h1>Looksmax HUB</h1>
@@ -591,7 +584,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 2. AI KOÇ EKRANI -->
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
@@ -613,13 +605,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 3. PROGRESSIVE OVERLOAD EKRANI -->
         <div class="view-panel" id="overloadView">
             <div class="overload-col-left">
                 <div class="panel-card">
                     <div class="panel-header">
                         <span>➕ Set Kaydet</span>
-                        <span class="badge-cyan" id="currentWeekDisplay">Haftalık Döngü</span>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-size:0.75rem; color:#9ca3af;">Hafta Seç:</span>
+                            <select id="weekSelectorDropdown" onchange="changeActiveWeek(this.value)" style="background:#0a0c10; border:1px solid #2b354d; color:#00f2fe; padding:4px 8px; border-radius:6px; font-weight:700; font-size:0.75rem; outline:none;"></select>
+                        </div>
                     </div>
                     <div class="input-form">
                         <input type="text" id="exerciseName" placeholder="Hareket Adı (Örn: Incline Dumbbell Press)" list="defaultExercises" />
@@ -659,7 +653,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             <div class="overload-col-right">
                 <div class="panel-card" style="height: 100%;">
                     <div class="panel-header">
-                        <span>📊 Hareket Gelişim Grafiği</span>
+                        <span>📊 Hareket Gelişim Grafiği (Tüm Haftalar)</span>
                         <select id="chartExerciseSelect" onchange="updateChart()" style="background:#0a0c10; border:1px solid #2b354d; color:#00f2fe; padding:6px 12px; border-radius:7px; font-weight:700; outline:none;"></select>
                     </div>
                     <div class="chart-box" style="flex:1; min-height:340px; position:relative;">
@@ -669,7 +663,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 4. GÜNLÜK BESLENME EKRANI -->
         <div class="view-panel" id="nutritionView">
             <div class="overload-col-left">
                 <div class="chat-container">
@@ -731,7 +724,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 5. PROFİL & BEFORE/AFTER EKRANI -->
         <div class="view-panel" id="profileView">
             <div class="overload-col-left">
                 <div class="panel-card">
@@ -861,7 +853,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 6. HEALTH & RECOVERY EKRANI -->
         <div class="view-panel" id="healthView">
             <div class="overload-col-left">
                 <div class="recovery-banner" id="recoveryBannerBox">
@@ -895,7 +886,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     </div>
                 </div>
 
-                <!-- REHBER BUTONU -->
                 <div class="guide-btn-card" onclick="toggleGuideModal(true)">
                     <div style="display:flex; align-items:center; gap:12px;">
                         <div style="font-size:1.6rem;">⌚</div>
@@ -923,6 +913,31 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
     </div>
 
     <script>
+        function compressImage(file, maxWidth = 800, quality = 0.7) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        let width = img.width;
+                        let height = img.height;
+                        if (width > maxWidth) {
+                            height = Math.round((height * maxWidth) / width);
+                            width = maxWidth;
+                        }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        resolve(canvas.toDataURL('image/jpeg', quality));
+                    };
+                };
+            });
+        }
+
         function getMondayOfWeek(d) {
             d = new Date(d);
             var day = d.getDay(),
@@ -933,24 +948,23 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         }
 
         const mondayObj = getMondayOfWeek(new Date());
-        const currentWeekKey = mondayObj.toISOString().split('T')[0];
+        let currentWeekKey = mondayObj.toISOString().split('T')[0];
         const todayKey = new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
         const dayNames = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"];
-        const weekDaysData = [];
+        let weekDaysData = [];
 
-        for (let i = 0; i < 7; i++) {
-            const d = new Date(mondayObj);
-            d.setDate(mondayObj.getDate() + i);
-            const fullDate = d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-            const shortDate = d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
-            weekDaysData.push({
-                index: i,
-                dayName: dayNames[i],
-                fullDate: fullDate,
-                shortDate: shortDate
-            });
+        function buildWeekDays(mondayDate) {
+            weekDaysData = [];
+            for (let i = 0; i < 7; i++) {
+                const d = new Date(mondayDate);
+                d.setDate(mondayDate.getDate() + i);
+                const fullDate = d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                const shortDate = d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
+                weekDaysData.push({ index: i, dayName: dayNames[i], fullDate: fullDate, shortDate: shortDate });
+            }
         }
+        buildWeekDays(mondayObj);
 
         let selectedWorkoutDayIdx = weekDaysData.findIndex(item => item.fullDate === todayKey);
         if (selectedWorkoutDayIdx === -1) selectedWorkoutDayIdx = 0;
@@ -961,12 +975,16 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         function getStorageUsers() { return JSON.parse(localStorage.getItem("app_registered_users") || "{}"); }
         function saveStorageUsers(users) { localStorage.setItem("app_registered_users", JSON.stringify(users)); }
 
+        function getAllUserWeeks(username) {
+            return JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
+        }
+
         function getUserWeeklyLogs(username) {
-            const allWeeks = JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
+            const allWeeks = getAllUserWeeks(username);
             return allWeeks[currentWeekKey] || [];
         }
         function saveUserWeeklyLogs(username, logs) {
-            const allWeeks = JSON.parse(localStorage.getItem("user_weeks_" + username) || "{}");
+            const allWeeks = getAllUserWeeks(username);
             allWeeks[currentWeekKey] = logs;
             localStorage.setItem("user_weeks_" + username, JSON.stringify(allWeeks));
         }
@@ -1003,7 +1021,36 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         let healthChartInstance = null;
 
         document.getElementById("exerciseDate").value = weekDaysData[selectedWorkoutDayIdx].fullDate;
-        document.getElementById("currentWeekDisplay").innerText = "Hafta: " + currentWeekKey;
+
+        function populateWeekSelector() {
+            const select = document.getElementById("weekSelectorDropdown");
+            if (!select || !currentUser) return;
+            select.innerHTML = "";
+            const allWeeks = getAllUserWeeks(currentUser.username);
+            const weekKeys = Object.keys(allWeeks);
+            if (!weekKeys.includes(currentWeekKey)) weekKeys.push(currentWeekKey);
+            weekKeys.sort().reverse();
+
+            weekKeys.forEach(wk => {
+                const opt = document.createElement("option");
+                opt.value = wk;
+                opt.innerText = wk === currentWeekKey ? `${wk} (Bu Hafta)` : wk;
+                if (wk === currentWeekKey) opt.selected = true;
+                select.appendChild(opt);
+            });
+        }
+
+        function changeActiveWeek(selectedWeek) {
+            currentWeekKey = selectedWeek;
+            const parts = selectedWeek.split("-");
+            const mon = new Date(parts[0], parts[1] - 1, parts[2]);
+            buildWeekDays(mon);
+            selectedWorkoutDayIdx = 0;
+            selectedNutriDayIdx = 0;
+            document.getElementById("exerciseDate").value = weekDaysData[0].fullDate;
+            loadUserWorkouts();
+            loadUserNutrition();
+        }
 
         function toggleGuideModal(show) {
             const modal = document.getElementById("appleWatchModal");
@@ -1101,6 +1148,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             } else {
                 document.getElementById("authOverlay").style.display = "none";
                 document.getElementById("activeUserName").innerText = "👤 " + currentUser.username;
+                populateWeekSelector();
                 loadUserWorkouts();
                 loadUserNutrition();
                 loadUserProfileUI();
@@ -1370,7 +1418,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (userPhases.length === 0) {
                 const defaultPhase = {
                     id: "phase_" + Date.now(),
-                    name: "1. Dönem (1 Mayıs - 2 Temmuz)",
+                    name: "1. Dönem",
                     photos: { before_front: null, before_back: null, after_front: null, after_back: null }
                 };
                 userPhases.push(defaultPhase);
@@ -1460,24 +1508,20 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             document.getElementById("universalPhotoInput").click();
         }
 
-        function handleUniversalPhotoUpload(event) {
+        async function handleUniversalPhotoUpload(event) {
             const file = event.target.files[0];
             if (!file || !pendingUploadSlot) return;
 
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const base64 = e.target.result;
-                const phase = userPhases.find(p => p.id === activePhaseId);
-                if (phase) {
-                    if (!phase.photos) phase.photos = {};
-                    phase.photos[pendingUploadSlot] = base64;
-                    saveUserPhases(currentUser.username, userPhases);
-                    renderActivePhasePhotos();
-                }
-                pendingUploadSlot = null;
-                document.getElementById("universalPhotoInput").value = "";
-            };
-            reader.readAsDataURL(file);
+            const compressedBase64 = await compressImage(file, 800, 0.7);
+            const phase = userPhases.find(p => p.id === activePhaseId);
+            if (phase) {
+                if (!phase.photos) phase.photos = {};
+                phase.photos[pendingUploadSlot] = compressedBase64;
+                saveUserPhases(currentUser.username, userPhases);
+                renderActivePhasePhotos();
+            }
+            pendingUploadSlot = null;
+            document.getElementById("universalPhotoInput").value = "";
         }
 
         function removePhoto(event, slotKey) {
@@ -1534,10 +1578,10 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             if (dayLogs.length === 0) {
                 list.innerHTML = `
-                    <div class="empty-day-box">
-                        <div class="empty-day-icon">😴</div>
-                        <div class="empty-day-title">Dinlenme Günü (Off Day)</div>
-                        <div class="empty-day-desc">${currentDay.fullDate} tarihinde henüz kayıtlı bir setin yok kral.</div>
+                    <div class="empty-day-box" style="text-align:center; padding:20px; color:#6b7280;">
+                        <div style="font-size:1.8rem; margin-bottom:4px;">😴</div>
+                        <div style="font-weight:700; color:#9ca3af;">Dinlenme Günü (Off Day)</div>
+                        <div style="font-size:0.75rem;">${currentDay.fullDate} tarihinde kayıtlı set yok kral.</div>
                     </div>
                 `;
                 return;
@@ -1588,11 +1632,22 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             loadUserWorkouts();
         }
 
+        function getAllWeeksWorkouts() {
+            if (!currentUser) return [];
+            const allWeeks = getAllUserWeeks(currentUser.username);
+            let combined = [];
+            Object.values(allWeeks).forEach(arr => {
+                if (Array.isArray(arr)) combined = combined.concat(arr);
+            });
+            return combined;
+        }
+
         function populateDropdown() {
             const select = document.getElementById("chartExerciseSelect");
             if (!select) return;
             const currentSelected = select.value;
-            const unique = [...new Set(weeklyLogs.map(item => item.exercise))];
+            const allLogs = getAllWeeksWorkouts();
+            const unique = [...new Set(allLogs.map(item => item.exercise))];
 
             select.innerHTML = "";
             if (unique.length === 0) {
@@ -1613,7 +1668,8 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             const select = document.getElementById("chartExerciseSelect");
             if (!select) return;
             const selectedEx = select.value;
-            const filtered = weeklyLogs.filter(item => item.exercise === selectedEx);
+            const allLogs = getAllWeeksWorkouts();
+            const filtered = allLogs.filter(item => item.exercise === selectedEx);
 
             const labels = filtered.map((item, idx) => `${item.date} (${item.set_num || idx+1}.Set)`);
             const weights = filtered.map(item => item.weight);
@@ -1713,10 +1769,10 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             if (dayMeals.length === 0) {
                 list.innerHTML = `
-                    <div class="empty-day-box">
-                        <div class="empty-day-icon">🍽️</div>
-                        <div class="empty-day-title">Öğün Girilmedi</div>
-                        <div class="empty-day-desc">${currentDay.fullDate} tarihi için henüz yemek kaydedilmedi.</div>
+                    <div class="empty-day-box" style="text-align:center; padding:20px; color:#6b7280;">
+                        <div style="font-size:1.8rem; margin-bottom:4px;">🍽️</div>
+                        <div style="font-weight:700; color:#9ca3af;">Öğün Girilmedi</div>
+                        <div style="font-size:0.75rem;">${currentDay.fullDate} tarihi için henüz yemek kaydedilmedi.</div>
                     </div>
                 `;
             } else {
@@ -1775,22 +1831,19 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         let selectedBase64Image = null;
         let nutriSelectedImage = null;
 
-        function handleImageSelect(event, type) {
+        async function handleImageSelect(event, type) {
             const file = event.target.files[0];
             if (!file) return;
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                if (type === 'coach') {
-                    selectedBase64Image = e.target.result;
-                    document.getElementById("imagePreview").src = selectedBase64Image;
-                    document.getElementById("previewBox").style.display = "flex";
-                } else {
-                    nutriSelectedImage = e.target.result;
-                    document.getElementById("nutriImagePreview").src = nutriSelectedImage;
-                    document.getElementById("nutriPreviewBox").style.display = "flex";
-                }
-            };
-            reader.readAsDataURL(file);
+            const compressed = await compressImage(file, 800, 0.7);
+            if (type === 'coach') {
+                selectedBase64Image = compressed;
+                document.getElementById("imagePreview").src = selectedBase64Image;
+                document.getElementById("previewBox").style.display = "flex";
+            } else {
+                nutriSelectedImage = compressed;
+                document.getElementById("nutriImagePreview").src = nutriSelectedImage;
+                document.getElementById("nutriPreviewBox").style.display = "flex";
+            }
         }
 
         function clearImage() {
@@ -2005,7 +2058,15 @@ RAPOR FORMATI:
 - ⚡ **BU HAFTA İÇİN 3 NET EMİR:** Kendine çeki düzen vermesi için 3 net aksiyon maddesi.
 """
     report = None
-    for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+    candidate_models = [
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant"
+    ]
+    last_err = ""
+
+    for model_name in candidate_models:
         try:
             completion = client.chat.completions.create(
                 messages=[{"role": "system", "content": audit_prompt}],
@@ -2017,11 +2078,12 @@ RAPOR FORMATI:
             if report:
                 break
         except Exception as e:
+            last_err = str(e)
             logger.error(f"Coach audit hatası ({model_name}): {e}")
             continue
 
     if not report:
-        report = "Henüz yeterli veri girişi yapılmadı kral. Profilini doldurup set ve beslenme kayıtlarını girdikten sonra tekrar dene."
+        report = f"Koç raporu oluşturulamadı kral: {last_err or 'Modeller yanıt vermedi.'}"
 
     report = re.sub(r'<think>.*?</think>', '', report, flags=re.DOTALL).strip()
     return {"audit_report": report}
@@ -2029,7 +2091,7 @@ RAPOR FORMATI:
 @app.post("/chat")
 def coach_dialogue(data: ChatInput):
     if not client:
-        return {"user_message": data.user_message, "coach_reply": "Sunucuda GROQ_API_KEY bulunamadı."}
+        return {"user_message": data.user_message, "coach_reply": "Sunucuda GROQ_API_KEY bulunamadı. Lütfen ortam değişkeni olarak ekleyin."}
 
     user_context = f"Kullanıcının Bu Haftaki Son Setleri: {data.workout_summary}" if data.workout_summary else "Bu hafta henüz set girilmedi."
     profile_context = f"Kullanıcı Profili: {data.user_profile_summary}" if data.user_profile_summary else "Profil bilgisi girilmedi."
@@ -2068,7 +2130,16 @@ KOÇLUK DAVRANIŞ KURALLARIN:
         messages.append({"role": "user", "content": data.user_message})
 
     reply_text = None
-    for m in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+    last_error = ""
+
+    candidate_models = [
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant"
+    ]
+
+    for m in candidate_models:
         try:
             chat_completion = client.chat.completions.create(
                 messages=messages, model=m, temperature=0.4, max_tokens=600,
@@ -2077,11 +2148,12 @@ KOÇLUK DAVRANIŞ KURALLARIN:
             if reply_text:
                 break
         except Exception as e:
+            last_error = str(e)
             logger.warning(f"[/chat] model {m} failed: {e}")
             continue
 
     if not reply_text:
-        reply_text = "Hedeflerine odaklan kral! Antrenmanda her zaman bir önceki haftadan 1 tekrar veya 1-2.5 kg fazla zorlamaya devam et."
+        reply_text = f"Koç bağlantısında bir hata oldu kral: {last_error or 'Modellere ulaşılamadı.'}"
 
     reply_text = re.sub(r'<think>.*?</think>', '', reply_text, flags=re.DOTALL).strip()
     return {"user_message": data.user_message, "coach_reply": reply_text}
@@ -2109,4 +2181,4 @@ def nutrition_dialogue(data: NutritionChatInput):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port) 
+    uvicorn.run(app, host="0.0.0.0", port=port)
