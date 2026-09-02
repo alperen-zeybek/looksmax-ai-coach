@@ -638,6 +638,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     </div>
                     <div class="card-action">Sağlık Takip →</div>
                 </div>
+
+                <div class="hub-card" onclick="openView('program')">
+                    <div>
+                        <div class="card-icon">🗓️</div>
+                        <div class="card-heading">Antrenman Programı</div>
+                        <div class="card-desc">Hedefine ve toparlanma verine göre AI'nin çıkardığı, gün gün kişisel program.</div>
+                    </div>
+                    <div class="card-action">Programı Aç →</div>
+                </div>
             </div>
         </div>
 
@@ -692,6 +701,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                             <input type="number" id="exerciseReps" placeholder="🔁 Tekrar Sayısı" min="1" />
                             <input type="text" id="exerciseDate" placeholder="📅 Tarih" />
                         </div>
+
+                        <div style="background:#0a0c10; border:1px solid #1c2230; border-radius:9px; padding:10px 12px; display:flex; flex-direction:column; gap:8px;">
+                            <label style="display:flex; align-items:center; gap:8px; font-size:0.8rem; color:#e5e7eb; cursor:pointer; font-weight:600;">
+                                <input type="checkbox" id="addToProgramCheck" onchange="toggleProgramDaySelect()" style="width:16px; height:16px; accent-color:#00f2fe; cursor:pointer;" />
+                                📋 Antrenman Programıma Ekle
+                            </label>
+                            <select id="addToProgramDaySelect" style="display:none; background:#131722; border:1px solid #2b354d; color:#00f2fe; padding:8px 10px; border-radius:7px; font-weight:700; font-size:0.8rem; outline:none;"></select>
+                        </div>
+
                         <button class="btn-log" onclick="addWorkoutLog()">Seti Kaydet</button>
                     </div>
                 </div>
@@ -996,6 +1014,55 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
+        <div class="view-panel" id="programView">
+            <div class="overload-col-left">
+                <div class="panel-card">
+                    <div class="panel-header">
+                        <span>🧠 AI Program Oluşturucu</span>
+                        <span class="badge-cyan" id="programStatusBadge">Program Yok</span>
+                    </div>
+                    <div class="input-form">
+                        <select id="programSplitSelect">
+                            <option value="3">3 Günlük Split (Full Body / Push-Pull-Legs)</option>
+                            <option value="4">4 Günlük Split (Upper/Lower)</option>
+                            <option value="5" selected>5 Günlük Split (Bro Split)</option>
+                            <option value="6">6 Günlük Split (PPL x2)</option>
+                        </select>
+                        <button class="btn-log" id="generateProgramBtn" onclick="generateAiProgram()">🧠 Bana Özel Program Oluştur</button>
+                        <div style="font-size:0.72rem; color:#6b7280; line-height:1.4;">
+                            Profilindeki hedef, TDEE'n, aktif sakatlıkların ve bugünkü toparlanma skorun otomatik olarak dikkate alınır.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-card" style="flex:1;">
+                    <div class="panel-header">
+                        <span>➕ Manuel Hareket Ekle</span>
+                    </div>
+                    <div class="input-form">
+                        <input type="text" id="progManualExercise" placeholder="Hareket Adı" list="defaultExercises" />
+                        <div class="form-grid-3x1">
+                            <input type="number" id="progManualSets" placeholder="Set" min="1" value="3" />
+                            <input type="text" id="progManualReps" placeholder="Tekrar (örn: 8-10)" value="8-10" />
+                            <input type="text" id="progManualNote" placeholder="Not (opsiyonel)" />
+                        </div>
+                        <button class="btn-log" onclick="addManualExerciseToProgram()">Seçili Güne Ekle</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="overload-col-right">
+                <div class="panel-card" style="height: 100%;">
+                    <div class="panel-header">
+                        <span>🗓️ Kişisel Programın</span>
+                        <button onclick="clearProgramDay()" style="background:none; border:none; color:#ef4444; font-size:0.75rem; cursor:pointer; font-weight:700;">Bu Günü Temizle</button>
+                    </div>
+                    <div class="days-tab-bar" id="programDaysTabBar"></div>
+                    <div class="history-list" id="programExerciseList" style="max-height:none; flex:1;"></div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script>
@@ -1104,6 +1171,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
     safeLocalStorageSet("user_injuries_" + username, JSON.stringify(injuries));
 }
 
+        function getUserProgram(username) { return JSON.parse(localStorage.getItem("user_program_" + username) || "null"); }
+        function saveUserProgram(username, program) {
+    return safeLocalStorageSet("user_program_" + username, JSON.stringify(program));
+}
+
         let currentUser = JSON.parse(localStorage.getItem("active_user") || "null");
         let isRegisterMode = false;
         let weeklyLogs = [];
@@ -1115,6 +1187,8 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         let pendingUploadSlot = null;
         let chartInstance = null;
         let healthChartInstance = null;
+        let userProgram = null;
+        let selectedProgramDayIdx = 0;
 
         document.getElementById("exerciseDate").value = weekDaysData[selectedWorkoutDayIdx].fullDate;
 
@@ -1239,10 +1313,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             document.getElementById("backHubBtn").style.display = (viewName === 'hub') ? 'none' : 'block';
 
-            if (viewName === 'overload') setTimeout(updateChart, 150);
+            if (viewName === 'overload') { setTimeout(updateChart, 150); refreshProgramDaySelectOptions(); }
             if (viewName === 'nutrition') { renderNutriDayTabs(); renderSelectedDayNutrition(); }
             if (viewName === 'profile') { loadUserProfileUI(); loadUserPhasesUI(); }
             if (viewName === 'health') { loadHealthUI(); renderInjuriesUI(); }
+            if (viewName === 'program') { loadProgramUI(); }
         }
 
         function checkAuth() {
@@ -1258,6 +1333,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 loadUserPhasesUI();
                 loadHealthUI();
                 renderInjuriesUI();
+                loadProgramUI();
             }
         }
 
@@ -1722,6 +1798,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             renderWorkoutDayTabs();
             renderSelectedWorkoutDayLogs();
             updateChart();
+            refreshProgramDaySelectOptions();
         }
 
         function renderWorkoutDayTabs() {
@@ -1799,6 +1876,14 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             weeklyLogs.push({ id: Date.now(), exercise: name, set_num: setNum, weight: weight, reps: reps, date: dateVal });
             saveUserWeeklyLogs(currentUser.username, weeklyLogs);
+
+            const addToProgramChecked = document.getElementById("addToProgramCheck").checked;
+            if (addToProgramChecked) {
+                const dayIdx = parseInt(document.getElementById("addToProgramDaySelect").value, 10);
+                if (!isNaN(dayIdx)) {
+                    addExerciseToProgramDay(dayIdx, name, setNum, `${reps}`, "");
+                }
+            }
 
             document.getElementById("exerciseSet").value = setNum + 1;
             document.getElementById("exerciseWeight").value = "";
@@ -2004,6 +2089,216 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             weeklyNutrition[currentDay.fullDate] = [];
             saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
             renderSelectedDayNutrition();
+        }
+
+        // ================= ANTRENMAN PROGRAMI =================
+        function defaultEmptyProgram(numDays) {
+            const days = [];
+            for (let i = 0; i < numDays; i++) {
+                days.push({ day_name: `Gün ${i + 1}`, focus: "", exercises: [] });
+            }
+            return { days: days, generated_at: null, goal_used: "" };
+        }
+
+        function loadProgramUI() {
+            if (!currentUser) return;
+            userProgram = getUserProgram(currentUser.username);
+            if (!userProgram || !Array.isArray(userProgram.days) || userProgram.days.length === 0) {
+                userProgram = defaultEmptyProgram(5);
+            }
+            if (selectedProgramDayIdx >= userProgram.days.length) selectedProgramDayIdx = 0;
+
+            const badge = document.getElementById("programStatusBadge");
+            if (badge) {
+                badge.innerText = userProgram.generated_at ? `${userProgram.days.length} Günlük Program` : "Henüz Oluşturulmadı";
+            }
+
+            renderProgramDayTabs();
+            renderProgramExercises();
+            refreshProgramDaySelectOptions();
+        }
+
+        function renderProgramDayTabs() {
+            const bar = document.getElementById("programDaysTabBar");
+            if (!bar || !userProgram) return;
+            bar.innerHTML = "";
+
+            userProgram.days.forEach((d, idx) => {
+                const isActive = (idx === selectedProgramDayIdx) ? "active" : "";
+                bar.innerHTML += `
+                    <button class="day-tab-btn ${isActive}" onclick="selectProgramDayTab(${idx})">
+                        Gün ${idx + 1}
+                        <span class="tab-sub">${(d.focus || "").substring(0, 10) || "—"}</span>
+                    </button>
+                `;
+            });
+        }
+
+        function selectProgramDayTab(idx) {
+            selectedProgramDayIdx = idx;
+            renderProgramDayTabs();
+            renderProgramExercises();
+        }
+
+        function renderProgramExercises() {
+            const list = document.getElementById("programExerciseList");
+            if (!list || !userProgram) return;
+            const day = userProgram.days[selectedProgramDayIdx];
+            list.innerHTML = "";
+
+            if (!day || !day.exercises || day.exercises.length === 0) {
+                list.innerHTML = `
+                    <div class="empty-day-box" style="text-align:center; padding:20px; color:#6b7280;">
+                        <div style="font-size:1.8rem; margin-bottom:4px;">🗓️</div>
+                        <div style="font-weight:700; color:#9ca3af;">Bu güne henüz hareket eklenmedi</div>
+                        <div style="font-size:0.75rem;">AI ile program oluştur veya soldan manuel hareket ekle.</div>
+                    </div>
+                `;
+                return;
+            }
+
+            if (day.focus) {
+                list.innerHTML += `<div class="badge-cyan" style="align-self:flex-start;">🎯 Odak: ${day.focus}</div>`;
+            }
+
+            day.exercises.forEach((ex, exIdx) => {
+                const noteHtml = ex.note ? `<div style="font-size:0.72rem; color:#9ca3af; margin-top:2px;">💡 ${ex.note}</div>` : "";
+                list.innerHTML += `
+                    <div class="log-item" style="flex-direction:column; align-items:flex-start; gap:4px;">
+                        <div style="display:flex; justify-content:space-between; width:100%; align-items:center;">
+                            <span class="ex-title">${ex.name}</span>
+                            <button onclick="removeExerciseFromProgram(${exIdx})">Sil</button>
+                        </div>
+                        <div style="font-size:0.8rem; color:#38bdf8; font-weight:700;">${ex.sets} Set × ${ex.reps} Tekrar</div>
+                        ${noteHtml}
+                    </div>
+                `;
+            });
+        }
+
+        function addExerciseToProgramDay(dayIdx, name, sets, reps, note) {
+            if (!currentUser) return;
+            if (!userProgram || !Array.isArray(userProgram.days)) userProgram = defaultEmptyProgram(5);
+            if (dayIdx < 0 || dayIdx >= userProgram.days.length) return;
+
+            const day = userProgram.days[dayIdx];
+            const already = day.exercises.find(e => e.name.trim().toLowerCase() === name.trim().toLowerCase());
+            if (already) {
+                already.sets = sets;
+                already.reps = reps;
+                if (note) already.note = note;
+            } else {
+                day.exercises.push({ name: name, sets: sets, reps: reps, note: note || "" });
+            }
+            saveUserProgram(currentUser.username, userProgram);
+            if (dayIdx === selectedProgramDayIdx) renderProgramExercises();
+            renderProgramDayTabs();
+        }
+
+        function addManualExerciseToProgram() {
+            if (!currentUser) return;
+            const name = document.getElementById("progManualExercise").value.trim();
+            const sets = parseInt(document.getElementById("progManualSets").value, 10) || 3;
+            const reps = document.getElementById("progManualReps").value.trim() || "8-10";
+            const note = document.getElementById("progManualNote").value.trim();
+
+            if (!name) return alert("Lütfen hareket adını gir kral!");
+
+            addExerciseToProgramDay(selectedProgramDayIdx, name, sets, reps, note);
+
+            document.getElementById("progManualExercise").value = "";
+            document.getElementById("progManualNote").value = "";
+        }
+
+        function removeExerciseFromProgram(exIdx) {
+            if (!userProgram) return;
+            const day = userProgram.days[selectedProgramDayIdx];
+            day.exercises.splice(exIdx, 1);
+            saveUserProgram(currentUser.username, userProgram);
+            renderProgramExercises();
+        }
+
+        function clearProgramDay() {
+            if (!userProgram) return;
+            if (!confirm(`Gün ${selectedProgramDayIdx + 1} programını tamamen temizlemek istiyor musun?`)) return;
+            userProgram.days[selectedProgramDayIdx].exercises = [];
+            saveUserProgram(currentUser.username, userProgram);
+            renderProgramExercises();
+        }
+
+        function refreshProgramDaySelectOptions() {
+            const select = document.getElementById("addToProgramDaySelect");
+            if (!select || !currentUser) return;
+            const prog = userProgram && userProgram.days ? userProgram : getUserProgram(currentUser.username);
+            const numDays = (prog && Array.isArray(prog.days) && prog.days.length > 0) ? prog.days.length : 5;
+            const prevVal = select.value;
+            select.innerHTML = "";
+            for (let i = 0; i < numDays; i++) {
+                const opt = document.createElement("option");
+                opt.value = i;
+                opt.innerText = `Gün ${i + 1}`;
+                select.appendChild(opt);
+            }
+            if (prevVal !== "" && Number(prevVal) < numDays) select.value = prevVal;
+        }
+
+        function toggleProgramDaySelect() {
+            const checked = document.getElementById("addToProgramCheck").checked;
+            document.getElementById("addToProgramDaySelect").style.display = checked ? "block" : "none";
+            if (checked) refreshProgramDaySelectOptions();
+        }
+
+        async function generateAiProgram() {
+            if (!currentUser) return alert("Lütfen önce giriş yap kral!");
+            const numDays = parseInt(document.getElementById("programSplitSelect").value, 10) || 5;
+            const btn = document.getElementById("generateProgramBtn");
+
+            const prof = getUserProfileData(currentUser.username) || {};
+            if (!prof.weight || !prof.height) {
+                return alert("AI programı oluşturmadan önce Profil sekmesinden boy/kilo/hedef bilgini kaydetmelisin kral!");
+            }
+
+            const injuries = getUserInjuries(currentUser.username) || [];
+            const health = getUserHealthLogs(currentUser.username) || {};
+            const todayHealth = health[todayKey] || null;
+
+            btn.disabled = true;
+            const originalText = btn.innerText;
+            btn.innerText = "🧠 Program hazırlanıyor...";
+
+            try {
+                const res = await fetch("/generate-program", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        profile_data: prof,
+                        active_injuries: injuries,
+                        today_health: todayHealth,
+                        num_days: numDays
+                    })
+                });
+                const data = await res.json();
+
+                if (data.is_error || !data.program || !Array.isArray(data.program.days) || data.program.days.length === 0) {
+                    alert("Program oluşturulamadı: " + (data.error_detail || "Bilinmeyen hata"));
+                    return;
+                }
+
+                userProgram = {
+                    days: data.program.days,
+                    generated_at: new Date().toISOString(),
+                    goal_used: prof.goal || ""
+                };
+                saveUserProgram(currentUser.username, userProgram);
+                selectedProgramDayIdx = 0;
+                loadProgramUI();
+                alert("Programın hazır kral! Her gün için hareketleri, set ve tekrarları sol üstteki sekmelerden inceleyebilirsin. 🦍");
+            } catch (err) {
+                alert("Sunucu bağlantı hatası: " + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = originalText;
+            }
         }
 
         // ================= CHAT & VISION =================
@@ -2338,6 +2633,112 @@ def nutrition_dialogue(data: NutritionChatInput):
         "coach_reply": reply_text,
         "detected_meal": detected_meal
     }
+
+
+class ProgramExercise(BaseModel):
+    name: str = Field(description="Hareketin adi (orn: Bench Press, Squat, Lat Pulldown)")
+    sets: int = Field(description="Set sayisi, orn 3, 4, 5")
+    reps: str = Field(description="Tekrar araligi, orn '8-10', '12-15', '5'")
+    note: Optional[str] = Field(default="", description="Kisa, opsiyonel teknik/güvenlik notu (sakatlik varsa uyari)")
+
+
+class ProgramDay(BaseModel):
+    day_name: str = Field(description="Gun adi, orn 'Gün 1'")
+    focus: str = Field(description="O gunun odak bolgesi, orn 'Göğüs & Triceps', 'Push', 'Üst Vücut'")
+    exercises: List[ProgramExercise]
+
+
+class WorkoutProgramResponse(BaseModel):
+    days: List[ProgramDay]
+
+
+class GenerateProgramInput(BaseModel):
+    profile_data: Optional[dict] = {}
+    active_injuries: Optional[list] = []
+    today_health: Optional[dict] = None
+    num_days: int = 5
+
+
+def generate_workout_program_with_llm(payload: GenerateProgramInput) -> Optional[Dict[str, Any]]:
+    if not client:
+        return None
+
+    prof = payload.profile_data or {}
+    injuries = payload.active_injuries or []
+    health = payload.today_health or {}
+    num_days = max(3, min(6, payload.num_days or 5))
+
+    injuries_text = ", ".join(
+        f"{i.get('area', '?')} ({i.get('severity', '?')}: {i.get('details', '?')})" for i in injuries
+    ) if injuries else "Aktif sakatlık yok."
+
+    health_text = (
+        f"Uyku: {health.get('sleep_hours', '-')}s, HRV: {health.get('hrv_ms', '-')}ms, Dinlenik Nabız: {health.get('resting_hr', '-')}bpm"
+        if health else "Bugüne ait toparlanma verisi girilmedi."
+    )
+
+    system_prompt = f"""
+Sen elit seviyede bir hipertrofi ve güç antrenörüsün. Görevin, kullanıcıya TAM OLARAK {num_days} GÜNLÜK
+kişiye özel bir antrenman programı (split) çıkarmak ve YALNIZCA JSON formatında,
+WorkoutProgramResponse şemasına uygun cikti vermek.
+
+KULLANICI PROFİLİ:
+- Boy: {prof.get('height', '-')}cm, Kilo: {prof.get('weight', '-')}kg, Yaş: {prof.get('age', '-')}, Yağ Oranı: %{prof.get('bodyfat', '-')}
+- Hedef: {prof.get('goal', 'Recomposition')}
+- Aktivite Seviyesi: {prof.get('activity', '-')}
+
+AKTİF SAKATLIKLAR: {injuries_text}
+BUGÜNKÜ TOPARLANMA: {health_text}
+
+KURALLAR:
+1. Tam olarak {num_days} gün oluştur (days dizisinde {num_days} eleman olmalı). Dinlenme günü ekleme, sadece antrenman günleri.
+2. Split seçimini gün sayısına göre mantıklı yap: 3 gün=Full Body veya Push/Pull/Legs, 4 gün=Upper/Lower x2, 5 gün=Bro Split (Göğüs, Sırt, Bacak, Omuz, Kol), 6 gün=Push/Pull/Legs x2.
+3. Her gün için 5-7 hareket, her hareket için gerçekçi set (3-5) ve tekrar aralığı (örn '8-10', '12-15') belirle.
+4. Kullanıcının hedefine göre uyarla: Aggressive Cut ise daha fazla bileşik hareket ve kondisyon dokunuşu; Lean Bulk ise hacim ve progressive overload odaklı.
+5. AKTİF SAKATLIK VARSA O BÖLGEYİ ZORLAYAN HAREKETLERİ KESİNLİKLE PROGRAMA KOYMA, güvenli alternatifleri seç ve note alanına kısa uyarı yaz.
+6. Bugünkü toparlanma skoru düşükse (uyku az, HRV düşük, nabız yüksek gibi belirtiler varsa) o günün hacmini hafif azalt ve note'a belirt.
+7. ASLA açıklama, markdown, yorum ekleme. Sadece saf JSON döndür.
+"""
+
+    try:
+        active_model = get_best_available_model()
+        completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"{num_days} günlük programımı oluştur."}
+            ],
+            model=active_model,
+            response_format={"type": "json_object"},
+            temperature=0.4
+        )
+        parsed_json = json.loads(completion.choices[0].message.content)
+        data = WorkoutProgramResponse(**parsed_json)
+        return data.model_dump()
+    except Exception as e:
+        logger.error(f"LLM Program Uretim Hatasi: {e}")
+        traceback.print_exc()
+        return None
+
+
+@app.post("/generate-program")
+def generate_program(payload: GenerateProgramInput):
+    if not client:
+        return {
+            "program": None,
+            "is_error": True,
+            "error_detail": "GROQ_API_KEY bulunamadı! Lütfen sunucu ortam değişkenine veya .env dosyasına ekle."
+        }
+
+    program = generate_workout_program_with_llm(payload)
+    if not program:
+        return {
+            "program": None,
+            "is_error": True,
+            "error_detail": "AI programı oluştururken bir hata oluştu. Lütfen tekrar dene."
+        }
+
+    return {"program": program, "is_error": False}
+
 
 if __name__ == "__main__":
     import uvicorn
