@@ -1,10 +1,12 @@
 import os
 import json
 import re
+import sqlite3
 import urllib.request
 import urllib.parse
 import logging
 import traceback
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -88,8 +90,58 @@ def retrieve_knowledge_context(query: str, k: int = 4) -> str:
 
 app = FastAPI(title="Looksmax Hub - Elite Performance & Coaching Engine")
 
+# ================= HEALTH SYNC PERSISTENCE (SQLITE) =================
+# /api/health-sync webhook'undan gelen veriyi kalici tutmak icin hafif bir
+# SQLite tablosu. NOT: Render gibi persistent disk olmayan ortamlarda bu
+# dosya her yeniden deploy'da sifirlanir (container disk'i ephemeral) —
+# ama ayni container calisirken gelen tum veriler burada kalir, yani
+# webhook artik "veriyi hesaplayip unutmuyor", gercekten saklıyor.
+
+HEALTH_DB_PATH = os.getenv("HEALTH_DB_PATH", "./looksmax_health.db")
+
+
+def get_health_db_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(HEALTH_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_health_db():
+    try:
+        conn = get_health_db_connection()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS health_logs (
+                username TEXT NOT NULL,
+                date TEXT NOT NULL,
+                sleep_hours REAL,
+                deep_sleep_hours REAL,
+                hrv_ms REAL,
+                resting_hr REAL,
+                avg_workout_hr REAL,
+                max_workout_hr REAL,
+                steps INTEGER,
+                updated_at TEXT,
+                PRIMARY KEY (username, date)
+            )
+        """)
+        conn.commit()
+        conn.close()
+        logger.info(f"Health DB hazir: {HEALTH_DB_PATH}")
+    except Exception as e:
+        logger.error(f"Health DB baslatilamadi: {e}")
+        traceback.print_exc()
+
+
+init_health_db()
+
 # ================= 0. DINAMIK MODEL SECICI & CIKTI TEMIZLEYICI =================
+_CACHED_MODEL: Optional[str] = None
+
 def get_best_available_model() -> str:
+    global _CACHED_MODEL
+    if _CACHED_MODEL:
+        return _CACHED_MODEL
+
     preferences = [
         "llama-3.1-8b-instant",
         "llama3-8b-8192",
@@ -98,23 +150,27 @@ def get_best_available_model() -> str:
         "openai/gpt-oss-20b"
     ]
     if not client:
-        return "llama-3.1-8b-instant"
+        _CACHED_MODEL = "llama-3.1-8b-instant"
+        return _CACHED_MODEL
     try:
         models_response = client.models.list()
         active_models = [m.id for m in models_response.data]
         logger.info(f"Aktif Groq Modelleri: {active_models}")
-        
+
         for pref in preferences:
             if pref in active_models:
-                return pref
-                
+                _CACHED_MODEL = pref
+                return _CACHED_MODEL
+
         chat_models = [m for m in active_models if not any(x in m for x in ["whisper", "tts", "guard", "embed"])]
         if chat_models:
-            return chat_models[0]
+            _CACHED_MODEL = chat_models[0]
+            return _CACHED_MODEL
     except Exception as e:
         logger.warning(f"Dinamik model secilemedi, varsayilana donuluyor: {e}")
-    
-    return "llama-3.1-8b-instant"
+
+    _CACHED_MODEL = "llama-3.1-8b-instant"
+    return _CACHED_MODEL
 
 def strip_thinking_and_tables(text: str) -> str:
     if not text:
@@ -597,6 +653,14 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <span id="webhookUrlText">https://.../api/health-sync</span>
                     <button onclick="copyWebhookUrl()" style="background:#00f2fe; color:#000; border:none; padding:4px 8px; border-radius:4px; font-weight:800; font-size:0.7rem; cursor:pointer;">Kopyala</button>
                 </div>
+            </div>
+
+            <div class="modal-step" style="border: 1px solid rgba(245, 158, 11, 0.4);">
+                <b style="color:#f59e0b;">⚠️ Önemli:</b> İstek gövdesine (Request Body, JSON) şu alanları eklemelisin, yoksa veri panelde görünmez:
+                <ul style="margin-left: 18px; margin-top: 4px; color:#9ca3af;">
+                    <li><b>username</b>: Uygulamadaki kullanıcı adın (<code id="webhookUsernameHint">-</code>) — birebir aynı yazılmalı</li>
+                    <li><b>date</b>: <code>GG.AA.YYYY</code> formatında (örn: <code>02.09.2026</code>) — başka formatta gelirse kayıt alınır ama panelde o gün eşleşmez</li>
+                </ul>
             </div>
 
             <div class="modal-step">
@@ -1282,6 +1346,8 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (show) {
                 const currentOrigin = window.location.origin;
                 document.getElementById("webhookUrlText").innerText = `${currentOrigin}/api/health-sync`;
+                const hintEl = document.getElementById("webhookUsernameHint");
+                if (hintEl) hintEl.innerText = currentUser ? currentUser.username : "-";
             }
         }
 
@@ -1388,6 +1454,51 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 loadHealthUI();
                 renderInjuriesUI();
                 loadProgramUI();
+                syncHealthDataFromServer();
+            }
+        }
+
+        async function syncHealthDataFromServer() {
+            if (!currentUser) return;
+            try {
+                const res = await fetch(`/api/health-sync/${encodeURIComponent(currentUser.username)}`);
+                const data = await res.json();
+                if (data.status !== "success" || !Array.isArray(data.logs) || data.logs.length === 0) return;
+
+                const localLogs = getUserHealthLogs(currentUser.username);
+                let changed = false;
+
+                data.logs.forEach(row => {
+                    if (!row.date) return;
+                    const existing = localLogs[row.date];
+                    const isNewer = !existing || !existing.synced_at || (row.updated_at && row.updated_at > existing.synced_at);
+                    if (isNewer) {
+                        localLogs[row.date] = {
+                            date: row.date,
+                            sleep_hours: row.sleep_hours,
+                            deep_sleep_hours: row.deep_sleep_hours,
+                            hrv_ms: row.hrv_ms,
+                            resting_hr: row.resting_hr,
+                            avg_workout_hr: row.avg_workout_hr,
+                            max_workout_hr: row.max_workout_hr,
+                            steps: row.steps,
+                            synced_at: row.updated_at,
+                            source: "apple_watch"
+                        };
+                        changed = true;
+                    }
+                });
+
+                if (changed) {
+                    userHealthLogs = localLogs;
+                    saveUserHealthLogs(currentUser.username, userHealthLogs);
+                    const healthViewEl = document.getElementById("healthView");
+                    if (healthViewEl && healthViewEl.classList.contains("active")) {
+                        loadHealthUI();
+                    }
+                }
+            } catch (err) {
+                console.error("Sağlık verisi senkronizasyon hatası:", err);
             }
         }
 
@@ -1398,32 +1509,60 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             document.getElementById("authToggle").innerHTML = isRegisterMode ? "Zaten hesabın var mı? <b>Giriş Yap</b>" : "Hesabın yok mu? <b>Kayıt Ol</b>";
         }
 
-        function handleAuthSubmit() {
-    const u = document.getElementById("authUsername").value.trim();
-    const p = document.getElementById("authPassword").value.trim();
-    if (!u || !p) return alert("Kullanıcı adı ve şifre gir!");
- 
-    const allUsers = getStorageUsers();
- 
-    if (isRegisterMode) {
-        if (allUsers[u]) return alert("Bu kullanıcı adı zaten var! Giriş yapmayı dene.");
-        allUsers[u] = p;
-        if (!safeLocalStorageSet("app_registered_users", JSON.stringify(allUsers))) return;
-        currentUser = { username: u };
-        localStorage.setItem("active_user", JSON.stringify(currentUser));
-        checkAuth();
-    } else {
-        if (!allUsers[u]) {
-            return alert("Böyle bir kullanıcı bulunamadı. Önce 'Kayıt Ol' ile hesap açmalısın.");
+        async function hashPassword(password) {
+            if (!window.crypto || !window.crypto.subtle) {
+                throw new Error("Bu bağlantı (HTTP) şifre güvenliği için desteklenmiyor, HTTPS üzerinden açman gerekiyor.");
+            }
+            const enc = new TextEncoder().encode(password);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', enc);
+            return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
         }
-        if (allUsers[u] !== p) {
-            return alert("Kullanıcı adı veya şifre hatalı!");
+
+        function looksLikeSha256Hash(str) {
+            return typeof str === "string" && /^[a-f0-9]{64}$/.test(str);
         }
-        currentUser = { username: u };
-        localStorage.setItem("active_user", JSON.stringify(currentUser));
-        checkAuth();
-    }
-}
+
+        async function handleAuthSubmit() {
+            const u = document.getElementById("authUsername").value.trim();
+            const p = document.getElementById("authPassword").value.trim();
+            if (!u || !p) return alert("Kullanıcı adı ve şifre gir!");
+
+            let hashedP;
+            try {
+                hashedP = await hashPassword(p);
+            } catch (err) {
+                return alert(err.message);
+            }
+
+            const allUsers = getStorageUsers();
+
+            if (isRegisterMode) {
+                if (allUsers[u]) return alert("Bu kullanıcı adı zaten var! Giriş yapmayı dene.");
+                allUsers[u] = hashedP;
+                if (!safeLocalStorageSet("app_registered_users", JSON.stringify(allUsers))) return;
+                currentUser = { username: u };
+                localStorage.setItem("active_user", JSON.stringify(currentUser));
+                checkAuth();
+            } else {
+                if (!allUsers[u]) {
+                    return alert("Böyle bir kullanıcı bulunamadı. Önce 'Kayıt Ol' ile hesap açmalısın.");
+                }
+                const stored = allUsers[u];
+                const isLegacyPlainText = !looksLikeSha256Hash(stored);
+                const matches = isLegacyPlainText ? (stored === p) : (stored === hashedP);
+                if (!matches) {
+                    return alert("Kullanıcı adı veya şifre hatalı!");
+                }
+                if (isLegacyPlainText) {
+                    // Eski, duz metin olarak kayitli sifreyi sessizce hash'e yukselt
+                    allUsers[u] = hashedP;
+                    safeLocalStorageSet("app_registered_users", JSON.stringify(allUsers));
+                }
+                currentUser = { username: u };
+                localStorage.setItem("active_user", JSON.stringify(currentUser));
+                checkAuth();
+            }
+        }
 
         function logout() {
             localStorage.removeItem("active_user");
@@ -2550,11 +2689,58 @@ def sync_apple_health_webhook(payload: HealthSyncInput):
         hrv=payload.hrv_ms,
         resting_hr=payload.resting_hr
     )
+
+    saved = False
+    try:
+        conn = get_health_db_connection()
+        conn.execute("""
+            INSERT INTO health_logs (
+                username, date, sleep_hours, deep_sleep_hours, hrv_ms, resting_hr,
+                avg_workout_hr, max_workout_hr, steps, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(username, date) DO UPDATE SET
+                sleep_hours=excluded.sleep_hours,
+                deep_sleep_hours=excluded.deep_sleep_hours,
+                hrv_ms=excluded.hrv_ms,
+                resting_hr=excluded.resting_hr,
+                avg_workout_hr=excluded.avg_workout_hr,
+                max_workout_hr=excluded.max_workout_hr,
+                steps=excluded.steps,
+                updated_at=excluded.updated_at
+        """, (
+            payload.username, payload.date, payload.sleep_hours, payload.deep_sleep_hours,
+            payload.hrv_ms, payload.resting_hr, payload.avg_workout_hr, payload.max_workout_hr,
+            payload.steps, datetime.now(timezone.utc).isoformat()
+        ))
+        conn.commit()
+        conn.close()
+        saved = True
+    except Exception as e:
+        logger.error(f"Health sync DB yazma hatasi: {e}")
+        traceback.print_exc()
+
     return {
-        "status": "success",
-        "message": f"{payload.date} tarihli Apple Health verisi işlendi.",
+        "status": "success" if saved else "partial_success",
+        "message": f"{payload.date} tarihli Apple Health verisi işlendi." if saved
+                    else f"{payload.date} verisi hesaplandı ama kaydedilemedi (sunucu hatası).",
         "recovery_metrics": recovery
     }
+
+
+@app.get("/api/health-sync/{username}")
+def get_synced_health_data(username: str):
+    try:
+        conn = get_health_db_connection()
+        rows = conn.execute(
+            "SELECT * FROM health_logs WHERE username = ? ORDER BY date DESC LIMIT 60",
+            (username,)
+        ).fetchall()
+        conn.close()
+        logs = [dict(row) for row in rows]
+        return {"status": "success", "logs": logs}
+    except Exception as e:
+        logger.error(f"Health sync okuma hatasi: {e}")
+        return {"status": "error", "logs": [], "detail": str(e)}
 
 @app.post("/coach-audit")
 def full_coach_audit(payload: CoachAuditInput):
