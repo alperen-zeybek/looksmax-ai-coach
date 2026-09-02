@@ -32,6 +32,60 @@ if GROQ_API_KEY:
 else:
     logger.warning("GROQ_API_KEY ortam degiskeni bulunamadi!")
 
+# ================= KNOWLEDGE BASE (RAG / CHROMA) =================
+# ingest.py tarafindan olusturulan ./looksmax_db vektor veritabanini
+# uygulama ayaga kalkarken bir kez yukler. Bu klasor yoksa (ingest.py
+# hic calistirilmamissa) RAG sessizce devre disi kalir, uygulama
+# normal calismaya devam eder.
+
+VECTOR_DB_DIR = "./looksmax_db"
+embedding_model = None
+vector_db = None
+
+def load_knowledge_base():
+    global embedding_model, vector_db
+    if not os.path.isdir(VECTOR_DB_DIR):
+        logger.warning(
+            f"'{VECTOR_DB_DIR}' bulunamadi. RAG/knowledge-base devre disi. "
+            f"PDF/txt eklemek icin ./knowledge_base klasorune dosya koyup ingest.py calistirilmali."
+        )
+        return
+    try:
+        from langchain_community.vectorstores import Chroma
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+
+        embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        vector_db = Chroma(persist_directory=VECTOR_DB_DIR, embedding_function=embedding_model)
+        count = vector_db._collection.count() if hasattr(vector_db, "_collection") else "?"
+        logger.info(f"Knowledge base (Chroma) yuklendi. Parca sayisi: {count}")
+    except Exception as e:
+        logger.error(f"Knowledge base yuklenemedi: {e}")
+        traceback.print_exc()
+        vector_db = None
+
+load_knowledge_base()
+
+
+def retrieve_knowledge_context(query: str, k: int = 4) -> str:
+    """Verilen sorguya en yakin k parcayi knowledge base'den ceker.
+    RAG yuklu degilse veya sorgu bossa sessizce bos string doner."""
+    if not vector_db or not query or not query.strip():
+        return ""
+    try:
+        results = vector_db.similarity_search(query, k=k)
+        if not results:
+            return ""
+        chunks = []
+        for i, doc in enumerate(results):
+            source = doc.metadata.get("source", "bilinmeyen kaynak")
+            source_name = os.path.basename(str(source))
+            snippet = doc.page_content.strip()
+            chunks.append(f"[Kaynak {i+1}: {source_name}]\n{snippet}")
+        return "\n\n".join(chunks)
+    except Exception as e:
+        logger.error(f"Knowledge base arama hatasi: {e}")
+        return ""
+
 app = FastAPI(title="Looksmax Hub - Elite Performance & Coaching Engine")
 
 # ================= 0. DINAMIK MODEL SECICI & CIKTI TEMIZLEYICI =================
@@ -2516,6 +2570,17 @@ def full_coach_audit(payload: CoachAuditInput):
     health = payload.recent_health or {}
     injuries = payload.active_injuries or []
 
+    injuries_text_audit = ", ".join(
+        f"{i.get('area', '?')} ({i.get('severity', '?')})" for i in injuries
+    ) if injuries else ""
+    audit_query = f"{prof.get('goal', '')} hedefi haftalık antrenman ve beslenme denetimi {injuries_text_audit}".strip()
+    knowledge_snippets = retrieve_knowledge_context(audit_query, k=4)
+    knowledge_block = (
+        f"\nBİLGİ BANKASI (kaynak dokümanlardan ilgili pasajlar — varsa raporuna dayanak yap, "
+        f"yoksa görmezden gel, kaynak adını kullanıcıya söyleme):\n{knowledge_snippets}\n"
+        if knowledge_snippets else ""
+    )
+
     audit_prompt = f"""
 Sen hem halden anlayan bilge bir mentor, hem de sıfır bahane kabul eden sert ve disiplinli bir 'Looksmax & Hipertrofi Başantrenörü'sün.
 KULLANICI VERİLERİ:
@@ -2524,7 +2589,7 @@ KULLANICI VERİLERİ:
 - Beslenme: {json.dumps(nutrition, ensure_ascii=False) if nutrition else "GİRİLMEDİ"}
 - Sağlık: {json.dumps(health, ensure_ascii=False) if health else "GİRİLMEDİ"}
 - Aktif Sakatlıklar: {json.dumps(injuries, ensure_ascii=False) if injuries else "YOK"}
-
+{knowledge_block}
 KURALLAR:
 1. ASLA düşünme adımı, tablo veya veri matrisi üretme.
 2. Doğrudan net maddelerle koçluk karne raporunu dök:
@@ -2533,6 +2598,7 @@ KURALLAR:
 - 🏋️ **ANTRENMAN & OVERLOAD:** Ağırlıkların durumu ve zorlama emri.
 - 🥗 **MUTFAK & DİSİPLİN:** Makroların denetimi.
 - ⚡ **3 NET EMİR:** Bu hafta yapılacaklar.
+3. Bilgi bankasında ilgili bir pasaj varsa raporuna doğal şekilde harmanla, doğrudan alıntılama.
 """
     try:
         active_model = get_best_available_model()
@@ -2564,18 +2630,26 @@ def coach_dialogue(data: ChatInput):
     health_context = f"Biyometrik Sağlık & Recovery Durumu: {data.health_summary}" if data.health_summary else "Sağlık verisi yok."
     injuries_context = f"Aktif Sakatlıklar: {data.injuries_summary}" if data.injuries_summary else "Aktif sakatlık kaydı yok."
 
+    knowledge_snippets = retrieve_knowledge_context(data.user_message, k=4)
+    knowledge_block = (
+        f"\nBİLGİ BANKASI (kaynak dokümanlardan çekilen ilgili pasajlar — varsa cevabını buna dayandır, "
+        f"yoksa görmezden gel, ASLA kaynak adını veya bu başlığı kullanıcıya söyleme):\n{knowledge_snippets}\n"
+        if knowledge_snippets else ""
+    )
+
     system_prompt = f"""
 Sen sporcusunu çok iyi anlayan ama asla laubaliliğe izin vermeyen bilge ve disiplinli bir 'Looksmax & Hipertrofi Başantrenörü'sün.
 KULLANICI: {profile_context}
 SAĞLIK: {health_context}
 SAKATLIK DURUMU: {injuries_context}
 SETLER: {user_context}
-
+{knowledge_block}
 FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
 1. ASLA DÜŞÜNME ADIMI, TABLO VEYA İŞLEM LİSTESİ YAZMA.
 2. Uzun uzun 'Konu / Durum / Öneri' tabloları dökmek KESİNLİKLE YASAKTIR.
 3. Yanıtını doğrudan, net, maddeli ve vurucu bir özet / aksiyon planı olarak ver.
 4. Sakatlık varsa: Güvenli alternatif açıyı söyle ve 1 rehabilitasyon egzersizi emret.
+5. Bilgi bankasında ilgili bir pasaj varsa onu kendi cümlelerinle harmanla, doğrudan alıntılama.
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
@@ -2677,6 +2751,14 @@ def generate_workout_program_with_llm(payload: GenerateProgramInput) -> Optional
         if health else "Bugüne ait toparlanma verisi girilmedi."
     )
 
+    program_query = f"{prof.get('goal', 'Recomposition')} hedefi icin {num_days} gunluk antrenman programi split {injuries_text}"
+    knowledge_snippets = retrieve_knowledge_context(program_query, k=4)
+    knowledge_block = (
+        f"\nBİLGİ BANKASI (kaynak dokümanlardan ilgili pasajlar — varsa program tasarımına dayanak yap, "
+        f"yoksa görmezden gel, kaynak adını kullanıcıya söyleme):\n{knowledge_snippets}\n"
+        if knowledge_snippets else ""
+    )
+
     system_prompt = f"""
 Sen elit seviyede bir hipertrofi ve güç antrenörüsün. Görevin, kullanıcıya TAM OLARAK {num_days} GÜNLÜK
 kişiye özel bir antrenman programı (split) çıkarmak ve YALNIZCA JSON formatında,
@@ -2689,7 +2771,7 @@ KULLANICI PROFİLİ:
 
 AKTİF SAKATLIKLAR: {injuries_text}
 BUGÜNKÜ TOPARLANMA: {health_text}
-
+{knowledge_block}
 KURALLAR:
 1. Tam olarak {num_days} gün oluştur (days dizisinde {num_days} eleman olmalı). Dinlenme günü ekleme, sadece antrenman günleri.
 2. Split seçimini gün sayısına göre mantıklı yap: 3 gün=Full Body veya Push/Pull/Legs, 4 gün=Upper/Lower x2, 5 gün=Bro Split (Göğüs, Sırt, Bacak, Omuz, Kol), 6 gün=Push/Pull/Legs x2.
@@ -2697,7 +2779,8 @@ KURALLAR:
 4. Kullanıcının hedefine göre uyarla: Aggressive Cut ise daha fazla bileşik hareket ve kondisyon dokunuşu; Lean Bulk ise hacim ve progressive overload odaklı.
 5. AKTİF SAKATLIK VARSA O BÖLGEYİ ZORLAYAN HAREKETLERİ KESİNLİKLE PROGRAMA KOYMA, güvenli alternatifleri seç ve note alanına kısa uyarı yaz.
 6. Bugünkü toparlanma skoru düşükse (uyku az, HRV düşük, nabız yüksek gibi belirtiler varsa) o günün hacmini hafif azalt ve note'a belirt.
-7. ASLA açıklama, markdown, yorum ekleme. Sadece saf JSON döndür.
+7. Bilgi bankasında ilgili bir pasaj varsa (split mantığı, hacim önerisi, sakatlık protokolü vs.) program tasarımına doğal şekilde yansıt.
+8. ASLA açıklama, markdown, yorum ekleme. Sadece saf JSON döndür.
 """
 
     try:
