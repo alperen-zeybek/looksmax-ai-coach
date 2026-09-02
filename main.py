@@ -2961,16 +2961,34 @@ KURALLAR:
 - 🥗 **MUTFAK & DİSİPLİN:** Makroların denetimi.
 - ⚡ **3 NET EMİR:** Bu hafta yapılacaklar.
 4. Bilgi bankasında ilgili bir pasaj varsa raporuna doğal şekilde harmanla, doğrudan alıntılama.
+5. UZUNLUK KURALI (ÇOK ÖNEMLİ): Her bölümde EN FAZLA 3 kısa madde kullan. Aşırı ayrıntıya (örn. dakika dakika ısı/soğuk protokolü, spesifik su sıcaklığı gibi gereksiz detaylara) GİRME — öz, vurucu ve uygulanabilir ol. Rapor kesinlikle yarım cümlede bitmemeli; bitiremeyeceğin kadar uzun yazacaksan, en başından beri daha kısa ve öz yaz.
 """
-    try:
-        active_model = get_best_available_model()
+
+    def _run_audit_completion(prompt_text: str, token_budget: int):
         completion = client.chat.completions.create(
-            messages=[{"role": "system", "content": audit_prompt}],
+            messages=[{"role": "system", "content": prompt_text}],
             model=active_model,
             temperature=0.3,
-            max_tokens=1300
+            max_tokens=token_budget
         )
-        raw_report = completion.choices[0].message.content or ""
+        choice = completion.choices[0]
+        return (choice.message.content or ""), getattr(choice, "finish_reason", None)
+
+    try:
+        active_model = get_best_available_model()
+        raw_report, finish_reason = _run_audit_completion(audit_prompt, 2000)
+
+        if finish_reason == "length":
+            # Yanit token siniri yuzunden yarim kaldi - daha kisa yazmasi icin bir kez daha dene
+            logger.warning("Coach audit yaniti kesildi (finish_reason=length), daha kisa versiyon icin tekrar deneniyor.")
+            shorter_prompt = audit_prompt + (
+                "\n\nEK UYARI: Önceki yanıtın çok uzundu ve kesildi. Bu sefer HER bölümde EN FAZLA 2 kısa madde kullan, "
+                "hiçbir bölümü uzatma, kısa ve tamamlanmış bir rapor yaz."
+            )
+            retry_report, _ = _run_audit_completion(shorter_prompt, 1600)
+            if retry_report.strip():
+                raw_report = retry_report
+
         clean_report = strip_thinking_and_tables(raw_report)
         return {"audit_report": clean_report, "is_error": False}
     except Exception as e:
@@ -3030,15 +3048,16 @@ FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
         active_model = get_best_available_model()
         clean_text = ""
 
-        for attempt in range(1, 3):  # ilk deneme + format ihlali olursa 1 retry
+        for attempt in range(1, 3):  # ilk deneme + (format ihlali veya kesilme) olursa 1 retry
             attempt_messages = list(messages)
             if attempt > 1:
                 attempt_messages.append({
                     "role": "system",
                     "content": (
-                        "UYARI: ÖNCEKİ YANITIN KURALLARA UYMADI (İngilizce'ye kaydın ya da başlık/numaralı liste "
-                        "kullandın). BU SEFER SADECE TÜRKÇE, DÜZ CÜMLELER VE TİRE (-) İLE BAŞLAYAN MADDELER "
-                        "KULLAN. BAŞLIK (##), NUMARALI LİSTE (1. 2. 3.) VE İNGİLİZCE KESİNLİKLE YASAK."
+                        "UYARI: ÖNCEKİ YANITIN KURALLARA UYMADI (İngilizce'ye kaydın, başlık/numaralı liste "
+                        "kullandın ya da yanıt yarım kaldı). BU SEFER SADECE TÜRKÇE, KISA VE TAMAMLANMIŞ, "
+                        "DÜZ CÜMLELER VE TİRE (-) İLE BAŞLAYAN MADDELER KULLAN. BAŞLIK (##), NUMARALI LİSTE "
+                        "(1. 2. 3.) VE İNGİLİZCE KESİNLİKLE YASAK."
                     )
                 })
 
@@ -3048,10 +3067,12 @@ FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
                 temperature=0.3 if attempt == 1 else 0.15,
                 max_tokens=700,
             )
-            raw_text = chat_completion.choices[0].message.content or ""
+            choice = chat_completion.choices[0]
+            raw_text = choice.message.content or ""
+            finish_reason = getattr(choice, "finish_reason", None)
             clean_text = strip_thinking_and_tables(raw_text)
 
-            if not violates_coach_format_rules(clean_text):
+            if finish_reason != "length" and not violates_coach_format_rules(clean_text):
                 break
 
         if not clean_text:
