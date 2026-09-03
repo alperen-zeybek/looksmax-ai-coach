@@ -1,7 +1,6 @@
 import os
 import json
 import re
-import sqlite3
 import secrets
 import urllib.request
 import urllib.parse
@@ -107,50 +106,6 @@ def retrieve_knowledge_context(query: str, k: int = 4) -> str:
 
 app = FastAPI(title="Looksmax Hub - Elite Performance & Coaching Engine")
 
-# ================= HEALTH SYNC PERSISTENCE (SQLITE) =================
-# /api/health-sync webhook'undan gelen veriyi kalici tutmak icin hafif bir
-# SQLite tablosu. NOT: Render gibi persistent disk olmayan ortamlarda bu
-# dosya her yeniden deploy'da sifirlanir (container disk'i ephemeral) —
-# ama ayni container calisirken gelen tum veriler burada kalir, yani
-# webhook artik "veriyi hesaplayip unutmuyor", gercekten saklıyor.
-
-HEALTH_DB_PATH = os.getenv("HEALTH_DB_PATH", "./looksmax_health.db")
-
-
-def get_health_db_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(HEALTH_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_health_db():
-    try:
-        conn = get_health_db_connection()
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS health_logs (
-                username TEXT NOT NULL,
-                date TEXT NOT NULL,
-                sleep_hours REAL,
-                deep_sleep_hours REAL,
-                hrv_ms REAL,
-                resting_hr REAL,
-                avg_workout_hr REAL,
-                max_workout_hr REAL,
-                steps INTEGER,
-                updated_at TEXT,
-                PRIMARY KEY (username, date)
-            )
-        """)
-        conn.commit()
-        conn.close()
-        logger.info(f"Health DB hazir: {HEALTH_DB_PATH}")
-    except Exception as e:
-        logger.error(f"Health DB baslatilamadi: {e}")
-        traceback.print_exc()
-
-
-init_health_db()
-
 # ================= GERÇEK BACKEND AUTH (POSTGRES + JWT) =================
 # FAZ 1: Kullanici hesaplarini localStorage'dan gercek bir veritabanina tasima.
 # TASARIM: Bu katman OPSIYONEL/KATMANLI calisir. DATABASE_URL ayarlanmamissa
@@ -246,11 +201,48 @@ def init_auth_db():
                     PRIMARY KEY (username, week_key)
                 )
             """)
+            # FAZ 4: saglik/recovery (Apple Watch webhook + manuel giris - eskiden
+            # Render'in ephemeral disk'indeki SQLite'ta tutuluyordu, her deploy'da
+            # siliniyordu; artik Postgres'te kalici), sakatliklar ve before/after
+            # fotograflari (dikkat: fotograflar base64 olarak JSONB icinde tutuluyor -
+            # pratik ve az sayida kullanici icin sorunsuz calisir, ama coklu/buyuk
+            # foto hacminde ileride ayri bir object storage'a (S3/R2) tasimak daha
+            # dogru olur; simdilik bu kapsamda degil).
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_health_logs (
+                    username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                    date TEXT NOT NULL,
+                    sleep_hours REAL,
+                    deep_sleep_hours REAL,
+                    hrv_ms REAL,
+                    resting_hr REAL,
+                    avg_workout_hr REAL,
+                    max_workout_hr REAL,
+                    steps INTEGER,
+                    updated_at TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (username, date)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_injuries (
+                    username TEXT PRIMARY KEY REFERENCES users(username) ON DELETE CASCADE,
+                    injuries_data JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT now()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_phases (
+                    username TEXT PRIMARY KEY REFERENCES users(username) ON DELETE CASCADE,
+                    phases_data JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT now()
+                )
+            """)
         conn.commit()
         conn.close()
         logger.info(
             "Auth DB (Postgres) hazir: 'users', 'user_profiles', 'user_programs', "
-            "'user_workout_weeks', 'user_nutrition_weeks' tablolari dogrulandi."
+            "'user_workout_weeks', 'user_nutrition_weeks', 'user_health_logs', "
+            "'user_injuries', 'user_phases' tablolari dogrulandi."
         )
     except Exception as e:
         logger.error(f"Auth DB baslatilamadi: {e}")
@@ -329,6 +321,25 @@ class WorkoutWeekSyncInput(BaseModel):
 
 class NutritionWeekSyncInput(BaseModel):
     nutrition: dict
+
+
+class InjuriesSyncInput(BaseModel):
+    injuries_data: list
+
+
+class PhasesSyncInput(BaseModel):
+    phases_data: list
+
+
+class HealthLogSyncInput(BaseModel):
+    date: str
+    sleep_hours: Optional[float] = 0.0
+    deep_sleep_hours: Optional[float] = 0.0
+    hrv_ms: Optional[float] = 0.0
+    resting_hr: Optional[float] = 0.0
+    avg_workout_hr: Optional[float] = None
+    max_workout_hr: Optional[float] = None
+    steps: Optional[int] = 0
 
 # ================= 0. DINAMIK MODEL SECICI & CIKTI TEMIZLEYICI =================
 _CACHED_MODEL: Optional[str] = None
@@ -1648,7 +1659,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
         function getUserPhases(username) { return JSON.parse(localStorage.getItem("user_phases_" + username) || "[]"); }
         function saveUserPhases(username, phases) {
-    return safeLocalStorageSet("user_phases_" + username, JSON.stringify(phases));
+    const success = safeLocalStorageSet("user_phases_" + username, JSON.stringify(phases));
+    if (success && currentUser && currentUser.token && currentUser.username === username) {
+        fetch('/api/phases', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + currentUser.token },
+            body: JSON.stringify({ phases_data: phases })
+        }).catch(err => console.warn("Fazlar/fotoğraflar backend'e senkronize edilemedi (local'de kayıtlı kaldı):", err));
+    }
+    return success;
 }
 
         function getUserHealthLogs(username) { return JSON.parse(localStorage.getItem("user_health_" + username) || "{}"); }
@@ -1659,6 +1678,13 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         function getUserInjuries(username) { return JSON.parse(localStorage.getItem("user_injuries_" + username) || "[]"); }
         function saveUserInjuries(username, injuries) {
     safeLocalStorageSet("user_injuries_" + username, JSON.stringify(injuries));
+    if (currentUser && currentUser.token && currentUser.username === username) {
+        fetch('/api/injuries', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + currentUser.token },
+            body: JSON.stringify({ injuries_data: injuries })
+        }).catch(err => console.warn("Sakatlıklar backend'e senkronize edilemedi (local'de kayıtlı kaldı):", err));
+    }
 }
 
         function getUserProgram(username) { return JSON.parse(localStorage.getItem("user_program_" + username) || "null"); }
@@ -1841,6 +1867,8 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 syncProgramFromServer();
                 syncWorkoutWeeksFromServer();
                 syncNutritionWeeksFromServer();
+                syncInjuriesFromServer();
+                syncPhasesFromServer();
             }
         }
 
@@ -1935,6 +1963,43 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 }
             } catch (err) {
                 console.warn("Beslenme geçmişi sunucudan senkronize edilemedi:", err);
+            }
+        }
+
+        async function syncInjuriesFromServer() {
+            if (!currentUser || !currentUser.token) return;
+            try {
+                const res = await fetch('/api/injuries', {
+                    headers: { 'Authorization': 'Bearer ' + currentUser.token }
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.injuries_data) {
+                    safeLocalStorageSet("user_injuries_" + currentUser.username, JSON.stringify(data.injuries_data));
+                    renderInjuriesUI();
+                }
+            } catch (err) {
+                console.warn("Sakatlıklar sunucudan senkronize edilemedi:", err);
+            }
+        }
+
+        async function syncPhasesFromServer() {
+            if (!currentUser || !currentUser.token) return;
+            try {
+                const res = await fetch('/api/phases', {
+                    headers: { 'Authorization': 'Bearer ' + currentUser.token }
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.phases_data) {
+                    safeLocalStorageSet("user_phases_" + currentUser.username, JSON.stringify(data.phases_data));
+                    const profileViewEl = document.getElementById("profileView");
+                    if (profileViewEl && profileViewEl.classList.contains("active")) {
+                        loadUserPhasesUI();
+                    }
+                }
+            } catch (err) {
+                console.warn("Fazlar/fotoğraflar sunucudan senkronize edilemedi:", err);
             }
         }
 
@@ -2277,6 +2342,13 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             userHealthLogs[todayKey] = log;
             saveUserHealthLogs(currentUser.username, userHealthLogs);
+            if (currentUser.token) {
+                fetch('/api/health-log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + currentUser.token },
+                    body: JSON.stringify(log)
+                }).catch(err => console.warn("Sağlık verisi backend'e senkronize edilemedi (local'de kayıtlı kaldı):", err));
+            }
             renderRecoveryScoreUI(log);
             updateHealthTrendChart();
             alert("Sağlık ve toparlanma verilerin başarıyla kaydedildi! 🫀");
@@ -3662,56 +3734,177 @@ def sync_apple_health_webhook(payload: HealthSyncInput):
     )
 
     saved = False
-    try:
-        conn = get_health_db_connection()
-        conn.execute("""
-            INSERT INTO health_logs (
-                username, date, sleep_hours, deep_sleep_hours, hrv_ms, resting_hr,
-                avg_workout_hr, max_workout_hr, steps, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(username, date) DO UPDATE SET
-                sleep_hours=excluded.sleep_hours,
-                deep_sleep_hours=excluded.deep_sleep_hours,
-                hrv_ms=excluded.hrv_ms,
-                resting_hr=excluded.resting_hr,
-                avg_workout_hr=excluded.avg_workout_hr,
-                max_workout_hr=excluded.max_workout_hr,
-                steps=excluded.steps,
-                updated_at=excluded.updated_at
-        """, (
-            payload.username, payload.date, payload.sleep_hours, payload.deep_sleep_hours,
-            payload.hrv_ms, payload.resting_hr, payload.avg_workout_hr, payload.max_workout_hr,
-            payload.steps, datetime.now(timezone.utc).isoformat()
-        ))
-        conn.commit()
-        conn.close()
-        saved = True
-    except Exception as e:
-        logger.error(f"Health sync DB yazma hatasi: {e}")
-        traceback.print_exc()
+    if AUTH_BACKEND_AVAILABLE:
+        try:
+            conn = get_auth_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO user_health_logs (
+                        username, date, sleep_hours, deep_sleep_hours, hrv_ms, resting_hr,
+                        avg_workout_hr, max_workout_hr, steps, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                    ON CONFLICT (username, date) DO UPDATE SET
+                        sleep_hours = EXCLUDED.sleep_hours,
+                        deep_sleep_hours = EXCLUDED.deep_sleep_hours,
+                        hrv_ms = EXCLUDED.hrv_ms,
+                        resting_hr = EXCLUDED.resting_hr,
+                        avg_workout_hr = EXCLUDED.avg_workout_hr,
+                        max_workout_hr = EXCLUDED.max_workout_hr,
+                        steps = EXCLUDED.steps,
+                        updated_at = now()
+                """, (
+                    payload.username, payload.date, payload.sleep_hours, payload.deep_sleep_hours,
+                    payload.hrv_ms, payload.resting_hr, payload.avg_workout_hr, payload.max_workout_hr,
+                    payload.steps
+                ))
+            conn.commit()
+            conn.close()
+            saved = True
+        except Exception as e:
+            # orn: bu username 'users' tablosunda yok (FK ihlali) - sessizce partial_success'e dus
+            logger.error(f"Health sync DB yazma hatasi: {e}")
+            traceback.print_exc()
 
     return {
         "status": "success" if saved else "partial_success",
         "message": f"{payload.date} tarihli Apple Health verisi işlendi." if saved
-                    else f"{payload.date} verisi hesaplandı ama kaydedilemedi (sunucu hatası).",
+                    else f"{payload.date} verisi hesaplandı ama kaydedilemedi (backend yapılandırılmamış veya kullanıcı bulunamadı).",
         "recovery_metrics": recovery
     }
 
 
 @app.get("/api/health-sync/{username}")
 def get_synced_health_data(username: str):
+    if not AUTH_BACKEND_AVAILABLE:
+        return {"status": "not_configured", "logs": []}
     try:
-        conn = get_health_db_connection()
-        rows = conn.execute(
-            "SELECT * FROM health_logs WHERE username = ? ORDER BY date DESC LIMIT 60",
-            (username,)
-        ).fetchall()
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM user_health_logs WHERE username = %s ORDER BY date DESC LIMIT 60",
+                (username,)
+            )
+            rows = cur.fetchall()
         conn.close()
         logs = [dict(row) for row in rows]
         return {"status": "success", "logs": logs}
     except Exception as e:
         logger.error(f"Health sync okuma hatasi: {e}")
         return {"status": "error", "logs": [], "detail": str(e)}
+
+
+@app.post("/api/health-log")
+def save_manual_health_log(payload: HealthLogSyncInput, username: str = Depends(require_auth_username)):
+    """Uygulama icindeki manuel saglik veri girisi icin (JWT korumali).
+    Apple Watch webhook'uyla AYNI tabloyu (user_health_logs) kullanir - upsert semantigi
+    sayesinde hangisi once/sonra gelirse gelsin ayni tarih uzerinde birbirini gunceller."""
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO user_health_logs (
+                    username, date, sleep_hours, deep_sleep_hours, hrv_ms, resting_hr,
+                    avg_workout_hr, max_workout_hr, steps, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                ON CONFLICT (username, date) DO UPDATE SET
+                    sleep_hours = EXCLUDED.sleep_hours,
+                    deep_sleep_hours = EXCLUDED.deep_sleep_hours,
+                    hrv_ms = EXCLUDED.hrv_ms,
+                    resting_hr = EXCLUDED.resting_hr,
+                    avg_workout_hr = EXCLUDED.avg_workout_hr,
+                    max_workout_hr = EXCLUDED.max_workout_hr,
+                    steps = EXCLUDED.steps,
+                    updated_at = now()
+            """, (
+                username, payload.date, payload.sleep_hours, payload.deep_sleep_hours,
+                payload.hrv_ms, payload.resting_hr, payload.avg_workout_hr, payload.max_workout_hr,
+                payload.steps
+            ))
+        conn.commit()
+        conn.close()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Manuel health log yazma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.get("/api/injuries")
+def get_injuries_backend(username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT injuries_data FROM user_injuries WHERE username = %s", (username,))
+            row = cur.fetchone()
+        conn.close()
+        return {"injuries_data": row["injuries_data"] if row else None}
+    except Exception as e:
+        logger.error(f"Sakatlik okuma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.post("/api/injuries")
+def save_injuries_backend(payload: InjuriesSyncInput, username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO user_injuries (username, injuries_data, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (username) DO UPDATE SET injuries_data = EXCLUDED.injuries_data, updated_at = now()
+            """, (username, psycopg2.extras.Json(payload.injuries_data)))
+        conn.commit()
+        conn.close()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Sakatlik yazma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.get("/api/phases")
+def get_phases_backend(username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT phases_data FROM user_phases WHERE username = %s", (username,))
+            row = cur.fetchone()
+        conn.close()
+        return {"phases_data": row["phases_data"] if row else None}
+    except Exception as e:
+        logger.error(f"Fazlar okuma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.post("/api/phases")
+def save_phases_backend(payload: PhasesSyncInput, username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO user_phases (username, phases_data, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (username) DO UPDATE SET phases_data = EXCLUDED.phases_data, updated_at = now()
+            """, (username, psycopg2.extras.Json(payload.phases_data)))
+        conn.commit()
+        conn.close()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Fazlar yazma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
 
 @app.post("/coach-audit")
 def full_coach_audit(payload: CoachAuditInput):
