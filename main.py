@@ -95,25 +95,31 @@ def load_knowledge_base():
 load_knowledge_base()
 
 
-def retrieve_knowledge_context(query: str, k: int = 4) -> str:
+def retrieve_knowledge_context(query: str, k: int = 4):
     """Verilen sorguya en yakin k parcayi knowledge base'den ceker.
-    RAG yuklu degilse veya sorgu bossa sessizce bos string doner."""
+    (context_text, source_names) tuple'i doner. RAG yuklu degilse veya
+    sorgu bossa ("", []) doner. source_names, hangi PDF/txt dosyalarinin
+    kullanildigini arayuzde gostermek icin (kullanicinin 'gercekten PDF'den mi
+    besleniyor' sorusuna kanit olarak)."""
     if not vector_db or not query or not query.strip():
-        return ""
+        return "", []
     try:
         results = vector_db.similarity_search(query, k=k)
         if not results:
-            return ""
+            return "", []
         chunks = []
+        sources = []
         for i, doc in enumerate(results):
             source = doc.metadata.get("source", "bilinmeyen kaynak")
             source_name = os.path.basename(str(source))
+            if source_name not in sources:
+                sources.append(source_name)
             snippet = doc.page_content.strip()
             chunks.append(f"[Kaynak {i+1}: {source_name}]\n{snippet}")
-        return "\n\n".join(chunks)
+        return "\n\n".join(chunks), sources
     except Exception as e:
         logger.error(f"Knowledge base arama hatasi: {e}")
-        return ""
+        return "", []
 
 app = FastAPI(title="Looksmax Hub - Elite Performance & Coaching Engine")
 
@@ -996,7 +1002,7 @@ def generate_face_protocol_with_llm(front_image_b64: str, symmetry_data: dict, p
         return None, "Vision destekli bir Groq modeli bulunamadı (Groq konsolünde mevcut modelleri kontrol et)."
 
     query = f"yuz simetrisi cene hatti altin oran cilt bakimi looksmax protokol {profile_data.get('goal', '')}"
-    knowledge_snippets = retrieve_knowledge_context(query, k=6)
+    knowledge_snippets, knowledge_sources = retrieve_knowledge_context(query, k=6)
     knowledge_block = (
         f"\nBİLGİ BANKASI (yüklenen makalelerden ilgili pasajlar — protokol önerilerini mümkün "
         f"olduğunca BUNA dayandır, kaynak adını kullanıcıya söyleme):\n{knowledge_snippets}\n"
@@ -1847,6 +1853,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <div class="panel-header">
                         <span>🧠 AI Program Oluşturucu</span>
                         <span class="badge-cyan" id="programStatusBadge">Program Yok</span>
+                        <span class="badge-cyan" id="programSourcesBadge" style="display:none; border-color:#10b981; color:#10b981;" title=""></span>
                     </div>
                     <div class="input-form">
                         <select id="programSplitSelect">
@@ -3550,9 +3557,22 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 badge.innerText = userProgram.generated_at ? `${userProgram.days.length} Günlük Program` : "Henüz Oluşturulmadı";
             }
 
+            renderProgramSourcesBadge(userProgram.used_sources || []);
             renderProgramDayTabs();
             renderProgramExercises();
             refreshProgramDaySelectOptions();
+        }
+
+        function renderProgramSourcesBadge(usedSources) {
+            const sourcesBadge = document.getElementById("programSourcesBadge");
+            if (!sourcesBadge) return;
+            if (usedSources && usedSources.length > 0) {
+                sourcesBadge.style.display = "inline-block";
+                sourcesBadge.innerText = `📚 ${usedSources.length} kaynak kullanıldı`;
+                sourcesBadge.title = usedSources.join(", ");
+            } else {
+                sourcesBadge.style.display = "none";
+            }
         }
 
         function renderProgramDayTabs() {
@@ -3786,15 +3806,24 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     return;
                 }
 
+                const usedSources = Array.isArray(data.used_sources) ? data.used_sources : [];
+
                 userProgram = {
                     days: data.program.days,
                     generated_at: new Date().toISOString(),
-                    goal_used: prof.goal || ""
+                    goal_used: prof.goal || "",
+                    used_sources: usedSources
                 };
                 saveUserProgram(currentUser.username, userProgram);
                 selectedProgramDayIdx = 0;
                 loadProgramUI();
-                alert("Programın hazır kral! Her gün için hareketleri, set ve tekrarları sol üstteki sekmelerden inceleyebilirsin. 🦍");
+                renderProgramSourcesBadge(usedSources);
+
+                if (usedSources.length > 0) {
+                    alert(`Programın hazır kral! Şu kaynaklardan yararlanıldı: ${usedSources.join(", ")} 📚`);
+                } else {
+                    alert("Programın hazır kral! (Bu seferki program için knowledge base'den ilgili bir PDF pasajı bulunamadı, genel bilgiyle oluşturuldu.) Her gün için hareketleri sol üstteki sekmelerden inceleyebilirsin. 🦍");
+                }
             } catch (err) {
                 alert("Sunucu bağlantı hatası: " + err.message);
             } finally {
@@ -4671,7 +4700,7 @@ def full_coach_audit(payload: CoachAuditInput):
         f"{i.get('area', '?')} ({i.get('severity', '?')})" for i in injuries
     ) if injuries else ""
     audit_query = f"{prof.get('goal', '')} hedefi haftalık antrenman ve beslenme denetimi {injuries_text_audit}".strip()
-    knowledge_snippets = retrieve_knowledge_context(audit_query, k=4)
+    knowledge_snippets, knowledge_sources = retrieve_knowledge_context(audit_query, k=4)
     knowledge_block = (
         f"\nBİLGİ BANKASI (kaynak dokümanlardan ilgili pasajlar — varsa raporuna dayanak yap, "
         f"yoksa görmezden gel, kaynak adını kullanıcıya söyleme):\n{knowledge_snippets}\n"
@@ -4746,7 +4775,7 @@ def coach_dialogue(data: ChatInput):
     health_context = f"Biyometrik Sağlık & Recovery Durumu: {data.health_summary}" if data.health_summary else "Sağlık verisi yok."
     injuries_context = f"Aktif Sakatlıklar: {data.injuries_summary}" if data.injuries_summary else "Aktif sakatlık kaydı yok."
 
-    knowledge_snippets = retrieve_knowledge_context(data.user_message, k=4)
+    knowledge_snippets, knowledge_sources = retrieve_knowledge_context(data.user_message, k=4)
     knowledge_block = (
         f"\nBİLGİ BANKASI (kaynak dokümanlardan çekilen ilgili pasajlar — varsa cevabını buna dayandır, "
         f"yoksa görmezden gel, ASLA kaynak adını veya bu başlığı kullanıcıya söyleme):\n{knowledge_snippets}\n"
@@ -4988,9 +5017,9 @@ class GenerateProgramInput(BaseModel):
 
 
 def generate_workout_program_with_llm(payload: GenerateProgramInput):
-    """Program uretir. (program_dict, None) basarili; (None, hata_mesaji) basarisiz doner."""
+    """Program uretir. (program_dict, kaynak_listesi, None) basarili; (None, [], hata_mesaji) basarisiz doner."""
     if not client:
-        return None, "GROQ_API_KEY bulunamadı."
+        return None, [], "GROQ_API_KEY bulunamadı."
 
     prof = payload.profile_data or {}
     injuries = payload.active_injuries or []
@@ -5015,7 +5044,7 @@ def generate_workout_program_with_llm(payload: GenerateProgramInput):
     }.get(goal, "hipertrofi antrenman programlama hacim periyotlama")
 
     program_query = f"{goal} {goal_query_hints} {num_days} gunluk split antrenman programi {injuries_text}"
-    knowledge_snippets = retrieve_knowledge_context(program_query, k=6)
+    knowledge_snippets, knowledge_sources = retrieve_knowledge_context(program_query, k=6)
     knowledge_block = (
         f"\nBİLGİ BANKASI (yüklenen PDF/makalelerden bu isteğe en ilgili pasajlar):\n{knowledge_snippets}\n"
         f"YUKARIDAKİ BİLGİ BANKASI VARSA, programı bunun üzerine kur — split mantığı, hacim/yoğunluk önerisi, "
@@ -5079,7 +5108,7 @@ KURALLAR:
             if any(len(d.exercises) == 0 for d in data.days):
                 raise ValueError("LLM en az bir günü hareketsiz bıraktı.")
 
-            return data.model_dump(), None
+            return data.model_dump(), knowledge_sources, None
 
         except Exception as e:
             last_error = str(e)
@@ -5087,7 +5116,7 @@ KURALLAR:
 
     logger.error(f"LLM Program Uretim Hatasi (tum denemeler basarisiz): {last_error}")
     traceback.print_exc()
-    return None, last_error
+    return None, [], last_error
 
 
 @app.post("/generate-program")
@@ -5099,7 +5128,7 @@ def generate_program(payload: GenerateProgramInput):
             "error_detail": "GROQ_API_KEY bulunamadı! Lütfen sunucu ortam değişkenine veya .env dosyasına ekle."
         }
 
-    program, error_detail = generate_workout_program_with_llm(payload)
+    program, used_sources, error_detail = generate_workout_program_with_llm(payload)
     if not program:
         return {
             "program": None,
@@ -5108,7 +5137,7 @@ def generate_program(payload: GenerateProgramInput):
                              else "AI programı oluştururken bir hata oluştu. Lütfen tekrar dene."
         }
 
-    return {"program": program, "is_error": False}
+    return {"program": program, "used_sources": used_sources, "is_error": False}
 
 
 if __name__ == "__main__":
