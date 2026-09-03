@@ -16,3 +16,8 @@ sentence-transformers
 psycopg2-binary
 PyJWT
 bcrypt
+
+# --- Yuz Analizi (gercek geometrik olcum: altin oran, simetri, cene) ---
+mediapipe
+opencv-python-headless
+numpy
