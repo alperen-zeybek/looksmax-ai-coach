@@ -3,6 +3,7 @@ import json
 import re
 import secrets
 import base64
+import math
 import urllib.request
 import urllib.parse
 import logging
@@ -29,6 +30,15 @@ try:
     import bcrypt
 except ImportError:
     bcrypt = None
+
+try:
+    import numpy as np
+    import cv2
+    import mediapipe as mp
+except ImportError:
+    np = None
+    cv2 = None
+    mp = None
 
 try:
     from dotenv import load_dotenv
@@ -238,12 +248,21 @@ def init_auth_db():
                     updated_at TIMESTAMPTZ DEFAULT now()
                 )
             """)
+            # YUZ ANALIZI: her tarama ayri bir satir (gecmis/ilerleme takibi icin).
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_face_scans (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                    scanned_at TIMESTAMPTZ DEFAULT now(),
+                    result_data JSONB NOT NULL
+                )
+            """)
         conn.commit()
         conn.close()
         logger.info(
             "Auth DB (Postgres) hazir: 'users', 'user_profiles', 'user_programs', "
             "'user_workout_weeks', 'user_nutrition_weeks', 'user_health_logs', "
-            "'user_injuries', 'user_phases' tablolari dogrulandi."
+            "'user_injuries', 'user_phases', 'user_face_scans' tablolari dogrulandi."
         )
     except Exception as e:
         logger.error(f"Auth DB baslatilamadi: {e}")
@@ -341,6 +360,11 @@ class HealthLogSyncInput(BaseModel):
     avg_workout_hr: Optional[float] = None
     max_workout_hr: Optional[float] = None
     steps: Optional[int] = 0
+
+
+class FaceAnalysisInput(BaseModel):
+    front_image_base64: str
+    side_image_base64: str
 
 # ================= 0. DINAMIK MODEL SECICI & CIKTI TEMIZLEYICI =================
 _CACHED_MODEL: Optional[str] = None
@@ -731,6 +755,303 @@ def compute_recovery_score(sleep_hours: float, hrv: float, resting_hr: float) ->
         "cns_advice": cns_advice,
         "badge_color": badge_color
     }
+
+# ================= YUZ ANALIZI MOTORU (GERCEK GEOMETRIK OLCUM + LLM/RAG) =================
+# TASARIM: Iki katmanli.
+#   1) GEOMETRIK OLCUM (bu blok): mediapipe Face Mesh ile fotograftan gercek, tekrarlanabilir
+#      sayilar cikarir (simetri sapmasi, altin oran, cene orani). Hic LLM kullanmaz, saf geometri.
+#   2) YORUM + PROTOKOL (asagida generate_face_protocol_with_llm): bu sayilari + yuklenen
+#      PDF/makalelerden RAG ile cekilen bilgiyi + fotografin kendisini Groq'un vision modeline
+#      vererek cilt puani + protokol onerileri uretir.
+#
+# ONEMLI NOT (durustluk): Asagidaki mediapipe landmark indeksleri ve puanlama formulleri
+# standart 468-noktali face mesh haritasindan alinan bilinen referans noktalaridir, ama
+# GERCEK FOTOGRAFLARLA KALIBRE EDILMEDI (bu ortamda mediapipe calistirip test etme imkani yok).
+# Sayilar tutarsiz/mantiksiz gelirse (orn. surekli çok yuksek/dusuk simetri puani), bu
+# fonksiyonlardaki esik degerleri ve formulleri ayarlamak gerekebilir.
+
+FACE_MESH_AVAILABLE = bool(np is not None and cv2 is not None and mp is not None)
+
+# Standart mediapipe Face Mesh (468 nokta) landmark indeksleri
+LM_LEFT_EYE_OUTER = 33
+LM_LEFT_EYE_INNER = 133
+LM_RIGHT_EYE_OUTER = 263
+LM_RIGHT_EYE_INNER = 362
+LM_NOSE_TIP = 1
+LM_NOSE_BRIDGE = 168
+LM_CHIN = 152
+LM_MOUTH_LEFT = 61
+LM_MOUTH_RIGHT = 291
+LM_FOREHEAD_TOP = 10
+LM_FACE_LEFT_EDGE = 234
+LM_FACE_RIGHT_EDGE = 454
+LM_JAW_LEFT = 172
+LM_JAW_RIGHT = 397
+
+
+def decode_base64_image(b64_string: str):
+    """Base64 (data URI onekiyle veya onsuz) -> OpenCV BGR numpy array."""
+    if not FACE_MESH_AVAILABLE or not b64_string:
+        return None
+    try:
+        if "," in b64_string:
+            b64_string = b64_string.split(",", 1)[1]
+        img_bytes = base64.b64decode(b64_string)
+        arr = np.frombuffer(img_bytes, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        return img
+    except Exception as e:
+        logger.error(f"Goruntu decode hatasi: {e}")
+        return None
+
+
+def get_face_landmarks(image_bgr):
+    """Verilen goruntude yuz tespit edip 468 landmark'in (x, y) piksel koordinatlarini dondurur.
+    Yuz bulunamazsa None doner."""
+    if not FACE_MESH_AVAILABLE or image_bgr is None:
+        return None
+    try:
+        mp_face_mesh = mp.solutions.face_mesh
+        with mp_face_mesh.FaceMesh(
+            static_image_mode=True, max_num_faces=1,
+            refine_landmarks=True, min_detection_confidence=0.5
+        ) as face_mesh:
+            rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+            results = face_mesh.process(rgb)
+            if not results.multi_face_landmarks:
+                return None
+            h, w = image_bgr.shape[:2]
+            landmarks = results.multi_face_landmarks[0].landmark
+            return [(lm.x * w, lm.y * h) for lm in landmarks]
+    except Exception as e:
+        logger.error(f"Face mesh tespit hatasi: {e}")
+        traceback.print_exc()
+        return None
+
+
+def _pt_dist(p1, p2) -> float:
+    return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+
+
+def compute_symmetry_score(points: list) -> Dict[str, Any]:
+    """On yuz fotografindan sol-sag landmark ciftlerinin dikey orta hatta olan
+    uzakliklarini karsilastirarak bir simetri puani (0-10) hesaplar."""
+    try:
+        top = points[LM_FOREHEAD_TOP]
+        bottom = points[LM_CHIN]
+        midline_x = (top[0] + bottom[0]) / 2.0
+
+        pairs = [
+            (LM_LEFT_EYE_OUTER, LM_RIGHT_EYE_OUTER),
+            (LM_LEFT_EYE_INNER, LM_RIGHT_EYE_INNER),
+            (LM_MOUTH_LEFT, LM_MOUTH_RIGHT),
+            (LM_FACE_LEFT_EDGE, LM_FACE_RIGHT_EDGE),
+            (LM_JAW_LEFT, LM_JAW_RIGHT),
+        ]
+
+        deviations = []
+        for left_idx, right_idx in pairs:
+            left_p, right_p = points[left_idx], points[right_idx]
+            left_dist = abs(left_p[0] - midline_x)
+            right_dist = abs(right_p[0] - midline_x)
+            avg_dist = (left_dist + right_dist) / 2.0
+            if avg_dist > 1e-6:
+                deviations.append(abs(left_dist - right_dist) / avg_dist * 100.0)
+
+        if not deviations:
+            return {"score": 5.0, "avg_deviation_pct": None}
+
+        avg_deviation = sum(deviations) / len(deviations)
+        # Her %2'lik ortalama sapma icin 1 puan dus (esik degeri kalibrasyon gerektirebilir)
+        score = max(0.0, min(10.0, 10.0 - (avg_deviation / 2.0)))
+        return {"score": round(score, 1), "avg_deviation_pct": round(avg_deviation, 2)}
+    except Exception as e:
+        logger.error(f"Simetri hesaplama hatasi: {e}")
+        return {"score": 5.0, "avg_deviation_pct": None}
+
+
+def compute_proportion_score(points: list) -> Dict[str, Any]:
+    """On yuz fotografindan yukseklik/genislik oranini altin orana (1.618) ve
+    yuz uctebirlerinin esitligine gore bir 'oran' puani (0-10) hesaplar."""
+    try:
+        forehead, chin = points[LM_FOREHEAD_TOP], points[LM_CHIN]
+        left_edge, right_edge = points[LM_FACE_LEFT_EDGE], points[LM_FACE_RIGHT_EDGE]
+        eyebrow_level_y = points[LM_NOSE_BRIDGE][1]
+        nose_base_y = points[LM_NOSE_TIP][1]
+
+        face_height = _pt_dist(forehead, chin)
+        face_width = _pt_dist(left_edge, right_edge)
+        if face_width < 1e-6:
+            return {"score": 5.0, "height_width_ratio": None}
+
+        ratio = face_height / face_width
+        golden_ratio = 1.618
+        ratio_deviation_pct = abs(ratio - golden_ratio) / golden_ratio * 100.0
+
+        thirds = [
+            abs(eyebrow_level_y - forehead[1]),
+            abs(nose_base_y - eyebrow_level_y),
+            abs(chin[1] - nose_base_y),
+        ]
+        avg_third = sum(thirds) / 3.0
+        thirds_variance_pct = ((max(thirds) - min(thirds)) / avg_third * 100.0) if avg_third > 1e-6 else 0.0
+
+        combined_deviation = (ratio_deviation_pct + thirds_variance_pct) / 2.0
+        score = max(0.0, min(10.0, 10.0 - (combined_deviation / 4.0)))
+
+        return {
+            "score": round(score, 1),
+            "height_width_ratio": round(ratio, 3),
+            "golden_ratio_deviation_pct": round(ratio_deviation_pct, 2),
+            "thirds_variance_pct": round(thirds_variance_pct, 2),
+        }
+    except Exception as e:
+        logger.error(f"Oran hesaplama hatasi: {e}")
+        return {"score": 5.0, "height_width_ratio": None}
+
+
+def compute_jaw_score(side_points: list) -> Dict[str, Any]:
+    """Yan profil fotografindan kaba bir cene/genislik oranina dayali 'cene tanimliligi'
+    puani (0-10) hesaplar. Bu formul en cok kalibrasyon gerektiren kisim - ideal araligi
+    (0.35-0.55) simdilik genel bir varsayimdir."""
+    try:
+        chin = side_points[LM_CHIN]
+        jaw_ref = side_points[LM_JAW_LEFT]
+        face_edge = side_points[LM_FACE_LEFT_EDGE]
+
+        jaw_width = _pt_dist(jaw_ref, chin)
+        face_span = _pt_dist(face_edge, chin)
+        if face_span < 1e-6:
+            return {"score": 5.0, "jaw_ratio": None}
+
+        jaw_ratio = jaw_width / face_span
+        if 0.35 <= jaw_ratio <= 0.55:
+            score = 8.0
+        else:
+            deviation = min(abs(jaw_ratio - 0.35), abs(jaw_ratio - 0.55))
+            score = max(3.0, 8.0 - deviation * 20)
+
+        return {"score": round(score, 1), "jaw_ratio": round(jaw_ratio, 3)}
+    except Exception as e:
+        logger.error(f"Cene hesaplama hatasi: {e}")
+        return {"score": 5.0, "jaw_ratio": None}
+
+
+# --- Vision-capable Groq modeli secimi (metin modellerinden ayri, cunku hepsi gorsel giris kabul etmiyor) ---
+VISION_MODEL_PREFERENCES = [
+    "llama-3.2-90b-vision-preview",
+    "llama-3.2-11b-vision-preview",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+]
+_CACHED_VISION_MODEL: Optional[str] = None
+
+
+def get_best_vision_model() -> Optional[str]:
+    global _CACHED_VISION_MODEL
+    if _CACHED_VISION_MODEL:
+        return _CACHED_VISION_MODEL
+    if not client:
+        return None
+    try:
+        models_response = client.models.list()
+        active_models = [m.id for m in models_response.data]
+        for pref in VISION_MODEL_PREFERENCES:
+            if pref in active_models:
+                _CACHED_VISION_MODEL = pref
+                return _CACHED_VISION_MODEL
+        vision_like = [m for m in active_models if any(k in m.lower() for k in ["vision", "scout", "maverick"])]
+        if vision_like:
+            _CACHED_VISION_MODEL = vision_like[0]
+            return _CACHED_VISION_MODEL
+    except Exception as e:
+        logger.warning(f"Vision model tespit edilemedi: {e}")
+    return None
+
+
+class FaceProtocolItem(BaseModel):
+    title: str = Field(description="Protokol basligi, kisa (orn: 'Cilt Bakim Rutini')")
+    description: str = Field(description="Ne yapilmasi gerektigi, 1-2 cumle, uygulanabilir")
+    category: str = Field(description="'simetri', 'cene', 'oran', 'cilt' ya da 'genel'")
+
+
+class FaceLLMAnalysis(BaseModel):
+    skin_score: float = Field(description="Fotograftan gorsel degerlendirmeye dayali 0-10 arasi cilt puani")
+    skin_summary: str = Field(description="Cildin gorsel degerlendirmesi, 1-2 cumle")
+    symmetry_summary: str = Field(description="Verilen simetri sayisal bulgusunun yorumu, 1-2 cumle")
+    jaw_summary: str = Field(description="Verilen cene sayisal bulgusunun yorumu, 1-2 cumle")
+    proportion_summary: str = Field(description="Verilen oran sayisal bulgusunun yorumu, 1-2 cumle")
+    protocol: List[FaceProtocolItem]
+
+
+def generate_face_protocol_with_llm(front_image_b64: str, symmetry_data: dict, proportion_data: dict,
+                                     jaw_data: dict, profile_data: dict):
+    """Geometrik bulgular + fotograf + RAG bilgi bankasini kullanarak cilt puani, yorumlar
+    ve protokol onerileri uretir. (result_dict, None) basarili; (None, hata_mesaji) basarisiz."""
+    if not client:
+        return None, "GROQ_API_KEY bulunamadı."
+
+    vision_model = get_best_vision_model()
+    if not vision_model:
+        return None, "Vision destekli bir Groq modeli bulunamadı (Groq konsolünde mevcut modelleri kontrol et)."
+
+    query = f"yuz simetrisi cene hatti altin oran cilt bakimi looksmax protokol {profile_data.get('goal', '')}"
+    knowledge_snippets = retrieve_knowledge_context(query, k=6)
+    knowledge_block = (
+        f"\nBİLGİ BANKASI (yüklenen makalelerden ilgili pasajlar — protokol önerilerini mümkün "
+        f"olduğunca BUNA dayandır, kaynak adını kullanıcıya söyleme):\n{knowledge_snippets}\n"
+        if knowledge_snippets else ""
+    )
+
+    system_prompt = f"""
+Sen bir yuz estetigi ve "looksmax" uzmanisin. Sana bir kisinin on yuz fotografi ve geometrik
+olcum sonuclari verilecek. Gorevin YALNIZCA JSON formatinda, FaceLLMAnalysis semasina uygun
+cikti vermek:
+
+1. Fotograftan cildin gorsel durumunu (ton esitligi, parlaklik, gozeneklilik, kizariklik gibi
+   gozle gorulur ipuclarindan) degerlendirip 0-10 arasi bir "skin_score" ver.
+2. Asagidaki geometrik bulgulari kisa, anlasilir cumlelerle yorumla (summary alanlari).
+3. Bilgi bankasindaki icerige dayanarak (varsa) kisiye ozel, uygulanabilir protokol onerileri sun.
+
+GEOMETRIK BULGULAR (bunlari SEN hesaplamiyorsun, zaten hesaplanmis - sadece yorumla):
+- Simetri: puan={symmetry_data.get('score')}/10, ortalama sapma=%{symmetry_data.get('avg_deviation_pct')}
+- Oran (altın oran): puan={proportion_data.get('score')}/10, yükseklik/genişlik oranı={proportion_data.get('height_width_ratio')} (ideal: 1.618)
+- Çene: puan={jaw_data.get('score')}/10
+{knowledge_block}
+KURALLAR:
+1. SADECE TÜRKÇE yaz.
+2. YALNIZCA JSON formatında çıktı ver, açıklama/markdown ekleme.
+3. Protokol önerilerini gerçekçi ve uygulanabilir tut (cilt rutini, çene/duruş egzersizleri,
+   su tüketimi/şişkinlik gibi yaşam tarzı konularında). ASLA tıbbi tedavi, ilaç, operasyon önerme.
+4. Asla abartılı, kesinlik iddia eden ifadeler kullanma ("kesin", "garanti" gibi) — bu estetik
+   bir değerlendirme, tıbbi teşhis değil.
+"""
+
+    try:
+        completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": system_prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{front_image_b64}"}}
+                    ]
+                }
+            ],
+            model=vision_model,
+            response_format={"type": "json_object"},
+            temperature=0.3,
+            max_tokens=1200
+        )
+        raw = completion.choices[0].message.content
+        parsed = json.loads(raw)
+        data = FaceLLMAnalysis(**parsed)
+        return data.model_dump(), None
+    except Exception as e:
+        logger.error(f"Face LLM analiz hatasi: {e}")
+        traceback.print_exc()
+        return None, str(e)
+
 
 # ================= 3. SCHEMAS & API ENDPOINTS =================
 class ChatInput(BaseModel):
@@ -1141,6 +1462,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         <div class="card-desc">Hedefine ve toparlanma verine göre AI'nin çıkardığı, gün gün kişisel program.</div>
                     </div>
                     <div class="card-action">Programı Aç →</div>
+                </div>
+
+                <div class="hub-card" onclick="openView('face')">
+                    <div>
+                        <div class="card-icon">📐</div>
+                        <div class="card-heading">Yüz Analizi</div>
+                        <div class="card-desc">Altın oran, simetri ve çene ölçümüyle yüz puanın; kişiye özel protokol önerileri.</div>
+                    </div>
+                    <div class="card-action">Analiz Et →</div>
                 </div>
             </div>
         </div>
@@ -1560,6 +1890,91 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
+        <div class="view-panel" id="faceView">
+            <div class="overload-col-left">
+                <div class="panel-card">
+                    <div class="panel-header">
+                        <span>📐 Yüz Taraması</span>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div class="photo-card-slot" id="slot_face_front" onclick="triggerFacePhotoUpload('front')" style="height:220px;">
+                            <div class="slot-badge">ÖN YÜZ</div>
+                            <img id="img_face_front" src="" style="display:none;" />
+                            <div class="slot-placeholder" id="hint_face_front">
+                                <div style="font-size:1.6rem; margin-bottom:4px;">🤳</div>
+                                <div>Ön Fotoğraf</div>
+                            </div>
+                        </div>
+                        <div class="photo-card-slot" id="slot_face_side" onclick="triggerFacePhotoUpload('side')" style="height:220px;">
+                            <div class="slot-badge">YAN PROFİL</div>
+                            <img id="img_face_side" src="" style="display:none;" />
+                            <div class="slot-placeholder" id="hint_face_side">
+                                <div style="font-size:1.6rem; margin-bottom:4px;">🤳</div>
+                                <div>Yan Profil</div>
+                            </div>
+                        </div>
+                    </div>
+                    <input type="file" id="faceUniversalPhotoInput" accept="image/*" capture="user" onchange="handleFacePhotoUpload(event)" style="display:none;" />
+                    <div style="font-size:0.72rem; color:#6b7280; line-height:1.4; margin-top:10px;">
+                        Net, aydınlık, doğrudan kameraya bakan (ön) ve tam yandan (profil) iki fotoğraf en doğru sonucu verir. Sonuçlar bilgilendirme amaçlıdır, tıbbi teşhis değildir.
+                    </div>
+                    <button class="btn-log" id="analyzeFaceBtn" onclick="analyzeFacePhotos()" style="margin-top:10px;">📐 Yüzünü Analiz Et</button>
+                </div>
+
+                <div class="panel-card" style="flex:1;">
+                    <div class="panel-header">
+                        <span>🗓️ Geçmiş Taramalar</span>
+                    </div>
+                    <div class="history-list" id="faceScanHistoryList">
+                        <div style="text-align:center; padding:16px; color:#6b7280; font-size:0.78rem;">Henüz tarama yok.</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="overload-col-right">
+                <div class="panel-card" style="height:100%;">
+                    <div class="panel-header">
+                        <span>📊 Analiz Sonucu</span>
+                        <span class="badge-cyan" id="faceOverallScoreBadge">--/10</span>
+                    </div>
+
+                    <div id="faceResultEmptyState" style="text-align:center; padding:40px; color:#6b7280;">
+                        <div style="font-size:2rem; margin-bottom:8px;">📐</div>
+                        <div style="font-weight:700; color:#9ca3af;">Henüz analiz yapılmadı</div>
+                        <div style="font-size:0.8rem; margin-top:4px;">Sol taraftan iki fotoğraf yükleyip analiz et.</div>
+                    </div>
+
+                    <div id="faceResultContent" style="display:none; flex-direction:column; gap:14px;">
+                        <div class="macro-stat-grid">
+                            <div class="macro-card">
+                                <div class="macro-label">Simetri</div>
+                                <div class="macro-val macro-c-cal" id="faceScoreSymmetry">-</div>
+                            </div>
+                            <div class="macro-card">
+                                <div class="macro-label">Çene</div>
+                                <div class="macro-val macro-c-pro" id="faceScoreJaw">-</div>
+                            </div>
+                            <div class="macro-card">
+                                <div class="macro-label">Oran</div>
+                                <div class="macro-val macro-c-carb" id="faceScoreProportion">-</div>
+                            </div>
+                            <div class="macro-card">
+                                <div class="macro-label">Cilt</div>
+                                <div class="macro-val macro-c-fat" id="faceScoreSkin">-</div>
+                            </div>
+                        </div>
+
+                        <div id="faceSummariesBox" style="display:flex; flex-direction:column; gap:8px;"></div>
+
+                        <div class="panel-header" style="font-size:0.85rem; margin-top:4px;">
+                            <span>💡 Protokol Önerileri</span>
+                        </div>
+                        <div class="history-list" id="faceProtocolList" style="max-height:none;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script>
@@ -1733,6 +2148,9 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         let selectedProgramDayIdx = 0;
         let barcodeScannerInstance = null;
         let currentBarcodeProduct = null;
+        let faceFrontImageB64 = null;
+        let faceSideImageB64 = null;
+        let pendingFaceSlot = null;
 
         document.getElementById("exerciseDate").value = weekDaysData[selectedWorkoutDayIdx].fullDate;
 
@@ -1864,6 +2282,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (viewName === 'profile') { loadUserProfileUI(); loadUserPhasesUI(); }
             if (viewName === 'health') { loadHealthUI(); renderInjuriesUI(); }
             if (viewName === 'program') { loadProgramUI(); }
+            if (viewName === 'face') { loadFaceScanHistory(); }
         }
 
         function checkAuth() {
@@ -2612,6 +3031,161 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
     pendingUploadSlot = null;
     document.getElementById("universalPhotoInput").value = "";
 }
+
+        // ================= YUZ ANALIZI =================
+        function triggerFacePhotoUpload(slot) {
+            pendingFaceSlot = slot;
+            document.getElementById("faceUniversalPhotoInput").click();
+        }
+
+        async function handleFacePhotoUpload(event) {
+            const file = event.target.files[0];
+            if (!file || !pendingFaceSlot) return;
+
+            const compressedBase64 = await compressImage(file, 800, 0.7);
+            const imgEl = document.getElementById("img_face_" + pendingFaceSlot);
+            const hintEl = document.getElementById("hint_face_" + pendingFaceSlot);
+
+            if (pendingFaceSlot === 'front') {
+                faceFrontImageB64 = compressedBase64;
+            } else {
+                faceSideImageB64 = compressedBase64;
+            }
+
+            if (imgEl && hintEl) {
+                imgEl.src = compressedBase64;
+                imgEl.style.display = "block";
+                hintEl.style.display = "none";
+            }
+
+            pendingFaceSlot = null;
+            document.getElementById("faceUniversalPhotoInput").value = "";
+        }
+
+        async function analyzeFacePhotos() {
+            if (!currentUser) return;
+            if (!currentUser.token) {
+                return alert("Bu özellik için hesabının backend'e bağlı olması gerekiyor. Lütfen çıkış yapıp tekrar giriş yap kral!");
+            }
+            if (!faceFrontImageB64 || !faceSideImageB64) {
+                return alert("Lütfen hem ön hem yan profil fotoğrafını yükle kral!");
+            }
+
+            const btn = document.getElementById("analyzeFaceBtn");
+            const originalText = btn.innerText;
+            btn.disabled = true;
+            btn.innerText = "📐 Analiz ediliyor...";
+
+            try {
+                const res = await fetch('/api/face-analysis', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + currentUser.token
+                    },
+                    body: JSON.stringify({
+                        front_image_base64: faceFrontImageB64,
+                        side_image_base64: faceSideImageB64
+                    })
+                });
+                const data = await res.json();
+
+                if (!res.ok || data.is_error) {
+                    alert("Analiz başarısız: " + (data.detail || "Bilinmeyen hata"));
+                    return;
+                }
+
+                renderFaceAnalysisResult(data.result);
+                loadFaceScanHistory();
+            } catch (err) {
+                alert("Sunucu bağlantı hatası: " + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = originalText;
+            }
+        }
+
+        function renderFaceAnalysisResult(result) {
+            document.getElementById("faceResultEmptyState").style.display = "none";
+            document.getElementById("faceResultContent").style.display = "flex";
+
+            document.getElementById("faceOverallScoreBadge").innerText = `${result.overall_score}/10`;
+            document.getElementById("faceScoreSymmetry").innerText = `${result.symmetry.score}/10`;
+            document.getElementById("faceScoreJaw").innerText = `${result.jaw.score}/10`;
+            document.getElementById("faceScoreProportion").innerText = `${result.proportion.score}/10`;
+            document.getElementById("faceScoreSkin").innerText = `${result.skin.score}/10`;
+
+            const summariesBox = document.getElementById("faceSummariesBox");
+            summariesBox.innerHTML = "";
+            const summaryRows = [
+                { label: "Simetri", text: result.symmetry.summary },
+                { label: "Çene", text: result.jaw.summary },
+                { label: "Oran", text: result.proportion.summary },
+                { label: "Cilt", text: result.skin.summary },
+            ];
+            summaryRows.forEach(row => {
+                if (!row.text) return;
+                summariesBox.innerHTML += `
+                    <div style="font-size:0.8rem; color:#d1d5db; background:#0a0c10; border:1px solid #1c2230; padding:10px 12px; border-radius:9px;">
+                        <b style="color:#00f2fe;">${row.label}:</b> ${row.text}
+                    </div>
+                `;
+            });
+
+            const protocolList = document.getElementById("faceProtocolList");
+            protocolList.innerHTML = "";
+            if (!result.protocol || result.protocol.length === 0) {
+                protocolList.innerHTML = `<div style="text-align:center; padding:16px; color:#6b7280; font-size:0.78rem;">Protokol önerisi üretilemedi.</div>`;
+            } else {
+                result.protocol.forEach(item => {
+                    protocolList.innerHTML += `
+                        <div class="log-item" style="flex-direction:column; align-items:flex-start; gap:4px;">
+                            <div style="display:flex; justify-content:space-between; width:100%; align-items:center;">
+                                <span class="ex-title">${item.title}</span>
+                                <span class="badge-cyan" style="font-size:0.65rem;">${item.category}</span>
+                            </div>
+                            <div style="font-size:0.8rem; color:#d1d5db;">${item.description}</div>
+                        </div>
+                    `;
+                });
+            }
+        }
+
+        async function loadFaceScanHistory() {
+            if (!currentUser || !currentUser.token) return;
+            const list = document.getElementById("faceScanHistoryList");
+            if (!list) return;
+
+            try {
+                const res = await fetch('/api/face-scans', {
+                    headers: { 'Authorization': 'Bearer ' + currentUser.token }
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                const scans = data.scans || [];
+
+                if (scans.length === 0) {
+                    list.innerHTML = `<div style="text-align:center; padding:16px; color:#6b7280; font-size:0.78rem;">Henüz tarama yok.</div>`;
+                    return;
+                }
+
+                list.innerHTML = "";
+                scans.forEach(scan => {
+                    const dateObj = new Date(scan.scanned_at);
+                    const dateStr = dateObj.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                    list.innerHTML += `
+                        <div class="log-item">
+                            <div>
+                                <span class="ex-title">${dateStr}</span>
+                            </div>
+                            <span class="ex-val">${scan.result.overall_score}/10</span>
+                        </div>
+                    `;
+                });
+            } catch (err) {
+                console.warn("Yüz analizi geçmişi yüklenemedi:", err);
+            }
+        }
 
         function removePhoto(event, slotKey) {
             event.stopPropagation();
@@ -3950,6 +4524,116 @@ def save_phases_backend(payload: PhasesSyncInput, username: str = Depends(requir
         logger.error(f"Fazlar yazma hatasi ({username}): {e}")
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.post("/api/face-analysis")
+def analyze_face(payload: FaceAnalysisInput, username: str = Depends(require_auth_username)):
+    if not FACE_MESH_AVAILABLE:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Yüz analizi motoru (mediapipe) kurulu değil. requirements.txt güncellenmiş olabilir."}
+        )
+
+    front_img = decode_base64_image(payload.front_image_base64)
+    side_img = decode_base64_image(payload.side_image_base64)
+    if front_img is None or side_img is None:
+        return JSONResponse(status_code=400, content={"detail": "Görüntüler okunamadı."})
+
+    front_landmarks = get_face_landmarks(front_img)
+    if not front_landmarks:
+        return JSONResponse(status_code=422, content={
+            "detail": "Ön fotoğrafta yüz tespit edilemedi. Daha net, aydınlık, dosdoğru bakan bir fotoğraf dene."
+        })
+
+    side_landmarks = get_face_landmarks(side_img)
+    if not side_landmarks:
+        return JSONResponse(status_code=422, content={
+            "detail": "Yan profil fotoğrafında yüz tespit edilemedi. Daha net, aydınlık bir fotoğraf dene."
+        })
+
+    symmetry_data = compute_symmetry_score(front_landmarks)
+    proportion_data = compute_proportion_score(front_landmarks)
+    jaw_data = compute_jaw_score(side_landmarks)
+
+    # Baglam icin (varsa) kullanicinin profilini de LLM'e veriyoruz (hedefine gore protokol onerisi icin)
+    profile_data = {}
+    if AUTH_BACKEND_AVAILABLE:
+        try:
+            conn = get_auth_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("SELECT profile_data FROM user_profiles WHERE username = %s", (username,))
+                row = cur.fetchone()
+            conn.close()
+            if row:
+                profile_data = row["profile_data"] or {}
+        except Exception:
+            pass
+
+    llm_result, llm_error = generate_face_protocol_with_llm(
+        payload.front_image_base64, symmetry_data, proportion_data, jaw_data, profile_data
+    )
+
+    if not llm_result:
+        logger.warning(f"Face LLM analiz basarisiz, geometrik sonuclar protokolsuz donduruluyor: {llm_error}")
+        llm_result = {
+            "skin_score": 5.0,
+            "skin_summary": "Cilt değerlendirmesi şu an yapılamadı (AI servis hatası).",
+            "symmetry_summary": "",
+            "jaw_summary": "",
+            "proportion_summary": "",
+            "protocol": []
+        }
+
+    overall_score = round(
+        (symmetry_data["score"] + proportion_data["score"] + jaw_data["score"] + llm_result["skin_score"]) / 4.0, 1
+    )
+
+    result = {
+        "overall_score": overall_score,
+        "symmetry": {"score": symmetry_data["score"], "summary": llm_result["symmetry_summary"], "raw": symmetry_data},
+        "jaw": {"score": jaw_data["score"], "summary": llm_result["jaw_summary"], "raw": jaw_data},
+        "proportion": {"score": proportion_data["score"], "summary": llm_result["proportion_summary"], "raw": proportion_data},
+        "skin": {"score": llm_result["skin_score"], "summary": llm_result["skin_summary"]},
+        "protocol": llm_result["protocol"],
+    }
+
+    if AUTH_BACKEND_AVAILABLE:
+        try:
+            conn = get_auth_db_connection()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO user_face_scans (username, scanned_at, result_data) VALUES (%s, now(), %s)",
+                    (username, psycopg2.extras.Json(result))
+                )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Face scan kaydetme hatasi ({username}): {e}")
+            traceback.print_exc()
+
+    return {"result": result, "is_error": False}
+
+
+@app.get("/api/face-scans")
+def get_face_scans_backend(username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, scanned_at, result_data FROM user_face_scans WHERE username = %s ORDER BY scanned_at DESC LIMIT 30",
+                (username,)
+            )
+            rows = cur.fetchall()
+        conn.close()
+        scans = [{"id": r["id"], "scanned_at": r["scanned_at"].isoformat(), "result": r["result_data"]} for r in rows]
+        return {"scans": scans}
+    except Exception as e:
+        logger.error(f"Face scans okuma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
 
 @app.post("/coach-audit")
 def full_coach_audit(payload: CoachAuditInput):
