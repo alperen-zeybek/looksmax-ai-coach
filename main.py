@@ -224,9 +224,34 @@ def init_auth_db():
                     updated_at TIMESTAMPTZ DEFAULT now()
                 )
             """)
+            # FAZ 3: haftalik antrenman loglari ve beslenme verisi. Frontend zaten
+            # her seyi "hafta anahtari" (Pazartesi tarihi) bazinda organize ediyor,
+            # o yuzden biz de kullanici+hafta basina bir JSONB satiri tutuyoruz -
+            # boylece localStorage'daki mevcut yapiyi bozmadan birebir yansitiyoruz.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_workout_weeks (
+                    username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                    week_key TEXT NOT NULL,
+                    logs_data JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (username, week_key)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_nutrition_weeks (
+                    username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                    week_key TEXT NOT NULL,
+                    nutrition_data JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (username, week_key)
+                )
+            """)
         conn.commit()
         conn.close()
-        logger.info("Auth DB (Postgres) hazir: 'users', 'user_profiles', 'user_programs' tablolari dogrulandi.")
+        logger.info(
+            "Auth DB (Postgres) hazir: 'users', 'user_profiles', 'user_programs', "
+            "'user_workout_weeks', 'user_nutrition_weeks' tablolari dogrulandi."
+        )
     except Exception as e:
         logger.error(f"Auth DB baslatilamadi: {e}")
         traceback.print_exc()
@@ -296,6 +321,14 @@ class ProfileSyncInput(BaseModel):
 
 class ProgramSyncInput(BaseModel):
     program_data: dict
+
+
+class WorkoutWeekSyncInput(BaseModel):
+    logs: list
+
+
+class NutritionWeekSyncInput(BaseModel):
+    nutrition: dict
 
 # ================= 0. DINAMIK MODEL SECICI & CIKTI TEMIZLEYICI =================
 _CACHED_MODEL: Optional[str] = None
@@ -1575,6 +1608,13 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
     const allWeeks = getAllUserWeeks(username);
     allWeeks[currentWeekKey] = logs;
     safeLocalStorageSet("user_weeks_" + username, JSON.stringify(allWeeks));
+    if (currentUser && currentUser.token && currentUser.username === username) {
+        fetch(`/api/workout-weeks/${encodeURIComponent(currentWeekKey)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + currentUser.token },
+            body: JSON.stringify({ logs: logs })
+        }).catch(err => console.warn("Antrenman haftası backend'e senkronize edilemedi (local'de kayıtlı kaldı):", err));
+    }
 }
 
         function getUserWeeklyNutrition(username) {
@@ -1585,6 +1625,13 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
     const allWeeks = JSON.parse(localStorage.getItem("user_nutri_weeks_" + username) || "{}");
     allWeeks[currentWeekKey] = nutriData;
     safeLocalStorageSet("user_nutri_weeks_" + username, JSON.stringify(allWeeks));
+    if (currentUser && currentUser.token && currentUser.username === username) {
+        fetch(`/api/nutrition-weeks/${encodeURIComponent(currentWeekKey)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + currentUser.token },
+            body: JSON.stringify({ nutrition: nutriData })
+        }).catch(err => console.warn("Beslenme haftası backend'e senkronize edilemedi (local'de kayıtlı kaldı):", err));
+    }
 }
         function getUserProfileData(username) { return JSON.parse(localStorage.getItem("user_profile_" + username) || "{}"); }
         function saveUserProfileData(username, profData) {
@@ -1792,6 +1839,8 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 syncHealthDataFromServer();
                 syncProfileFromServer();
                 syncProgramFromServer();
+                syncWorkoutWeeksFromServer();
+                syncNutritionWeeksFromServer();
             }
         }
 
@@ -1837,6 +1886,55 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 }
             } catch (err) {
                 console.warn("Program sunucudan senkronize edilemedi:", err);
+            }
+        }
+
+        async function syncWorkoutWeeksFromServer() {
+            if (!currentUser || !currentUser.token) return;
+            try {
+                const res = await fetch('/api/workout-weeks', {
+                    headers: { 'Authorization': 'Bearer ' + currentUser.token }
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.weeks && typeof data.weeks === 'object') {
+                    // Backend'de olan haftalar local'in uzerine yazilir (backend esas alinir),
+                    // sadece backend'de HIC olmayan (henuz senkronize edilmemis) local haftalar korunur.
+                    const localAllWeeks = getAllUserWeeks(currentUser.username);
+                    const merged = { ...localAllWeeks, ...data.weeks };
+                    safeLocalStorageSet("user_weeks_" + currentUser.username, JSON.stringify(merged));
+                    weeklyLogs = merged[currentWeekKey] || [];
+                    const overloadViewEl = document.getElementById("overloadView");
+                    if (overloadViewEl && overloadViewEl.classList.contains("active")) {
+                        loadUserWorkouts();
+                    }
+                }
+            } catch (err) {
+                console.warn("Antrenman geçmişi sunucudan senkronize edilemedi:", err);
+            }
+        }
+
+        async function syncNutritionWeeksFromServer() {
+            if (!currentUser || !currentUser.token) return;
+            try {
+                const res = await fetch('/api/nutrition-weeks', {
+                    headers: { 'Authorization': 'Bearer ' + currentUser.token }
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.weeks && typeof data.weeks === 'object') {
+                    const localAllWeeks = JSON.parse(localStorage.getItem("user_nutri_weeks_" + currentUser.username) || "{}");
+                    const merged = { ...localAllWeeks, ...data.weeks };
+                    safeLocalStorageSet("user_nutri_weeks_" + currentUser.username, JSON.stringify(merged));
+                    weeklyNutrition = merged[currentWeekKey] || {};
+                    const nutritionViewEl = document.getElementById("nutritionView");
+                    if (nutritionViewEl && nutritionViewEl.classList.contains("active")) {
+                        renderNutriDayTabs();
+                        renderSelectedDayNutrition();
+                    }
+                }
+            } catch (err) {
+                console.warn("Beslenme geçmişi sunucudan senkronize edilemedi:", err);
             }
         }
 
@@ -3473,6 +3571,84 @@ def save_program_backend(payload: ProgramSyncInput, username: str = Depends(requ
         return {"status": "success"}
     except Exception as e:
         logger.error(f"Program yazma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.get("/api/workout-weeks")
+def get_workout_weeks_backend(username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT week_key, logs_data FROM user_workout_weeks WHERE username = %s", (username,))
+            rows = cur.fetchall()
+        conn.close()
+        weeks = {row["week_key"]: row["logs_data"] for row in rows}
+        return {"weeks": weeks}
+    except Exception as e:
+        logger.error(f"Workout weeks okuma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.post("/api/workout-weeks/{week_key}")
+def save_workout_week_backend(week_key: str, payload: WorkoutWeekSyncInput, username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO user_workout_weeks (username, week_key, logs_data, updated_at)
+                VALUES (%s, %s, %s, now())
+                ON CONFLICT (username, week_key) DO UPDATE SET logs_data = EXCLUDED.logs_data, updated_at = now()
+            """, (username, week_key, psycopg2.extras.Json(payload.logs)))
+        conn.commit()
+        conn.close()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Workout week yazma hatasi ({username}, {week_key}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.get("/api/nutrition-weeks")
+def get_nutrition_weeks_backend(username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT week_key, nutrition_data FROM user_nutrition_weeks WHERE username = %s", (username,))
+            rows = cur.fetchall()
+        conn.close()
+        weeks = {row["week_key"]: row["nutrition_data"] for row in rows}
+        return {"weeks": weeks}
+    except Exception as e:
+        logger.error(f"Nutrition weeks okuma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.post("/api/nutrition-weeks/{week_key}")
+def save_nutrition_week_backend(week_key: str, payload: NutritionWeekSyncInput, username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO user_nutrition_weeks (username, week_key, nutrition_data, updated_at)
+                VALUES (%s, %s, %s, now())
+                ON CONFLICT (username, week_key) DO UPDATE SET nutrition_data = EXCLUDED.nutrition_data, updated_at = now()
+            """, (username, week_key, psycopg2.extras.Json(payload.nutrition)))
+        conn.commit()
+        conn.close()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Nutrition week yazma hatasi ({username}, {week_key}): {e}")
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"detail": "server_error"})
 
