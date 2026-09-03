@@ -566,6 +566,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
     <title>Looksmax HUB - Elite Performance & Coaching</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
         body { background-color: #0b0d12; color: #e5e7eb; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -788,6 +789,60 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         </div>
     </div>
 
+    <div class="modal-overlay" id="barcodeModal" onclick="closeBarcodeModalOnBg(event)">
+        <div class="modal-box" onclick="event.stopPropagation()" style="max-width:420px;">
+            <div class="modal-header">
+                <h3>🏷️ Barkod Tara</h3>
+                <button class="modal-close-btn" onclick="closeBarcodeScanner()">✕</button>
+            </div>
+
+            <div id="barcodeScanState">
+                <div id="barcodeReaderRegion" style="width:100%; border-radius:12px; overflow:hidden; background:#000; min-height:220px;"></div>
+                <div style="font-size:0.75rem; color:#9ca3af; text-align:center; margin-top:10px;">
+                    Ürünün barkodunu kameraya göster — otomatik algılanacak.
+                </div>
+            </div>
+
+            <div id="barcodeLoadingState" style="display:none; text-align:center; padding:24px;">
+                <div style="font-size:2rem; margin-bottom:8px;">🔎</div>
+                <div style="font-weight:700; color:#00f2fe;">Ürün aranıyor...</div>
+            </div>
+
+            <div id="barcodeNotFoundState" style="display:none; text-align:center; padding:20px; color:#9ca3af; font-size:0.85rem;">
+                Bu barkod veritabanında bulunamadı kral. Yazarak elle ekleyebilirsin.
+                <button class="btn-log" onclick="resetBarcodeScanner()" style="margin-top:12px;">Tekrar Tara</button>
+            </div>
+
+            <div id="barcodeResultState" style="display:none; flex-direction:column; gap:10px;">
+                <div style="background:#0a0c10; border:1px solid #1c2230; border-radius:10px; padding:12px;">
+                    <div style="font-weight:800; color:#fff; font-size:0.95rem;" id="barcodeProductName">-</div>
+                    <div style="font-size:0.72rem; color:#9ca3af; margin-top:2px;">100g başına: <span id="barcodeProductPer100">-</span></div>
+                </div>
+                <input type="number" id="barcodeAmountGrams" placeholder="Miktar (gram)" value="100" min="1" oninput="updateBarcodePreview()" />
+                <div class="macro-stat-grid">
+                    <div class="macro-card">
+                        <div class="macro-label">Kalori</div>
+                        <div class="macro-val macro-c-cal" id="barcodePreviewCal">0 kcal</div>
+                    </div>
+                    <div class="macro-card">
+                        <div class="macro-label">Protein</div>
+                        <div class="macro-val macro-c-pro" id="barcodePreviewPro">0g</div>
+                    </div>
+                    <div class="macro-card">
+                        <div class="macro-label">Karb</div>
+                        <div class="macro-val macro-c-carb" id="barcodePreviewCarb">0g</div>
+                    </div>
+                    <div class="macro-card">
+                        <div class="macro-label">Yağ</div>
+                        <div class="macro-val macro-c-fat" id="barcodePreviewFat">0g</div>
+                    </div>
+                </div>
+                <button class="btn-log" onclick="addBarcodeProductToMeal()">Öğüne Ekle</button>
+                <button onclick="resetBarcodeScanner()" style="background:none; border:none; color:#9ca3af; font-size:0.75rem; cursor:pointer;">Başka bir ürün tara</button>
+            </div>
+        </div>
+    </div>
+
     <div class="header-bar">
         <div style="display:flex; align-items:center; gap:12px;">
             <div class="brand" onclick="openView('hub')">⚡ LOOKSMAX HUB</div>
@@ -970,6 +1025,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <div class="chat-input-area">
                         <label class="file-btn" for="nutriImageInput" title="Yemek Fotoğrafı">📷</label>
                         <input type="file" id="nutriImageInput" accept="image/*" onchange="handleImageSelect(event, 'nutri')" />
+                        <button class="file-btn" title="Barkod Tara" onclick="openBarcodeScanner()">🏷️</button>
                         <input type="text" class="chat-input" id="nutriUserInput" placeholder="Yediklerini yaz..." onkeypress="handleKey(event, 'nutri')" />
                         <button class="send-btn" id="nutriSendBtn" onclick="sendNutriMessage()">Ekle</button>
                     </div>
@@ -1405,6 +1461,8 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         let healthChartInstance = null;
         let userProgram = null;
         let selectedProgramDayIdx = 0;
+        let barcodeScannerInstance = null;
+        let currentBarcodeProduct = null;
 
         document.getElementById("exerciseDate").value = weekDaysData[selectedWorkoutDayIdx].fullDate;
 
@@ -2701,6 +2759,134 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             document.getElementById("nutriPreviewBox").style.display = "none";
         }
 
+        // ================= BARKOD TARAMA =================
+        function openBarcodeScanner() {
+            document.getElementById("barcodeModal").style.display = "flex";
+            resetBarcodeScanner();
+        }
+
+        function closeBarcodeModalOnBg(e) {
+            if (e.target.id === "barcodeModal") closeBarcodeScanner();
+        }
+
+        function stopBarcodeCamera() {
+            if (barcodeScannerInstance) {
+                barcodeScannerInstance.stop().then(() => {
+                    barcodeScannerInstance.clear();
+                    barcodeScannerInstance = null;
+                }).catch(() => { barcodeScannerInstance = null; });
+            }
+        }
+
+        function closeBarcodeScanner() {
+            stopBarcodeCamera();
+            document.getElementById("barcodeModal").style.display = "none";
+            currentBarcodeProduct = null;
+        }
+
+        function resetBarcodeScanner() {
+            stopBarcodeCamera();
+            currentBarcodeProduct = null;
+            document.getElementById("barcodeScanState").style.display = "block";
+            document.getElementById("barcodeLoadingState").style.display = "none";
+            document.getElementById("barcodeNotFoundState").style.display = "none";
+            document.getElementById("barcodeResultState").style.display = "none";
+
+            if (typeof Html5Qrcode === "undefined") {
+                document.getElementById("barcodeReaderRegion").innerHTML =
+                    "<div style='padding:20px; color:#ef4444; font-size:0.8rem; text-align:center;'>Kamera kütüphanesi yüklenemedi. İnternet bağlantını kontrol et.</div>";
+                return;
+            }
+
+            barcodeScannerInstance = new Html5Qrcode("barcodeReaderRegion");
+            const supportedFormats = [
+                Html5QrcodeSupportedFormats.EAN_13,
+                Html5QrcodeSupportedFormats.EAN_8,
+                Html5QrcodeSupportedFormats.UPC_A,
+                Html5QrcodeSupportedFormats.UPC_E
+            ];
+
+            barcodeScannerInstance.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: { width: 250, height: 140 }, formatsToSupport: supportedFormats },
+                (decodedText) => {
+                    stopBarcodeCamera();
+                    onBarcodeDetected(decodedText);
+                },
+                () => { /* kare basina tarama basarisiz - normal, sessizce yoksay */ }
+            ).catch((err) => {
+                document.getElementById("barcodeReaderRegion").innerHTML =
+                    "<div style='padding:20px; color:#ef4444; font-size:0.8rem; text-align:center;'>Kameraya erişilemedi. Tarayıcı izinlerini kontrol et.</div>";
+                console.error("Barkod kamera hatasi:", err);
+            });
+        }
+
+        async function onBarcodeDetected(code) {
+            document.getElementById("barcodeScanState").style.display = "none";
+            document.getElementById("barcodeLoadingState").style.display = "block";
+
+            try {
+                const res = await fetch(`/api/barcode-lookup/${encodeURIComponent(code)}`);
+                const data = await res.json();
+                document.getElementById("barcodeLoadingState").style.display = "none";
+
+                if (!data.found) {
+                    document.getElementById("barcodeNotFoundState").style.display = "block";
+                    return;
+                }
+
+                currentBarcodeProduct = data;
+                document.getElementById("barcodeProductName").innerText = data.name;
+                document.getElementById("barcodeProductPer100").innerText =
+                    `${data.calories_100g} kcal, P:${data.protein_100g}g K:${data.carbs_100g}g Y:${data.fat_100g}g`;
+
+                const defaultGrams = data.serving_size_g || 100;
+                document.getElementById("barcodeAmountGrams").value = defaultGrams;
+                document.getElementById("barcodeResultState").style.display = "flex";
+                updateBarcodePreview();
+            } catch (err) {
+                document.getElementById("barcodeLoadingState").style.display = "none";
+                document.getElementById("barcodeNotFoundState").style.display = "block";
+                console.error("Barkod lookup hatasi:", err);
+            }
+        }
+
+        function updateBarcodePreview() {
+            if (!currentBarcodeProduct) return;
+            const grams = parseFloat(document.getElementById("barcodeAmountGrams").value) || 0;
+            const ratio = grams / 100.0;
+
+            document.getElementById("barcodePreviewCal").innerText = Math.round(currentBarcodeProduct.calories_100g * ratio) + " kcal";
+            document.getElementById("barcodePreviewPro").innerText = (currentBarcodeProduct.protein_100g * ratio).toFixed(1) + "g";
+            document.getElementById("barcodePreviewCarb").innerText = (currentBarcodeProduct.carbs_100g * ratio).toFixed(1) + "g";
+            document.getElementById("barcodePreviewFat").innerText = (currentBarcodeProduct.fat_100g * ratio).toFixed(1) + "g";
+        }
+
+        function addBarcodeProductToMeal() {
+            if (!currentUser || !currentBarcodeProduct) return;
+            const grams = parseFloat(document.getElementById("barcodeAmountGrams").value) || 0;
+            if (grams <= 0) return alert("Lütfen geçerli bir miktar gir kral!");
+            const ratio = grams / 100.0;
+
+            const newMeal = {
+                id: Date.now() + Math.floor(Math.random() * 1000),
+                food_name: currentBarcodeProduct.name,
+                items_summary: `${grams}g ${currentBarcodeProduct.name} (barkod)`,
+                calories: Math.round(currentBarcodeProduct.calories_100g * ratio),
+                protein: Number((currentBarcodeProduct.protein_100g * ratio).toFixed(1)),
+                carbs: Number((currentBarcodeProduct.carbs_100g * ratio).toFixed(1)),
+                fat: Number((currentBarcodeProduct.fat_100g * ratio).toFixed(1))
+            };
+
+            const targetDateStr = weekDaysData[selectedNutriDayIdx].fullDate;
+            if (!weeklyNutrition[targetDateStr]) weeklyNutrition[targetDateStr] = [];
+            weeklyNutrition[targetDateStr] = [...weeklyNutrition[targetDateStr], newMeal];
+            saveUserWeeklyNutrition(currentUser.username, weeklyNutrition);
+            renderSelectedDayNutrition();
+
+            closeBarcodeScanner();
+        }
+
         async function sendMessage() {
             const input = document.getElementById("userInput");
             const btn = document.getElementById("sendBtn");
@@ -3109,6 +3295,77 @@ def nutrition_dialogue(data: NutritionChatInput):
         "coach_reply": reply_text,
         "detected_meal": detected_meal
     }
+
+
+@app.get("/api/barcode-lookup/{barcode}")
+def barcode_lookup(barcode: str):
+    """Open Food Facts uzerinden barkod ile gercek urun besin degerlerini ceker.
+    API key gerektirmez, urllib (zaten stdlib) disinda ekstra bagimlilik yok."""
+    clean_barcode = re.sub(r'\D', '', barcode or "")
+    if not clean_barcode:
+        return {"found": False, "error": "Geçersiz barkod."}
+
+    try:
+        url = f"https://world.openfoodfacts.org/api/v2/product/{clean_barcode}.json"
+        req = urllib.request.Request(url, headers={"User-Agent": "LooksmaxHub/1.0 (fitness-app)"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        if data.get("status") != 1 or "product" not in data:
+            return {"found": False, "barcode": clean_barcode}
+
+        product = data["product"]
+        nutriments = product.get("nutriments", {}) or {}
+
+        name = (
+            product.get("product_name_tr")
+            or product.get("product_name")
+            or product.get("generic_name")
+            or "Bilinmeyen Ürün"
+        ).strip()
+        brand = (product.get("brands") or "").split(",")[0].strip()
+        display_name = f"{brand} {name}".strip() if brand and brand.lower() not in name.lower() else name
+
+        cal_100g = nutriments.get("energy-kcal_100g")
+        if cal_100g is None:
+            kj = nutriments.get("energy_100g") or nutriments.get("energy-kj_100g")
+            if kj is not None:
+                try:
+                    cal_100g = float(kj) / 4.184
+                except (TypeError, ValueError):
+                    cal_100g = None
+
+        if cal_100g is None:
+            return {"found": False, "barcode": clean_barcode, "error": "Bu ürün için besin değeri verisi yok."}
+
+        def _safe_float(v):
+            try:
+                return round(float(v), 1)
+            except (TypeError, ValueError):
+                return 0.0
+
+        serving_size_g = None
+        serving_size_raw = product.get("serving_size", "") or ""
+        m = re.search(r'([\d.,]+)\s*g', serving_size_raw)
+        if m:
+            try:
+                serving_size_g = float(m.group(1).replace(",", "."))
+            except ValueError:
+                serving_size_g = None
+
+        return {
+            "found": True,
+            "barcode": clean_barcode,
+            "name": display_name,
+            "calories_100g": _safe_float(cal_100g),
+            "protein_100g": _safe_float(nutriments.get("proteins_100g")),
+            "carbs_100g": _safe_float(nutriments.get("carbohydrates_100g")),
+            "fat_100g": _safe_float(nutriments.get("fat_100g")),
+            "serving_size_g": serving_size_g,
+        }
+    except Exception as e:
+        logger.error(f"Barkod lookup hatasi ({clean_barcode}): {e}")
+        return {"found": False, "barcode": clean_barcode, "error": "Ürün veritabanına ulaşılamadı."}
 
 
 def _coerce_int(value: Any, default: int = 3) -> int:
