@@ -1966,6 +1966,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
                         <div id="faceSummariesBox" style="display:flex; flex-direction:column; gap:8px;"></div>
 
+                        <details style="background:#0a0c10; border:1px solid #1c2230; border-radius:9px; padding:8px 12px;">
+                            <summary style="font-size:0.72rem; color:#6b7280; cursor:pointer; font-weight:700;">🔧 Teknik Detaylar (Kalibrasyon)</summary>
+                            <div id="faceRawMetricsBox" style="font-size:0.7rem; color:#9ca3af; line-height:1.7; margin-top:8px;"></div>
+                        </details>
+
                         <div class="panel-header" style="font-size:0.85rem; margin-top:4px;">
                             <span>💡 Protokol Önerileri</span>
                         </div>
@@ -3131,6 +3136,19 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     </div>
                 `;
             });
+
+            const rawBox = document.getElementById("faceRawMetricsBox");
+            if (rawBox) {
+                const sym = result.symmetry.raw || {};
+                const prop = result.proportion.raw || {};
+                const jaw = result.jaw.raw || {};
+                rawBox.innerHTML = `
+                    <div>Simetri ortalama sapma: %${sym.avg_deviation_pct ?? '-'}</div>
+                    <div>Yükseklik/genişlik oranı: ${prop.height_width_ratio ?? '-'} (altın oran hedefi: 1.618, sapma: %${prop.golden_ratio_deviation_pct ?? '-'})</div>
+                    <div>Yüz üçte-bir dengesizliği: %${prop.thirds_variance_pct ?? '-'}</div>
+                    <div>Çene oranı (jaw_ratio): ${jaw.jaw_ratio ?? '-'}</div>
+                `;
+            }
 
             const protocolList = document.getElementById("faceProtocolList");
             protocolList.innerHTML = "";
