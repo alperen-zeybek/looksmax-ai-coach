@@ -2,16 +2,33 @@ import os
 import json
 import re
 import sqlite3
+import secrets
 import urllib.request
 import urllib.parse
 import logging
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Header
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from groq import Groq
+
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:
+    psycopg2 = None
+
+try:
+    import jwt as pyjwt
+except ImportError:
+    pyjwt = None
+
+try:
+    import bcrypt
+except ImportError:
+    bcrypt = None
 
 try:
     from dotenv import load_dotenv
@@ -133,6 +150,118 @@ def init_health_db():
 
 
 init_health_db()
+
+# ================= GERÇEK BACKEND AUTH (POSTGRES + JWT) =================
+# FAZ 1: Kullanici hesaplarini localStorage'dan gercek bir veritabanina tasima.
+# TASARIM: Bu katman OPSIYONEL/KATMANLI calisir. DATABASE_URL ayarlanmamissa
+# (veya psycopg2/jwt/bcrypt kurulu degilse) asagidaki tum fonksiyonlar sessizce
+# "yapilandirilmadi" durumuna duser ve frontend otomatik olarak eski
+# localStorage-only auth akisina geri doner. Yani bu ozellik hicbir seyi
+# KIRMADAN eklenir; Neon/Supabase kurulunca kendiliginden devreye girer.
+
+DATABASE_URL = os.getenv("DATABASE_URL")  # orn: Neon/Supabase postgres connection string
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_DAYS = 30
+
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    JWT_SECRET = secrets.token_hex(32)
+    logger.warning(
+        "JWT_SECRET ortam degiskeni ayarlanmamis! Gecici/rastgele bir anahtar uretildi - "
+        "bu, her sunucu yeniden baslatildiginda (her deploy'da) TUM kullanicilarin oturumunun "
+        "sonlanacagi anlamina gelir. Render'da JWT_SECRET adinda sabit, rastgele bir deger "
+        "eklemeniz siddetle onerilir."
+    )
+
+AUTH_BACKEND_AVAILABLE = bool(DATABASE_URL and psycopg2 and pyjwt and bcrypt)
+
+
+def get_auth_db_connection():
+    if not AUTH_BACKEND_AVAILABLE:
+        return None
+    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+
+
+def init_auth_db():
+    if not DATABASE_URL:
+        logger.warning(
+            "DATABASE_URL ayarlanmamis. Backend auth (Postgres) devre disi; "
+            "sistem otomatik olarak localStorage-only auth'a duser."
+        )
+        return
+    if not (psycopg2 and pyjwt and bcrypt):
+        logger.warning(
+            "psycopg2/pyjwt/bcrypt paketleri kurulu degil (requirements.txt guncellenmemis olabilir). "
+            "Backend auth devre disi."
+        )
+        return
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT now()
+                )
+            """)
+        conn.commit()
+        conn.close()
+        logger.info("Auth DB (Postgres) hazir, 'users' tablosu dogrulandi.")
+    except Exception as e:
+        logger.error(f"Auth DB baslatilamadi: {e}")
+        traceback.print_exc()
+
+
+init_auth_db()
+
+
+def create_jwt_token(username: str) -> str:
+    payload = {
+        "sub": username,
+        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(timezone.utc) + timedelta(days=JWT_EXPIRE_DAYS),
+    }
+    return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def decode_jwt_token(token: str) -> Optional[str]:
+    if not pyjwt or not token:
+        return None
+    try:
+        payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload.get("sub")
+    except Exception:
+        return None
+
+
+def hash_password_for_storage(client_hashed_password: str) -> str:
+    # Client zaten sifreyi SHA-256 ile hash'leyip gonderiyor (bkz. frontend hashPassword());
+    # burada bunun uzerine bir de bcrypt uyguluyoruz (savunma katmani + salt).
+    return bcrypt.hashpw(client_hashed_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(client_hashed_password: str, stored_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(client_hashed_password.encode("utf-8"), stored_hash.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def get_current_username(authorization: Optional[str] = Header(None)) -> Optional[str]:
+    """Ileriki fazlarda korumali (Depends ile) endpoint'ler icin altyapi.
+    Su an hicbir route'da ZORUNLU degil - sadece 'Authorization: Bearer <token>'
+    header'i varsa kullaniciyi cozer, yoksa None doner (route kendi karar verir)."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    return decode_jwt_token(token)
+
+
+class AuthRequest(BaseModel):
+    username: str
+    password_hash: str  # client-side SHA-256 hex digest (bkz. frontend hashPassword())
 
 # ================= 0. DINAMIK MODEL SECICI & CIKTI TEMIZLEYICI =================
 _CACHED_MODEL: Optional[str] = None
@@ -1678,6 +1807,41 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             return typeof str === "string" && /^[a-f0-9]{64}$/.test(str);
         }
 
+        function setAuthSession(username, token) {
+            currentUser = { username: username, token: token || null };
+            localStorage.setItem("active_user", JSON.stringify(currentUser));
+        }
+
+        async function tryMigrateLegacyUserToBackend(username, plainPassword, hashedPassword) {
+            // localStorage'daki eski hesabin sifresi dogruysa, backend'de sessizce (kullaniciya
+            // hissettirmeden) ayni hesabi acar. Boylece Neon/Supabase kurulunca eski kullanicilar
+            // "hesabim kayboldu" demeden gecis yapmis olur.
+            const allUsers = getStorageUsers();
+            const stored = allUsers[username];
+            if (!stored) return false;
+
+            const isLegacyPlainText = !looksLikeSha256Hash(stored);
+            const matches = isLegacyPlainText ? (stored === plainPassword) : (stored === hashedPassword);
+            if (!matches) return false;
+
+            try {
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: username, password_hash: hashedPassword })
+                });
+                const data = await res.json();
+                if (res.ok && data.token) {
+                    setAuthSession(username, data.token);
+                    checkAuth();
+                    return true;
+                }
+            } catch (err) {
+                console.error("Legacy kullanıcı migrasyon hatası:", err);
+            }
+            return false;
+        }
+
         async function handleAuthSubmit() {
             const u = document.getElementById("authUsername").value.trim();
             const p = document.getElementById("authPassword").value.trim();
@@ -1690,14 +1854,50 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 return alert(err.message);
             }
 
+            // ---- 1) Once gercek backend'i (Postgres+JWT) dene ----
+            try {
+                const endpoint = isRegisterMode ? '/api/auth/register' : '/api/auth/login';
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: u, password_hash: hashedP })
+                });
+
+                if (res.status !== 503) {
+                    // Backend yapilandirilmis (DATABASE_URL ayarli) - yaniti otoriter kabul et
+                    const data = await res.json();
+
+                    if (res.ok && data.token) {
+                        setAuthSession(u, data.token);
+                        checkAuth();
+                        return;
+                    }
+                    if (data.detail === "username_taken") {
+                        return alert("Bu kullanıcı adı zaten var! Giriş yapmayı dene.");
+                    }
+                    if (data.detail === "invalid_credentials") {
+                        return alert("Kullanıcı adı veya şifre hatalı!");
+                    }
+                    if (data.detail === "user_not_found") {
+                        const migrated = await tryMigrateLegacyUserToBackend(u, p, hashedP);
+                        if (migrated) return;
+                        return alert("Böyle bir kullanıcı bulunamadı. Önce 'Kayıt Ol' ile hesap açmalısın.");
+                    }
+                    // beklenmedik bir backend hatasi - asagidaki localStorage fallback'ine devam
+                }
+                // res.status === 503 (backend henuz yapilandirilmadi) ise fallback'e devam
+            } catch (networkErr) {
+                console.warn("Backend auth'a ulaşılamadı, localStorage moduna geçiliyor:", networkErr);
+            }
+
+            // ---- 2) LOCALSTORAGE FALLBACK (backend henuz kurulmadiysa/erisilemiyorsa) ----
             const allUsers = getStorageUsers();
 
             if (isRegisterMode) {
                 if (allUsers[u]) return alert("Bu kullanıcı adı zaten var! Giriş yapmayı dene.");
                 allUsers[u] = hashedP;
                 if (!safeLocalStorageSet("app_registered_users", JSON.stringify(allUsers))) return;
-                currentUser = { username: u };
-                localStorage.setItem("active_user", JSON.stringify(currentUser));
+                setAuthSession(u, null);
                 checkAuth();
             } else {
                 if (!allUsers[u]) {
@@ -1714,8 +1914,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     allUsers[u] = hashedP;
                     safeLocalStorageSet("app_registered_users", JSON.stringify(allUsers));
                 }
-                currentUser = { username: u };
-                localStorage.setItem("active_user", JSON.stringify(currentUser));
+                setAuthSession(u, null);
                 checkAuth();
             }
         }
@@ -3042,6 +3241,68 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 @app.get("/", response_class=HTMLResponse)
 def serve_ui():
     return HTML_INTERFACE
+
+
+@app.post("/api/auth/register", status_code=201)
+def auth_register(payload: AuthRequest):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+
+    username = payload.username.strip()
+    if not username or not payload.password_hash:
+        raise HTTPException(status_code=400, detail="missing_fields")
+
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+            if cur.fetchone():
+                conn.close()
+                return JSONResponse(status_code=409, content={"detail": "username_taken"})
+
+            stored_hash = hash_password_for_storage(payload.password_hash)
+            cur.execute(
+                "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
+                (username, stored_hash)
+            )
+        conn.commit()
+        conn.close()
+
+        token = create_jwt_token(username)
+        return {"token": token, "username": username}
+    except Exception as e:
+        logger.error(f"Auth register hatasi: {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: AuthRequest):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+
+    username = payload.username.strip()
+
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT password_hash FROM users WHERE username = %s", (username,))
+            row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return JSONResponse(status_code=404, content={"detail": "user_not_found"})
+
+        if not verify_password(payload.password_hash, row["password_hash"]):
+            return JSONResponse(status_code=401, content={"detail": "invalid_credentials"})
+
+        token = create_jwt_token(username)
+        return {"token": token, "username": username}
+    except Exception as e:
+        logger.error(f"Auth login hatasi: {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
 
 @app.post("/api/health-sync")
 def sync_apple_health_webhook(payload: HealthSyncInput):
