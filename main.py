@@ -2,6 +2,7 @@ import os
 import json
 import re
 import secrets
+import base64
 import urllib.request
 import urllib.parse
 import logging
@@ -9,7 +10,7 @@ import traceback
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Header, Depends
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from groq import Groq
 
@@ -765,18 +766,35 @@ class CoachAuditInput(BaseModel):
     recent_health: Optional[dict] = {}
     active_injuries: Optional[list] = []
 
+# ================= PWA IKON (base64 gomulu PNG, 512x512) =================
+# Ayri bir /static klasoru acmamak icin ikonu dogrudan koda gomduk; /icon.png
+# route'u bunu decode edip PNG olarak sunuyor. iPhone'da "Ana Ekrana Ekle"
+# yapinca bu ikon kullanilir.
+APP_ICON_PNG_BASE64 = "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"
+
 HTML_INTERFACE = r"""<!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
     <title>Looksmax HUB - Elite Performance & Coaching</title>
+
+    <!-- PWA / iPhone "Ana Ekrana Ekle" destegi -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" href="/icon.png">
+    <link rel="apple-touch-icon" href="/icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Looksmax Hub">
+    <meta name="theme-color" content="#0b0d12">
+
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
-        body { background-color: #0b0d12; color: #e5e7eb; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        body { background-color: #0b0d12; color: #e5e7eb; display: flex; flex-direction: column; height: 100vh; overflow: hidden; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
 
         .auth-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); display: flex; justify-content: center; align-items: center; z-index: 9999; backdrop-filter: blur(8px); }
         .auth-box { background: #131722; border: 1px solid #1f293d; padding: 36px; border-radius: 18px; width: 360px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 12px 40px rgba(0,242,254,0.18); }
@@ -3508,6 +3526,33 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 @app.get("/", response_class=HTMLResponse)
 def serve_ui():
     return HTML_INTERFACE
+
+
+@app.get("/icon.png")
+def serve_app_icon():
+    icon_bytes = base64.b64decode(APP_ICON_PNG_BASE64)
+    return Response(content=icon_bytes, media_type="image/png")
+
+
+@app.get("/manifest.json")
+def serve_pwa_manifest():
+    manifest = {
+        "name": "Looksmax Hub - Elite Performance & Coaching",
+        "short_name": "Looksmax Hub",
+        "description": "Hipertrofi, beslenme, biyometrik toparlanma ve fizik takibi.",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "orientation": "portrait",
+        "background_color": "#0b0d12",
+        "theme_color": "#0b0d12",
+        "icons": [
+            {"src": "/icon.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/icon.png", "sizes": "512x512", "type": "image/png"},
+            {"src": "/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+        ],
+    }
+    return JSONResponse(content=manifest)
 
 
 @app.post("/api/auth/register", status_code=201)
