@@ -9,7 +9,7 @@ import logging
 import traceback
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from groq import Groq
@@ -206,9 +206,27 @@ def init_auth_db():
                     created_at TIMESTAMPTZ DEFAULT now()
                 )
             """)
+            # FAZ 2: profil ve antrenman programi. Alanlar sik degisebildigi icin
+            # (frontend'deki obje sekli evrilebilir) JSONB olarak tutuyoruz -
+            # her alan icin ayri kolon acmak yerine tum objeyi oldugu gibi saklayip
+            # frontend'in zaten bildigi sekli birebir geri veriyoruz.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    username TEXT PRIMARY KEY REFERENCES users(username) ON DELETE CASCADE,
+                    profile_data JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT now()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_programs (
+                    username TEXT PRIMARY KEY REFERENCES users(username) ON DELETE CASCADE,
+                    program_data JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT now()
+                )
+            """)
         conn.commit()
         conn.close()
-        logger.info("Auth DB (Postgres) hazir, 'users' tablosu dogrulandi.")
+        logger.info("Auth DB (Postgres) hazir: 'users', 'user_profiles', 'user_programs' tablolari dogrulandi.")
     except Exception as e:
         logger.error(f"Auth DB baslatilamadi: {e}")
         traceback.print_exc()
@@ -259,9 +277,25 @@ def get_current_username(authorization: Optional[str] = Header(None)) -> Optiona
     return decode_jwt_token(token)
 
 
+def require_auth_username(authorization: Optional[str] = Header(None)) -> str:
+    """FAZ 2+: gercekten korumali endpoint'ler icin - token yoksa/gecersizse 401 fırlatır."""
+    username = get_current_username(authorization)
+    if not username:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return username
+
+
 class AuthRequest(BaseModel):
     username: str
     password_hash: str  # client-side SHA-256 hex digest (bkz. frontend hashPassword())
+
+
+class ProfileSyncInput(BaseModel):
+    profile_data: dict
+
+
+class ProgramSyncInput(BaseModel):
+    program_data: dict
 
 # ================= 0. DINAMIK MODEL SECICI & CIKTI TEMIZLEYICI =================
 _CACHED_MODEL: Optional[str] = None
@@ -1554,7 +1588,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 }
         function getUserProfileData(username) { return JSON.parse(localStorage.getItem("user_profile_" + username) || "{}"); }
         function saveUserProfileData(username, profData) {
-    safeLocalStorageSet("user_profile_" + username, JSON.stringify(profData));
+    const success = safeLocalStorageSet("user_profile_" + username, JSON.stringify(profData));
+    if (success && currentUser && currentUser.token && currentUser.username === username) {
+        fetch('/api/profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + currentUser.token },
+            body: JSON.stringify({ profile_data: profData })
+        }).catch(err => console.warn("Profil backend'e senkronize edilemedi (local'de kayıtlı kaldı):", err));
+    }
+    return success;
 }
 
         function getUserPhases(username) { return JSON.parse(localStorage.getItem("user_phases_" + username) || "[]"); }
@@ -1574,7 +1616,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
         function getUserProgram(username) { return JSON.parse(localStorage.getItem("user_program_" + username) || "null"); }
         function saveUserProgram(username, program) {
-    return safeLocalStorageSet("user_program_" + username, JSON.stringify(program));
+    const success = safeLocalStorageSet("user_program_" + username, JSON.stringify(program));
+    if (success && currentUser && currentUser.token && currentUser.username === username) {
+        fetch('/api/program', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + currentUser.token },
+            body: JSON.stringify({ program_data: program })
+        }).catch(err => console.warn("Program backend'e senkronize edilemedi (local'de kayıtlı kaldı):", err));
+    }
+    return success;
 }
 
         let currentUser = JSON.parse(localStorage.getItem("active_user") || "null");
@@ -1740,6 +1790,53 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 renderInjuriesUI();
                 loadProgramUI();
                 syncHealthDataFromServer();
+                syncProfileFromServer();
+                syncProgramFromServer();
+            }
+        }
+
+        async function syncProfileFromServer() {
+            if (!currentUser || !currentUser.token) return;
+            try {
+                const res = await fetch('/api/profile', {
+                    headers: { 'Authorization': 'Bearer ' + currentUser.token }
+                });
+                if (!res.ok) return; // 503 (yapilandirilmadi) / 401 vs. - sessizce local'de kal
+                const data = await res.json();
+                if (data.profile_data) {
+                    userProfile = data.profile_data;
+                    // saveUserProfileData'yi DEGIL, dogrudan safeLocalStorageSet'i kullaniyoruz -
+                    // yoksa backend'den okuyup tekrar backend'e yazma dongusune girer
+                    safeLocalStorageSet("user_profile_" + currentUser.username, JSON.stringify(userProfile));
+                    const profileViewEl = document.getElementById("profileView");
+                    if (profileViewEl && profileViewEl.classList.contains("active")) {
+                        loadUserProfileUI();
+                    }
+                }
+            } catch (err) {
+                console.warn("Profil sunucudan senkronize edilemedi:", err);
+            }
+        }
+
+        async function syncProgramFromServer() {
+            if (!currentUser || !currentUser.token) return;
+            try {
+                const res = await fetch('/api/program', {
+                    headers: { 'Authorization': 'Bearer ' + currentUser.token }
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.program_data && Array.isArray(data.program_data.days)) {
+                    userProgram = data.program_data;
+                    safeLocalStorageSet("user_program_" + currentUser.username, JSON.stringify(userProgram));
+                    const programViewEl = document.getElementById("programView");
+                    if (programViewEl && programViewEl.classList.contains("active")) {
+                        loadProgramUI();
+                    }
+                    refreshProgramDaySelectOptions();
+                }
+            } catch (err) {
+                console.warn("Program sunucudan senkronize edilemedi:", err);
             }
         }
 
@@ -3300,6 +3397,82 @@ def auth_login(payload: AuthRequest):
         return {"token": token, "username": username}
     except Exception as e:
         logger.error(f"Auth login hatasi: {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.get("/api/profile")
+def get_profile_backend(username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT profile_data FROM user_profiles WHERE username = %s", (username,))
+            row = cur.fetchone()
+        conn.close()
+        return {"profile_data": row["profile_data"] if row else None}
+    except Exception as e:
+        logger.error(f"Profil okuma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.post("/api/profile")
+def save_profile_backend(payload: ProfileSyncInput, username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO user_profiles (username, profile_data, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (username) DO UPDATE SET profile_data = EXCLUDED.profile_data, updated_at = now()
+            """, (username, psycopg2.extras.Json(payload.profile_data)))
+        conn.commit()
+        conn.close()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Profil yazma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.get("/api/program")
+def get_program_backend(username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT program_data FROM user_programs WHERE username = %s", (username,))
+            row = cur.fetchone()
+        conn.close()
+        return {"program_data": row["program_data"] if row else None}
+    except Exception as e:
+        logger.error(f"Program okuma hatasi ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.post("/api/program")
+def save_program_backend(payload: ProgramSyncInput, username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO user_programs (username, program_data, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (username) DO UPDATE SET program_data = EXCLUDED.program_data, updated_at = now()
+            """, (username, psycopg2.extras.Json(payload.program_data)))
+        conn.commit()
+        conn.close()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Program yazma hatasi ({username}): {e}")
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"detail": "server_error"})
 
