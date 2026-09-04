@@ -11,6 +11,7 @@ langchain
 langchain-community
 langchain-text-splitters
 sentence-transformers
+huggingface_hub
 
 # --- Gercek Backend Auth (Faz 1: Postgres + JWT) ---
 psycopg2-binary
