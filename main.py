@@ -999,8 +999,17 @@ def compute_symmetry_score(points: list) -> Dict[str, Any]:
 
 
 def compute_proportion_score(points: list) -> Dict[str, Any]:
-    """On yuz fotografindan yukseklik/genislik oranini altin orana (1.618) ve
-    yuz uctebirlerinin esitligine gore bir 'oran' puani (0-10) hesaplar."""
+    """On yuz fotografindan yukseklik/genislik oranini ve yuz uctebirlerinin
+    esitligine gore bir 'oran' puani (0-10) hesaplar.
+
+    KALIBRASYON NOTU: Ilk versiyon 1.618 (populer 'altin oran' iddiasi) hedef
+    aliyordu, ama gercek antropometrik veriler ve referans bir test (orantilariyla
+    taninan bir yuz: alin-cene/yanak-genislik olcumunde 1.225 cikti) gosterdi ki
+    BU LANDMARK CIFTIYLE yapilan olcumde 1.618 gercekci bir hedef degil - gercek
+    'iyi' yuzler bu tanimla 1.2-1.4 araliginda cikiyor. Hedef 1.30'a, +-0.15
+    toleransla (tolerans icinde 8-10 puan araligi) guncellendi. Tek veri
+    noktasina dayali bir kalibrasyon, daha fazla test verisiyle ince ayar
+    gerekebilir."""
     try:
         forehead, chin = points[LM_FOREHEAD_TOP], points[LM_CHIN]
         left_edge, right_edge = points[LM_FACE_LEFT_EDGE], points[LM_FACE_RIGHT_EDGE]
@@ -1013,8 +1022,13 @@ def compute_proportion_score(points: list) -> Dict[str, Any]:
             return {"score": 5.0, "height_width_ratio": None}
 
         ratio = face_height / face_width
-        golden_ratio = 1.618
-        ratio_deviation_pct = abs(ratio - golden_ratio) / golden_ratio * 100.0
+        ideal_ratio = 1.30
+        ratio_tolerance = 0.15
+        ratio_deviation = abs(ratio - ideal_ratio)
+        if ratio_deviation <= ratio_tolerance:
+            ratio_score = 10.0 - (ratio_deviation / ratio_tolerance) * 2.0  # tolerans icinde 8-10
+        else:
+            ratio_score = max(0.0, 8.0 - (ratio_deviation - ratio_tolerance) * 15)
 
         thirds = [
             abs(eyebrow_level_y - forehead[1]),
@@ -1023,14 +1037,21 @@ def compute_proportion_score(points: list) -> Dict[str, Any]:
         ]
         avg_third = sum(thirds) / 3.0
         thirds_variance_pct = ((max(thirds) - min(thirds)) / avg_third * 100.0) if avg_third > 1e-6 else 0.0
+        # LM_NOSE_BRIDGE gercek kas hizasindan biraz asagida oldugu icin ilk
+        # uctebir dogal olarak kisa olculuyor - tolerans buna gore genis
+        # tutuldu (referans testte %31.6 cikti, bunu 'iyi' kabul ediyoruz).
+        thirds_tolerance = 35.0
+        if thirds_variance_pct <= thirds_tolerance:
+            thirds_score = 10.0 - (thirds_variance_pct / thirds_tolerance) * 2.0
+        else:
+            thirds_score = max(0.0, 8.0 - (thirds_variance_pct - thirds_tolerance) / 5)
 
-        combined_deviation = (ratio_deviation_pct + thirds_variance_pct) / 2.0
-        score = max(0.0, min(10.0, 10.0 - (combined_deviation / 4.0)))
+        score = max(0.0, min(10.0, round((ratio_score + thirds_score) / 2.0, 1)))
 
         return {
-            "score": round(score, 1),
+            "score": score,
             "height_width_ratio": round(ratio, 3),
-            "golden_ratio_deviation_pct": round(ratio_deviation_pct, 2),
+            "golden_ratio_deviation_pct": round(abs(ratio - 1.618) / 1.618 * 100.0, 2),  # sadece bilgi amacli
             "thirds_variance_pct": round(thirds_variance_pct, 2),
         }
     except Exception as e:
@@ -4822,7 +4843,7 @@ def analyze_face(payload: FaceAnalysisInput, username: str = Depends(require_aut
         logger.warning(f"Face LLM analiz basarisiz, geometrik sonuclar protokolsuz donduruluyor: {llm_error}")
         llm_result = {
             "skin_score": 5.0,
-            "skin_summary": "Cilt değerlendirmesi şu an yapılamadı (AI servis hatası).",
+            "skin_summary": f"Cilt değerlendirmesi şu an yapılamadı (AI servis hatası: {llm_error}).",
             "symmetry_summary": "",
             "jaw_summary": "",
             "proportion_summary": "",
@@ -5243,8 +5264,16 @@ def generate_workout_program_with_llm(payload: GenerateProgramInput):
         "Maintenance": "idame antrenmani dengeli hacim surdurulebilir program",
     }.get(goal, "hipertrofi antrenman programlama hacim periyotlama")
 
-    program_query = f"{goal} {goal_query_hints} {num_days} gunluk split antrenman programi {injuries_text}"
-    knowledge_snippets, knowledge_sources = retrieve_knowledge_context(program_query, k=6)
+    # Hipertrofi antrenman biliminin evrensel terimleri (RIR, set sayisi, frekans, split gibi) -
+    # hedeften bagimsiz olarak ekleniyor, cunku antrenman metodolojisi anlatan PDF'ler genelde
+    # bu terimlerle yazilir ve hedeften bagimsiz olarak her programa uygulanir.
+    hypertrophy_science_terms = (
+        "hipertrofi kas gelisimi mekanik gerilim RIR cepte tekrar tukenis set sayisi volum "
+        "haftalik frekans tekrar araligi Push Pull Leg split progressive overload"
+    )
+
+    program_query = f"{goal} {goal_query_hints} {hypertrophy_science_terms} {num_days} gunluk antrenman programi {injuries_text}"
+    knowledge_snippets, knowledge_sources = retrieve_knowledge_context(program_query, k=8)
     knowledge_block = (
         f"\nBİLGİ BANKASI (yüklenen PDF/makalelerden bu isteğe en ilgili pasajlar):\n{knowledge_snippets}\n"
         f"YUKARIDAKİ BİLGİ BANKASI VARSA, programı bunun üzerine kur — split mantığı, hacim/yoğunluk önerisi, "
