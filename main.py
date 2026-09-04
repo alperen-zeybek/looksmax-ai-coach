@@ -81,45 +81,46 @@ _knowledge_base_load_attempted = False
 class LightweightHFAPIEmbeddings:
     """LangChain'in Embeddings arayuzunu (embed_query/embed_documents) uygulayan,
     ama modeli sunucu surecine YEREL OLARAK YUKLEMEYEN, bunun yerine HuggingFace'in
-    ucretsiz hosted Inference API'sini HTTP uzerinden cagiran hafif bir sinif.
-    Ekstra bagimlilik gerektirmez (zaten import edilmis urllib.request kullanir).
-    HF_TOKEN ortam degiskeni ayarlanmamissa anonim/rate-limited istek atar - calisir
-    ama HF_TOKEN eklemek daha stabil/hizli olur (ucretsiz, huggingface.co/settings/tokens)."""
+    resmi 'huggingface_hub' kutuphanesi (InferenceClient) uzerinden hosted Inference
+    Providers API'sini cagiran hafif bir sinif.
+    NOT: Eskiden dogrudan 'api-inference.huggingface.co' adresine urllib ile istek
+    atiyordu - HuggingFace bu adresi router.huggingface.co lehine kaldirdigi icin
+    (DNS hatasi aliniyordu) artik resmi kutuphaneyi kullaniyoruz, boylece HF
+    kendi routing'ini yonetiyor ve gelecekte adres degisirse tekrar kirilmayiz.
+    huggingface_hub zaten sentence-transformers/langchain'in bagimliligi oldugu
+    icin requirements.txt'e ekstra agir bir sey eklemez."""
 
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
-        self.api_url = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{model_name}"
-        self.hf_token = os.getenv("HF_TOKEN", "")
+        self.model_name = model_name
+        self._client = None
 
-    def _call_api(self, texts: List[str]) -> List[List[float]]:
-        headers = {"Content-Type": "application/json"}
-        if self.hf_token:
-            headers["Authorization"] = f"Bearer {self.hf_token}"
-        payload = json.dumps({"inputs": texts, "options": {"wait_for_model": True}}).encode("utf-8")
-        req = urllib.request.Request(self.api_url, data=payload, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+    def _get_client(self):
+        if self._client is None:
+            from huggingface_hub import InferenceClient
+            self._client = InferenceClient(
+                provider="hf-inference",
+                api_key=os.getenv("HF_TOKEN") or None,
+            )
+        return self._client
 
-        embeddings = []
-        for vec in result:
-            # HF feature-extraction bazen token-bazli liste-of-list donebiliyor -
-            # boyle gelirse ortalamasini alip (mean pooling) tek bir cumle vektorune indirgeriz.
-            if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], list):
-                dim = len(vec[0])
-                pooled = [sum(token[i] for token in vec) / len(vec) for i in range(dim)]
-                embeddings.append(pooled)
-            else:
-                embeddings.append(vec)
-        return embeddings
+    def _embed_one(self, text: str) -> List[float]:
+        client = self._get_client()
+        result = client.feature_extraction(text, model=self.model_name)
+        # Sonuc genelde numpy array olarak gelir (2D: token x boyut, veya zaten
+        # havuzlanmis 1D). numpy'a sabit bagimli olmadan liste'ye cevirip
+        # gerekirse ortalamasini (mean pooling) aliyoruz.
+        if hasattr(result, "tolist"):
+            result = result.tolist()
+        if len(result) > 0 and isinstance(result[0], list):
+            dim = len(result[0])
+            return [sum(row[i] for row in result) / len(result) for i in range(dim)]
+        return list(result)
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        all_embeddings = []
-        batch_size = 16  # HF API'yi tek seferde asiri yuklememeyi icin kucuk gruplar
-        for i in range(0, len(texts), batch_size):
-            all_embeddings.extend(self._call_api(texts[i:i + batch_size]))
-        return all_embeddings
+        return [self._embed_one(t) for t in texts]
 
     def embed_query(self, text: str) -> List[float]:
-        return self._call_api([text])[0]
+        return self._embed_one(text)
 
 
 def load_knowledge_base():
@@ -1118,11 +1119,15 @@ def compute_jaw_score_fallback_from_front(front_points: list) -> Dict[str, Any]:
 
 
 # --- Vision-capable Groq modeli secimi (metin modellerinden ayri, cunku hepsi gorsel giris kabul etmiyor) ---
+# NOT: Groq'un vision model lineup'i sik degisiyor - asagidaki liste web aramasiyla
+# DOGRULANMIS guncel bir modelle basliyor (Temmuz 2026 itibariyle), eskiler (artik
+# deprecated/retired) yedek olarak birakildi.
 VISION_MODEL_PREFERENCES = [
-    "llama-3.2-90b-vision-preview",
-    "llama-3.2-11b-vision-preview",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "qwen/qwen3.6-27b",  # Groq'un guncel (preview) vision-destekli modeli
+    "meta-llama/llama-4-maverick-17b-128e-instruct",  # deprecated olabilir, yedek
+    "meta-llama/llama-4-scout-17b-16e-instruct",  # deprecated olabilir, yedek
+    "llama-3.2-90b-vision-preview",  # eski/deprecated, son care yedek
+    "llama-3.2-11b-vision-preview",  # eski/deprecated, son care yedek
 ]
 _CACHED_VISION_MODEL: Optional[str] = None
 
@@ -1140,7 +1145,10 @@ def get_best_vision_model() -> Optional[str]:
             if pref in active_models:
                 _CACHED_VISION_MODEL = pref
                 return _CACHED_VISION_MODEL
-        vision_like = [m for m in active_models if any(k in m.lower() for k in ["vision", "scout", "maverick"])]
+        vision_like = [
+            m for m in active_models
+            if any(k in m.lower() for k in ["vision", "scout", "maverick", "qwen3.6", "qwen3-vl"])
+        ]
         if vision_like:
             _CACHED_VISION_MODEL = vision_like[0]
             return _CACHED_VISION_MODEL
