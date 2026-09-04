@@ -18,6 +18,6 @@ PyJWT
 bcrypt
 
 # --- Yuz Analizi (gercek geometrik olcum: altin oran, simetri, cene) ---
-mediapipe
+mediapipe==0.10.14
 opencv-python-headless
 numpy
