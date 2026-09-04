@@ -1214,6 +1214,7 @@ KURALLAR:
 4. Asla abartılı, kesinlik iddia eden ifadeler kullanma ("kesin", "garanti" gibi) — bu estetik
    bir değerlendirme, tıbbi teşhis değil.
 5. Kullanıcıya resmi "siz" diliyle hitap et. "Kral", "kanka" gibi argo/gayriresmi hitaplar kullanma.
+6. KISALIK KURALI: skin_summary ve diğer özet alanları EN FAZLA 1-2 kısa cümle olsun. Protokol önerilerini (protocol) EN FAZLA 4 madde ile sınırla, her description EN FAZLA 1 cümle olsun — çıktı sınırlı token bütçesine sığmalı, yarım kalmamalı.
 """
 
     try:
@@ -1230,7 +1231,7 @@ KURALLAR:
             model=vision_model,
             response_format={"type": "json_object"},
             temperature=0.3,
-            max_tokens=1200
+            max_tokens=900  # Groq ucretsiz/on-demand katmaninda dakikalik cikti token siniri 1000 - altinda kaliyoruz
         )
         raw = completion.choices[0].message.content
         parsed = json.loads(raw)
