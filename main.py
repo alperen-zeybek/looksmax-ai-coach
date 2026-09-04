@@ -504,6 +504,36 @@ def strip_thinking_and_tables(text: str) -> str:
     return result if result else clean
 
 
+def extract_json_object(text: str) -> dict:
+    """Bazi vision modelleri (orn qwen3.6-27b), gorsel girisle birlikte response_format=
+    json_object kullanildiginda guvenilir calismiyor (bos/gecersiz cikti donebiliyor).
+    Bu yuzden JSON modu ZORLANMADAN, sadece prompt talimatiyla JSON istenen yerlerde,
+    donen metni esnek sekilde JSON'a cevirir: markdown kod bloklarini (```json ... ```)
+    temizler, dogrudan parse dener, olmazsa ilk '{' ile son '}' arasini cikarip dener."""
+    if not text or not text.strip():
+        raise ValueError("Model boş içerik döndürdü.")
+
+    cleaned = text.strip()
+    # ```json ... ``` veya ``` ... ``` kod bloklarini temizle
+    cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
+    cleaned = re.sub(r'\s*```$', '', cleaned)
+    cleaned = cleaned.strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Ilk '{' ile son '}' arasini cikarip tekrar dene (modelin araya
+    # aciklama cumlesi sikistirmis olma ihtimaline karsi)
+    start = cleaned.find('{')
+    end = cleaned.rfind('}')
+    if start != -1 and end != -1 and end > start:
+        return json.loads(cleaned[start:end + 1])
+
+    raise ValueError(f"Geçerli JSON bulunamadı. Ham çıktı: {cleaned[:200]}")
+
+
 def violates_coach_format_rules(text: str) -> bool:
     """AI Koc chat'inde bazen model karakterden cikip Ingilizce'ye ve
     markdown baslik/numarali liste formatina kayabiliyor (orn. '## Weekly Plan',
@@ -694,13 +724,23 @@ IKI FARKLI KATEGORI VAR, HER KALEM ICIN DOGRU OLANI SEC:
 == KATEGORI A: EV YEMEGI / CIG HAM MALZEME (is_packaged_or_branded=false) ==
 Pirinc, bulgur, makarna, yulaf, tavuk, kirmizi et, yumurta, ekmek, yogurt, peynir, meyve, sebze gibi
 seyler. Bu kalemlerde estimated_grams (CIG agirlik) alanini doldurman yeterli, branded_* alanlarini
-BOS BIRAK (null). Donusum katsayilari:
-- Pirinc: pismis agirlik / 2.8  (orn 1 kase ~200g pismis pilav -> ~70g cig pirinc)
-- Bulgur: pismis agirlik / 2.5
-- Makarna: pismis agirlik / 2.2
-- Yulaf (sutle/suyla lapasi): pismis agirlik / 2.0
-Standart porsiyonlar: 1 adet yumurta=50g, 1 dilim ekmek=30g, 1 olcek protein tozu=30g,
-1 yemek kasigi zeytinyagi/fistik ezmesi=14g, 1 orta boy cig tavuk gogsu=165g, 1 kofte(cig)=60g.
+BOS BIRAK (null).
+
+ÇOK ÖNEMLİ - NE ZAMAN ÇEVİRİ (DÖNÜŞÜM) YAPILIR, NE ZAMAN YAPILMAZ:
+- Kullanıcı GRAM/GR/KG CİNSİNDEN DOĞRUDAN bir miktar belirtmişse (örn "200 g pirinç", "300 gram tavuk",
+  "150gr makarna", "60g pirinç unu"), bu sayıyı OLDUĞU GİBİ estimated_grams'e yaz - KESİNLİKLE HİÇBİR
+  DÖNÜŞÜM/ÇEVİRİ YAPMA. Kullanıcı zaten net bir gram söylemiştir, bunu "pişmiş" sanıp küçültme yasak.
+  Örnek: "200 g pirinç" -> estimated_grams=200 (71 DEĞİL).
+- Kullanıcı GRAM DEĞİL, bir KAP/PORSİYON tanımlamışsa (örn "1 kase pilav", "bir tabak makarna",
+  "2 kaşık pirinç", "bir porsiyon bulgur"), BU DURUMDA ASAGIDAKI donusum katsayilarini uygula
+  (cunku kase/tabak/porsiyon gibi olculer dogal olarak PISMIS haldeki miktari ifade eder):
+  - Pirinc: pismis agirlik / 2.8  (orn 1 kase ~200g pismis pilav -> ~70g cig pirinc)
+  - Bulgur: pismis agirlik / 2.5
+  - Makarna: pismis agirlik / 2.2
+  - Yulaf (sutle/suyla lapasi): pismis agirlik / 2.0
+Standart porsiyonlar (adet/dilim gibi net birimler icin, gram belirtilmemisse): 1 adet yumurta=50g,
+1 dilim ekmek=30g, 1 olcek protein tozu=30g, 1 yemek kasigi zeytinyagi/fistik ezmesi=14g,
+1 orta boy cig tavuk gogsu=165g, 1 kofte(cig)=60g.
 
 == KATEGORI B: PAKETLI / MARKALI URUN (is_packaged_or_branded=true) ==
 Enerji icecegi (Red Bull vb.), kola/gazoz, cips, cikolata, bisküvi, protein bari, fast food,
@@ -717,7 +757,9 @@ ONEMLI: enerji icecekleri ve gazli icecekler pratikte 0g PROTEIN icerir, protein
 KURALLAR:
 1. Gercekci, olculu degerler ver. Asiri buyuk veya sifir deger UYDURMA.
 2. Ayni mesajdaki her ayri besin icin ayri bir item olustur.
-3. Cikti formati kesinlikle su JSON seklinde olmalidir (Kategori A ve B ornekleri):
+3. "amount" ve "unit" alanlarina kullanicinin GERCEKTEN SOYLEDIGI sayi ve birimi yaz - orn
+   "40 g badem" icin amount=40, unit="gram" (amount=1 YAZMA, kullanici 40 dedi).
+4. Cikti formati kesinlikle su JSON seklinde olmalidir (Kategori A ve B ornekleri):
 {
   "items": [
     {"name": "sahanda yumurta", "amount": 1, "unit": "adet", "estimated_grams": 50, "is_packaged_or_branded": false},
@@ -1198,61 +1240,91 @@ def generate_face_protocol_with_llm(front_image_b64: str, symmetry_data: dict, p
         if knowledge_snippets else ""
     )
 
-    system_prompt = f"""
-Sen bir yuz estetigi ve "looksmax" uzmanisin. Sana bir kisinin on yuz fotografi ve geometrik
-olcum sonuclari verilecek. Gorevin YALNIZCA JSON formatinda, FaceLLMAnalysis semasina uygun
-cikti vermek:
+    jaw_note = (
+        " (NOT: yan profil fotoğrafı tespit edilemedi, bu kaba bir ön-fotoğraf tahmini - "
+        "jaw_summary'de bunu belirt, kesin konuşma)" if jaw_data.get('is_fallback') else ""
+    )
+
+    findings_block = f"""GEOMETRIK BULGULAR (bunlari SEN hesaplamiyorsun, zaten hesaplanmis - sadece yorumla):
+- Simetri: puan={symmetry_data.get('score')}/10, ortalama sapma=%{symmetry_data.get('avg_deviation_pct')}
+- Oran (altın oran): puan={proportion_data.get('score')}/10, yükseklik/genişlik oranı={proportion_data.get('height_width_ratio')} (ideal: 1.618)
+- Çene: puan={jaw_data.get('score')}/10{jaw_note}
+{knowledge_block}"""
+
+    json_example = (
+        '{"skin_score": 7, "skin_summary": "...", "symmetry_summary": "...", '
+        '"jaw_summary": "...", "proportion_summary": "...", '
+        '"protocol": [{"title": "...", "description": "...", "category": "cilt"}]}'
+    )
+
+    full_system_prompt = f"""Sen bir yuz estetigi ve "looksmax" uzmanisin. Sana bir kisinin on yuz fotografi ve
+geometrik olcum sonuclari verilecek. Gorevin YALNIZCA JSON formatinda, tam olarak su sekilde
+bir cikti vermek (ornek sema): {json_example}
 
 1. Fotograftan cildin gorsel durumunu (ton esitligi, parlaklik, gozeneklilik, kizariklik gibi
    gozle gorulur ipuclarindan) degerlendirip 0-10 arasi bir "skin_score" ver.
 2. Asagidaki geometrik bulgulari kisa, anlasilir cumlelerle yorumla (summary alanlari).
 3. Bilgi bankasindaki icerige dayanarak (varsa) kisiye ozel, uygulanabilir protokol onerileri sun.
 
-GEOMETRIK BULGULAR (bunlari SEN hesaplamiyorsun, zaten hesaplanmis - sadece yorumla):
-- Simetri: puan={symmetry_data.get('score')}/10, ortalama sapma=%{symmetry_data.get('avg_deviation_pct')}
-- Oran (altın oran): puan={proportion_data.get('score')}/10, yükseklik/genişlik oranı={proportion_data.get('height_width_ratio')} (ideal: 1.618)
-- Çene: puan={jaw_data.get('score')}/10{" (NOT: yan profil fotoğrafı tespit edilemedi, bu kaba bir ön-fotoğraf tahmini - jaw_summary'de bunu belirt, kesin konuşma)" if jaw_data.get('is_fallback') else ""}
-{knowledge_block}
+{findings_block}
 KURALLAR:
 1. SADECE TÜRKÇE yaz.
-2. YALNIZCA JSON formatında çıktı ver, açıklama/markdown ekleme.
+2. YALNIZCA JSON formatında çıktı ver, açıklama/markdown/kod bloğu ekleme.
 3. Protokol önerilerini gerçekçi ve uygulanabilir tut (cilt rutini, çene/duruş egzersizleri,
    su tüketimi/şişkinlik gibi yaşam tarzı konularında). ASLA tıbbi tedavi, ilaç, operasyon önerme.
 4. Asla abartılı, kesinlik iddia eden ifadeler kullanma ("kesin", "garanti" gibi) — bu estetik
    bir değerlendirme, tıbbi teşhis değil.
 5. Kullanıcıya resmi "siz" diliyle hitap et. "Kral", "kanka" gibi argo/gayriresmi hitaplar kullanma.
-6. KISALIK KURALI: skin_summary ve diğer özet alanları EN FAZLA 1-2 kısa cümle olsun. Protokol önerilerini (protocol) EN FAZLA 4 madde ile sınırla, her description EN FAZLA 1 cümle olsun — çıktı sınırlı token bütçesine sığmalı, yarım kalmamalı.
-"""
+6. KISALIK KURALI: skin_summary ve diğer özet alanları EN FAZLA 1-2 kısa cümle olsun. Protokol önerilerini (protocol) EN FAZLA 4 madde ile sınırla, her description EN FAZLA 1 cümle olsun."""
+
+    simple_system_prompt = f"""Yuz estetigi uzmanisin. YALNIZCA su JSON semasina uygun, kisa bir cikti ver: {json_example}
+Bulgular: Simetri={symmetry_data.get('score')}/10, Oran={proportion_data.get('score')}/10, Çene={jaw_data.get('score')}/10.
+Fotograftaki cilde bakip skin_score (0-10) ver. Her alan 1 kisa cumle. protocol dizisinde EN FAZLA 2 madde olsun.
+SADECE TÜRKÇE ve SADECE JSON yaz, baska hicbir sey ekleme."""
 
     # Frontend zaten tam bir data URI gonderiyor (data:image/jpeg;base64,...) -
     # onune tekrar prefix eklersek "data:image/jpeg;base64,data:image/jpeg;base64,..."
-    # gibi gecersiz bir URL olusuyordu (Groq'un "invalid base64 url" hatasinin sebebi buydu).
+    # gibi gecersiz bir URL olusuyordu (Groq'un "invalid base64 url" hatasinin sebebiydi).
     image_data_url = front_image_b64 if front_image_b64.startswith("data:") else f"data:image/jpeg;base64,{front_image_b64}"
 
-    try:
-        completion = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": system_prompt},
-                        {"type": "image_url", "image_url": {"url": image_data_url}}
-                    ]
-                }
-            ],
-            model=vision_model,
-            response_format={"type": "json_object"},
-            temperature=0.3,
-            max_tokens=900  # Groq ucretsiz/on-demand katmaninda dakikalik cikti token siniri 1000 - altinda kaliyoruz
-        )
-        raw = completion.choices[0].message.content
-        parsed = json.loads(raw)
-        data = FaceLLMAnalysis(**parsed)
-        return data.model_dump(), None
-    except Exception as e:
-        logger.error(f"Face LLM analiz hatasi: {e}")
-        traceback.print_exc()
-        return None, str(e)
+    last_error = "Bilinmeyen hata"
+    attempts = [
+        (full_system_prompt, 900, 0.3),
+        (simple_system_prompt, 500, 0.1),  # ilk deneme basarisiz olursa: daha kisa/basit prompt, daha dusuk sicaklik
+    ]
+
+    for prompt_text, token_budget, temp in attempts:
+        try:
+            completion = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": prompt_text},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Bu fotoğrafı yukarıdaki talimatlara göre analiz et."},
+                            {"type": "image_url", "image_url": {"url": image_data_url}}
+                        ]
+                    }
+                ],
+                model=vision_model,
+                # NOT: response_format=json_object BILINCLI OLARAK KULLANILMIYOR - bu vision
+                # modeli (qwen3.6-27b, preview) gorsel + zorunlu JSON modu kombinasyonunda
+                # guvenilir calismiyor (bos/gecersiz cikti donuyordu). Bunun yerine JSON'u
+                # prompt uzerinden istiyoruz ve extract_json_object() ile esnek ayristiriyoruz.
+                temperature=temp,
+                max_tokens=token_budget
+            )
+            raw = completion.choices[0].message.content
+            parsed = extract_json_object(raw)
+            data = FaceLLMAnalysis(**parsed)
+            return data.model_dump(), None
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"Face LLM denemesi başarısız (token_budget={token_budget}): {e}")
+
+    logger.error(f"Face LLM analiz hatasi (tum denemeler basarisiz): {last_error}")
+    traceback.print_exc()
+    return None, last_error
 
 
 # ================= 3. SCHEMAS & API ENDPOINTS =================
@@ -5071,6 +5143,7 @@ FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
 6. Sakatlık varsa: Güvenli alternatif açıyı söyle ve 1 rehabilitasyon egzersizi emret.
 7. Bilgi bankasında ilgili bir pasaj varsa onu kendi cümlelerinle harmanla, doğrudan alıntılama.
 8. Kullanıcıya resmi "siz" diliyle hitap et. "Kral", "kanka" gibi argo/gayriresmi hitaplar KESİNLİKLE kullanma.
+9. UZUNLUK (ÇOK ÖNEMLİ): Gerçek bir antrenörün mesajlaşma gibi düşün, rapor gibi değil. Basit bir soruya (örn "bugün ne yapayım") 2-4 CÜMLE yeterli. Sadece detaylı bir program/analiz istenirse biraz uzayabilir, o zaman bile 6-7 cümleyi geçme. Gereksiz doldurma cümlesi ("unutmayın ki...", "önemli olan şudur...") KULLANMA, direkt cevaba gir.
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
@@ -5104,7 +5177,7 @@ FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
                 messages=attempt_messages,
                 model=active_model,
                 temperature=0.3 if attempt == 1 else 0.15,
-                max_tokens=700,
+                max_tokens=450,
             )
             choice = chat_completion.choices[0]
             raw_text = choice.message.content or ""
@@ -5427,4 +5500,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
