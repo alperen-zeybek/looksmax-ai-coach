@@ -10,7 +10,7 @@ import logging
 import traceback
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from groq import Groq
@@ -134,6 +134,23 @@ def retrieve_knowledge_context(query: str, k: int = 4):
         return "", []
 
 app = FastAPI(title="Looksmax Hub - Elite Performance & Coaching Engine")
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Yakalanmamis (unhandled) bir hata olursa FastAPI/Starlette varsayilan
+    olarak HTML/duz metin bir hata sayfasi donuyor - bu da frontend'de
+    'response.json()' cagrisinin 'the string did not match the expected
+    pattern' gibi anlasilmaz bir hatayla patlamasina sebep oluyordu. Artik
+    HER unhandled hata da gecerli JSON donuyor, boylece hem frontend duzgun
+    hata gosterebiliyor hem de gercek sebep loglara duguyor."""
+    logger.error(f"Yakalanmamis hata ({request.url.path}): {exc}")
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Sunucu hatası: {str(exc)}", "is_error": True}
+    )
+
 
 # ================= GERÇEK BACKEND AUTH (POSTGRES + JWT) =================
 # FAZ 1: Kullanici hesaplarini localStorage'dan gercek bir veritabanina tasima.
@@ -790,14 +807,21 @@ def compute_recovery_score(sleep_hours: float, hrv: float, resting_hr: float) ->
 
 _face_libs_load_attempted = False
 _FACE_MESH_AVAILABLE_CACHED = False
+mp_face_mesh_module = None
 
 
 def _ensure_face_libs_loaded() -> bool:
     """numpy/cv2/mediapipe'i SADECE ilk gercek ihtiyacta (lazy) import eder.
     Bu kutuphaneler agir oldugu icin (RAM'e ~100-200MB) sunucu acilirken degil,
     ilk yuz analizi istegi geldiginde yuklenir - dusuk RAM'li ortamlarda
-    (orn Render 512MB) acilista OOM cokmesini onlemek icin."""
-    global np, cv2, mp, _face_libs_load_attempted, _FACE_MESH_AVAILABLE_CACHED
+    (orn Render 512MB) acilista OOM cokmesini onlemek icin.
+
+    NOT: 'import mediapipe as mp' sonrasi 'mp.solutions.face_mesh' bazi
+    mediapipe surumlerinde/paketleme kombinasyonlarinda AttributeError
+    verebiliyor (bilinen bir sorun). Bunu onlemek icin face_mesh alt
+    modulunu DOGRUDAN tam yoluyla import ediyoruz, mp.solutions uzerinden
+    erisim yerine."""
+    global np, cv2, mp, mp_face_mesh_module, _face_libs_load_attempted, _FACE_MESH_AVAILABLE_CACHED
     if _face_libs_load_attempted:
         return _FACE_MESH_AVAILABLE_CACHED
 
@@ -806,7 +830,16 @@ def _ensure_face_libs_loaded() -> bool:
         import numpy as _np
         import cv2 as _cv2
         import mediapipe as _mp
+
+        try:
+            from mediapipe.python.solutions import face_mesh as _mp_face_mesh_module
+        except Exception:
+            # Bazi mediapipe surumlerinde tam yol farkli olabiliyor - klasik
+            # mp.solutions.face_mesh erisimini yedek olarak dene.
+            _mp_face_mesh_module = _mp.solutions.face_mesh
+
         np, cv2, mp = _np, _cv2, _mp
+        mp_face_mesh_module = _mp_face_mesh_module
         _FACE_MESH_AVAILABLE_CACHED = True
         logger.info("Yuz analizi kutuphaneleri (numpy/cv2/mediapipe) basariyla yuklendi.")
     except Exception as e:
@@ -856,13 +889,12 @@ def get_face_landmarks(image_bgr):
     if not _ensure_face_libs_loaded() or image_bgr is None:
         return None
 
-    mp_face_mesh = mp.solutions.face_mesh
     rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     h, w = image_bgr.shape[:2]
 
     for confidence in (0.5, 0.3, 0.15):
         try:
-            with mp_face_mesh.FaceMesh(
+            with mp_face_mesh_module.FaceMesh(
                 static_image_mode=True, max_num_faces=1,
                 refine_landmarks=True, min_detection_confidence=confidence
             ) as face_mesh:
