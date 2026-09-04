@@ -1295,6 +1295,16 @@ SADECE TÜRKÇE ve SADECE JSON yaz, baska hicbir sey ekleme."""
 
     for prompt_text, token_budget, temp in attempts:
         try:
+            # Qwen3 ailesi (qwen/qwen3.6-27b) varsayilan olarak "dusunme" (reasoning) moduna
+            # giriyor ve butun token butcesini gorunmez bir "analiz" metninde tuketip gercek
+            # JSON'a hic sira gelmeden bitiriyordu. Groq'un resmi dokumantasyonuna gore bu
+            # aile reasoning_effort="none" ile dogrudan (dusunmeden) cevap verebiliyor.
+            # Diger (eski/yedek) vision modelleri bu parametreyi tanimayabilir, o yuzden
+            # sadece Qwen3 oldugunda ekliyoruz.
+            extra_kwargs = {}
+            if "qwen3" in vision_model.lower():
+                extra_kwargs["reasoning_effort"] = "none"
+
             completion = client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": prompt_text},
@@ -1312,7 +1322,8 @@ SADECE TÜRKÇE ve SADECE JSON yaz, baska hicbir sey ekleme."""
                 # guvenilir calismiyor (bos/gecersiz cikti donuyordu). Bunun yerine JSON'u
                 # prompt uzerinden istiyoruz ve extract_json_object() ile esnek ayristiriyoruz.
                 temperature=temp,
-                max_tokens=token_budget
+                max_tokens=token_budget,
+                **extra_kwargs
             )
             raw = completion.choices[0].message.content
             parsed = extract_json_object(raw)
