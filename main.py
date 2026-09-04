@@ -4353,6 +4353,38 @@ def rag_status_check(q: str = "antrenman programı"):
         except Exception as e:
             info["chunk_count_error"] = str(e)
 
+        # ADIM 1: Embedding cagrisini DOGRUDAN (retrieve_knowledge_context'in ic
+        # try/except'i olmadan) test et - boylece gercek hata varsa burada gorunur,
+        # sessizce yutulmaz. all-MiniLM-L6-v2 384 boyutlu vektor uretmeli.
+        if embedding_model is not None:
+            try:
+                test_vec = embedding_model.embed_query(q)
+                info["embedding_test"] = {
+                    "success": True,
+                    "vector_length": len(test_vec) if test_vec else 0,
+                    "expected_length": 384,
+                    "sample_values": test_vec[:5] if test_vec else [],
+                }
+            except Exception as e:
+                info["embedding_test"] = {"success": False, "error": str(e)}
+                traceback.print_exc()
+
+        # ADIM 2: similarity_search'u DOGRUDAN cagirip gercek hatayi yakala
+        # (orn. embedding boyutu Chroma'da saklanan vektorlerle uyusmuyorsa
+        # burada acikca gorunur).
+        try:
+            raw_results = vector_db.similarity_search(q, k=4)
+            info["raw_similarity_search"] = {
+                "success": True,
+                "result_count": len(raw_results),
+                "sources": [os.path.basename(str(r.metadata.get("source", "?"))) for r in raw_results],
+            }
+        except Exception as e:
+            info["raw_similarity_search"] = {"success": False, "error": str(e)}
+            traceback.print_exc()
+
+        # ADIM 3: normal (guvenli/try-except'li) yol - kullanicinin uygulamada
+        # gordugu gercek davranis budur.
         try:
             snippets, sources = retrieve_knowledge_context(q, k=4)
             info["test_query_result_count"] = len(sources)
