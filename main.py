@@ -1921,7 +1921,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                             </div>
                         </div>
                     </div>
-                    <input type="file" id="faceUniversalPhotoInput" accept="image/*" capture="user" onchange="handleFacePhotoUpload(event)" style="display:none;" />
+                    <input type="file" id="faceUniversalPhotoInput" accept="image/*" onchange="handleFacePhotoUpload(event)" style="display:none;" />
                     <div style="font-size:0.72rem; color:#6b7280; line-height:1.4; margin-top:10px;">
                         Net, aydınlık, doğrudan kameraya bakan (ön) ve tam yandan (profil) iki fotoğraf en doğru sonucu verir. Sonuçlar bilgilendirme amaçlıdır, tıbbi teşhis değildir.
                     </div>
