@@ -61,16 +61,65 @@ else:
 
 # ================= KNOWLEDGE BASE (RAG / CHROMA) =================
 # ingest.py tarafindan olusturulan ./looksmax_db vektor veritabanini yukler.
-# ONEMLI: Bu artik sunucu acilirken DEGIL, ILK GERCEK RAG SORGUSUNDA (lazy)
-# yukleniyor. Sebep: HuggingFaceEmbeddings (torch tabanli) RAM'e agir biniyor
-# (~150-300MB) ve bunu aciliste yapmak, dusuk RAM'li ortamlarda (orn Render'in
-# 512MB'lik ucretsiz/baslangic plani) sunucuyu ayaga kalkmadan OOM ile
-# coktermeye neden oluyordu.
+# ONEMLI: Sorgu-zamani (query-time) embedding icin ARTIK YEREL sentence-transformers/
+# torch YUKLENMIYOR - bunun yerine HuggingFace'in ucretsiz hosted Inference API'sini
+# HTTP uzerinden cagiran hafif bir sinif (asagida) kullaniliyor. Sebep: torch, calisan
+# sunucu surecine ~200-400MB birden biniyor ve bu, mediapipe/opencv (yuz analizi) ile
+# AYNI ANDA yuklendiginde dusuk RAM'li ortamlarda (Render 512MB) OOM'a (bellek
+# tasmasi, container'in sertce oldurulmesi) sebep oluyordu.
+# NOT: ingest.py (Docker BUILD asamasinda calisan, ayri/kisa omurlu bir surec) hala
+# yerel sentence-transformers modelini kullaniyor - orada 512MB sinirlamasi yok,
+# sadece RUNTIME sunucu sureci icin bu hafif yaklasima geciyoruz. Ikisi de ayni
+# modeli (all-MiniLM-L6-v2) kullandigi icin vektor uzayi tutarli kalir.
 
 VECTOR_DB_DIR = "./looksmax_db"
 embedding_model = None
 vector_db = None
 _knowledge_base_load_attempted = False
+
+
+class LightweightHFAPIEmbeddings:
+    """LangChain'in Embeddings arayuzunu (embed_query/embed_documents) uygulayan,
+    ama modeli sunucu surecine YEREL OLARAK YUKLEMEYEN, bunun yerine HuggingFace'in
+    ucretsiz hosted Inference API'sini HTTP uzerinden cagiran hafif bir sinif.
+    Ekstra bagimlilik gerektirmez (zaten import edilmis urllib.request kullanir).
+    HF_TOKEN ortam degiskeni ayarlanmamissa anonim/rate-limited istek atar - calisir
+    ama HF_TOKEN eklemek daha stabil/hizli olur (ucretsiz, huggingface.co/settings/tokens)."""
+
+    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+        self.api_url = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{model_name}"
+        self.hf_token = os.getenv("HF_TOKEN", "")
+
+    def _call_api(self, texts: List[str]) -> List[List[float]]:
+        headers = {"Content-Type": "application/json"}
+        if self.hf_token:
+            headers["Authorization"] = f"Bearer {self.hf_token}"
+        payload = json.dumps({"inputs": texts, "options": {"wait_for_model": True}}).encode("utf-8")
+        req = urllib.request.Request(self.api_url, data=payload, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+
+        embeddings = []
+        for vec in result:
+            # HF feature-extraction bazen token-bazli liste-of-list donebiliyor -
+            # boyle gelirse ortalamasini alip (mean pooling) tek bir cumle vektorune indirgeriz.
+            if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], list):
+                dim = len(vec[0])
+                pooled = [sum(token[i] for token in vec) / len(vec) for i in range(dim)]
+                embeddings.append(pooled)
+            else:
+                embeddings.append(vec)
+        return embeddings
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        all_embeddings = []
+        batch_size = 16  # HF API'yi tek seferde asiri yuklememeyi icin kucuk gruplar
+        for i in range(0, len(texts), batch_size):
+            all_embeddings.extend(self._call_api(texts[i:i + batch_size]))
+        return all_embeddings
+
+    def embed_query(self, text: str) -> List[float]:
+        return self._call_api([text])[0]
 
 
 def load_knowledge_base():
@@ -87,12 +136,11 @@ def load_knowledge_base():
         return
     try:
         from langchain_community.vectorstores import Chroma
-        from langchain_community.embeddings import HuggingFaceEmbeddings
 
-        embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        embedding_model = LightweightHFAPIEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
         vector_db = Chroma(persist_directory=VECTOR_DB_DIR, embedding_function=embedding_model)
         count = vector_db._collection.count() if hasattr(vector_db, "_collection") else "?"
-        logger.info(f"Knowledge base (Chroma) yuklendi. Parca sayisi: {count}")
+        logger.info(f"Knowledge base (Chroma) yuklendi [hafif/API-tabanli embedding]. Parca sayisi: {count}")
     except Exception as e:
         logger.error(f"Knowledge base yuklenemedi: {e}")
         traceback.print_exc()
