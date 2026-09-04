@@ -1062,8 +1062,13 @@ def compute_proportion_score(points: list) -> Dict[str, Any]:
 
 def compute_jaw_score(side_points: list) -> Dict[str, Any]:
     """Yan profil fotografindan kaba bir cene/genislik oranina dayali 'cene tanimliligi'
-    puani (0-10) hesaplar. Bu formul en cok kalibrasyon gerektiren kisim - ideal araligi
-    (0.35-0.55) simdilik genel bir varsayimdir."""
+    puani (0-10) hesaplar.
+    KALIBRASYON NOTU: Ilk versiyon 0.35-0.55 araligini "ideal" varsayiyordu. Iki
+    bagimsiz referans yuz (Chico Lachowski: 0.616, Jordan Barrett: 0.618 - ikisi de
+    guclu/tanimli cene hattiyla bilinen profesyonel modeller) neredeyse AYNI degerde
+    olculdu ve eski formulle sadece 6.6-6.7/10 aliyordu - bu, gercek 'iyi' cenelerin
+    bu olcumde ~0.62 civarinda ciktigini gosteriyor, 0.35-0.55 degil. Hedef 0.62'ye,
+    +-0.12 toleransla guncellendi."""
     try:
         chin = side_points[LM_CHIN]
         jaw_ref = side_points[LM_JAW_LEFT]
@@ -1075,11 +1080,13 @@ def compute_jaw_score(side_points: list) -> Dict[str, Any]:
             return {"score": 5.0, "jaw_ratio": None}
 
         jaw_ratio = jaw_width / face_span
-        if 0.35 <= jaw_ratio <= 0.55:
-            score = 8.0
+        ideal_jaw_ratio = 0.62
+        jaw_tolerance = 0.12
+        deviation = abs(jaw_ratio - ideal_jaw_ratio)
+        if deviation <= jaw_tolerance:
+            score = 10.0 - (deviation / jaw_tolerance) * 2.0  # tolerans icinde 8-10
         else:
-            deviation = min(abs(jaw_ratio - 0.35), abs(jaw_ratio - 0.55))
-            score = max(3.0, 8.0 - deviation * 20)
+            score = max(0.0, 8.0 - (deviation - jaw_tolerance) * 15)
 
         return {"score": round(score, 1), "jaw_ratio": round(jaw_ratio, 3)}
     except Exception as e:
@@ -1217,6 +1224,11 @@ KURALLAR:
 6. KISALIK KURALI: skin_summary ve diğer özet alanları EN FAZLA 1-2 kısa cümle olsun. Protokol önerilerini (protocol) EN FAZLA 4 madde ile sınırla, her description EN FAZLA 1 cümle olsun — çıktı sınırlı token bütçesine sığmalı, yarım kalmamalı.
 """
 
+    # Frontend zaten tam bir data URI gonderiyor (data:image/jpeg;base64,...) -
+    # onune tekrar prefix eklersek "data:image/jpeg;base64,data:image/jpeg;base64,..."
+    # gibi gecersiz bir URL olusuyordu (Groq'un "invalid base64 url" hatasinin sebebi buydu).
+    image_data_url = front_image_b64 if front_image_b64.startswith("data:") else f"data:image/jpeg;base64,{front_image_b64}"
+
     try:
         completion = client.chat.completions.create(
             messages=[
@@ -1224,7 +1236,7 @@ KURALLAR:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": system_prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{front_image_b64}"}}
+                        {"type": "image_url", "image_url": {"url": image_data_url}}
                     ]
                 }
             ],
