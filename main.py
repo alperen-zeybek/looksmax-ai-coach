@@ -31,14 +31,12 @@ try:
 except ImportError:
     bcrypt = None
 
-try:
-    import numpy as np
-    import cv2
-    import mediapipe as mp
-except ImportError:
-    np = None
-    cv2 = None
-    mp = None
+# numpy/cv2/mediapipe artik BURADA import edilmiyor - agir (RAM'e ~100-200MB
+# birden yukleniyor) oldugu icin sunucu acilirken degil, ilk yuz analizi
+# istegi geldiginde (lazy) yukleniyor. Bkz. _ensure_face_libs_loaded().
+np = None
+cv2 = None
+mp = None
 
 try:
     from dotenv import load_dotenv
@@ -62,17 +60,25 @@ else:
     logger.warning("GROQ_API_KEY ortam degiskeni bulunamadi!")
 
 # ================= KNOWLEDGE BASE (RAG / CHROMA) =================
-# ingest.py tarafindan olusturulan ./looksmax_db vektor veritabanini
-# uygulama ayaga kalkarken bir kez yukler. Bu klasor yoksa (ingest.py
-# hic calistirilmamissa) RAG sessizce devre disi kalir, uygulama
-# normal calismaya devam eder.
+# ingest.py tarafindan olusturulan ./looksmax_db vektor veritabanini yukler.
+# ONEMLI: Bu artik sunucu acilirken DEGIL, ILK GERCEK RAG SORGUSUNDA (lazy)
+# yukleniyor. Sebep: HuggingFaceEmbeddings (torch tabanli) RAM'e agir biniyor
+# (~150-300MB) ve bunu aciliste yapmak, dusuk RAM'li ortamlarda (orn Render'in
+# 512MB'lik ucretsiz/baslangic plani) sunucuyu ayaga kalkmadan OOM ile
+# coktermeye neden oluyordu.
 
 VECTOR_DB_DIR = "./looksmax_db"
 embedding_model = None
 vector_db = None
+_knowledge_base_load_attempted = False
+
 
 def load_knowledge_base():
-    global embedding_model, vector_db
+    global embedding_model, vector_db, _knowledge_base_load_attempted
+    if _knowledge_base_load_attempted:
+        return
+    _knowledge_base_load_attempted = True
+
     if not os.path.isdir(VECTOR_DB_DIR):
         logger.warning(
             f"'{VECTOR_DB_DIR}' bulunamadi. RAG/knowledge-base devre disi. "
@@ -92,7 +98,8 @@ def load_knowledge_base():
         traceback.print_exc()
         vector_db = None
 
-load_knowledge_base()
+# ARTIK BURADA CAGRILMIYOR - load_knowledge_base() ilk retrieve_knowledge_context()
+# cagrisinda tetiklenecek (lazy).
 
 
 def retrieve_knowledge_context(query: str, k: int = 4):
@@ -101,7 +108,12 @@ def retrieve_knowledge_context(query: str, k: int = 4):
     sorgu bossa ("", []) doner. source_names, hangi PDF/txt dosyalarinin
     kullanildigini arayuzde gostermek icin (kullanicinin 'gercekten PDF'den mi
     besleniyor' sorusuna kanit olarak)."""
-    if not vector_db or not query or not query.strip():
+    if not query or not query.strip():
+        return "", []
+
+    load_knowledge_base()  # ilk cagrida gercekten yukler, sonrasinda no-op
+
+    if vector_db is None:
         return "", []
     try:
         results = vector_db.similarity_search(query, k=k)
@@ -776,7 +788,33 @@ def compute_recovery_score(sleep_hours: float, hrv: float, resting_hr: float) ->
 # Sayilar tutarsiz/mantiksiz gelirse (orn. surekli çok yuksek/dusuk simetri puani), bu
 # fonksiyonlardaki esik degerleri ve formulleri ayarlamak gerekebilir.
 
-FACE_MESH_AVAILABLE = bool(np is not None and cv2 is not None and mp is not None)
+_face_libs_load_attempted = False
+_FACE_MESH_AVAILABLE_CACHED = False
+
+
+def _ensure_face_libs_loaded() -> bool:
+    """numpy/cv2/mediapipe'i SADECE ilk gercek ihtiyacta (lazy) import eder.
+    Bu kutuphaneler agir oldugu icin (RAM'e ~100-200MB) sunucu acilirken degil,
+    ilk yuz analizi istegi geldiginde yuklenir - dusuk RAM'li ortamlarda
+    (orn Render 512MB) acilista OOM cokmesini onlemek icin."""
+    global np, cv2, mp, _face_libs_load_attempted, _FACE_MESH_AVAILABLE_CACHED
+    if _face_libs_load_attempted:
+        return _FACE_MESH_AVAILABLE_CACHED
+
+    _face_libs_load_attempted = True
+    try:
+        import numpy as _np
+        import cv2 as _cv2
+        import mediapipe as _mp
+        np, cv2, mp = _np, _cv2, _mp
+        _FACE_MESH_AVAILABLE_CACHED = True
+        logger.info("Yuz analizi kutuphaneleri (numpy/cv2/mediapipe) basariyla yuklendi.")
+    except Exception as e:
+        logger.error(f"Yuz analizi kutuphaneleri yuklenemedi: {e}")
+        traceback.print_exc()
+        _FACE_MESH_AVAILABLE_CACHED = False
+
+    return _FACE_MESH_AVAILABLE_CACHED
 
 # Standart mediapipe Face Mesh (468 nokta) landmark indeksleri
 LM_LEFT_EYE_OUTER = 33
@@ -797,7 +835,7 @@ LM_JAW_RIGHT = 397
 
 def decode_base64_image(b64_string: str):
     """Base64 (data URI onekiyle veya onsuz) -> OpenCV BGR numpy array."""
-    if not FACE_MESH_AVAILABLE or not b64_string:
+    if not _ensure_face_libs_loaded() or not b64_string:
         return None
     try:
         if "," in b64_string:
@@ -813,26 +851,30 @@ def decode_base64_image(b64_string: str):
 
 def get_face_landmarks(image_bgr):
     """Verilen goruntude yuz tespit edip 468 landmark'in (x, y) piksel koordinatlarini dondurur.
-    Yuz bulunamazsa None doner."""
-    if not FACE_MESH_AVAILABLE or image_bgr is None:
+    Yuz bulunamazsa None doner. Once siki, sonra giderek daha gevsek bir tespit esigiyle
+    dener - ozellikle yan profil/3-4 acili fotograflarda ilk deneme cogu zaman basarisiz oluyor."""
+    if not _ensure_face_libs_loaded() or image_bgr is None:
         return None
-    try:
-        mp_face_mesh = mp.solutions.face_mesh
-        with mp_face_mesh.FaceMesh(
-            static_image_mode=True, max_num_faces=1,
-            refine_landmarks=True, min_detection_confidence=0.5
-        ) as face_mesh:
-            rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-            results = face_mesh.process(rgb)
-            if not results.multi_face_landmarks:
-                return None
-            h, w = image_bgr.shape[:2]
-            landmarks = results.multi_face_landmarks[0].landmark
-            return [(lm.x * w, lm.y * h) for lm in landmarks]
-    except Exception as e:
-        logger.error(f"Face mesh tespit hatasi: {e}")
-        traceback.print_exc()
-        return None
+
+    mp_face_mesh = mp.solutions.face_mesh
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    h, w = image_bgr.shape[:2]
+
+    for confidence in (0.5, 0.3, 0.15):
+        try:
+            with mp_face_mesh.FaceMesh(
+                static_image_mode=True, max_num_faces=1,
+                refine_landmarks=True, min_detection_confidence=confidence
+            ) as face_mesh:
+                results = face_mesh.process(rgb)
+                if results.multi_face_landmarks:
+                    landmarks = results.multi_face_landmarks[0].landmark
+                    return [(lm.x * w, lm.y * h) for lm in landmarks]
+        except Exception as e:
+            logger.error(f"Face mesh tespit hatasi (confidence={confidence}): {e}")
+            traceback.print_exc()
+
+    return None
 
 
 def _pt_dist(p1, p2) -> float:
@@ -943,6 +985,37 @@ def compute_jaw_score(side_points: list) -> Dict[str, Any]:
         return {"score": 5.0, "jaw_ratio": None}
 
 
+def compute_jaw_score_fallback_from_front(front_points: list) -> Dict[str, Any]:
+    """Yan profil fotografi tespit edilemediginde kullanilan YEDEK/KABA tahmin.
+    On yuzden gercek cene derinligi/projeksiyonu olculemez, sadece cene genisligi/
+    yuz genisligi oranina bakar - compute_jaw_score'dan cok daha az guvenilir,
+    bu yuzden 'is_fallback' bayragiyla isaretlenir."""
+    try:
+        chin = front_points[LM_CHIN]
+        jaw_left = front_points[LM_JAW_LEFT]
+        jaw_right = front_points[LM_JAW_RIGHT]
+        left_edge = front_points[LM_FACE_LEFT_EDGE]
+        right_edge = front_points[LM_FACE_RIGHT_EDGE]
+
+        jaw_width = _pt_dist(jaw_left, jaw_right)
+        face_width = _pt_dist(left_edge, right_edge)
+        if face_width < 1e-6:
+            return {"score": 5.0, "jaw_ratio": None, "is_fallback": True}
+
+        jaw_ratio = jaw_width / face_width
+        # On yuzde cene/yuz genisligi orani genelde 0.75-0.95 araliginda "normal" sayilir
+        if 0.75 <= jaw_ratio <= 0.95:
+            score = 7.0
+        else:
+            deviation = min(abs(jaw_ratio - 0.75), abs(jaw_ratio - 0.95))
+            score = max(4.0, 7.0 - deviation * 15)
+
+        return {"score": round(score, 1), "jaw_ratio": round(jaw_ratio, 3), "is_fallback": True}
+    except Exception as e:
+        logger.error(f"Cene yedek hesaplama hatasi: {e}")
+        return {"score": 5.0, "jaw_ratio": None, "is_fallback": True}
+
+
 # --- Vision-capable Groq modeli secimi (metin modellerinden ayri, cunku hepsi gorsel giris kabul etmiyor) ---
 VISION_MODEL_PREFERENCES = [
     "llama-3.2-90b-vision-preview",
@@ -1022,7 +1095,7 @@ cikti vermek:
 GEOMETRIK BULGULAR (bunlari SEN hesaplamiyorsun, zaten hesaplanmis - sadece yorumla):
 - Simetri: puan={symmetry_data.get('score')}/10, ortalama sapma=%{symmetry_data.get('avg_deviation_pct')}
 - Oran (altın oran): puan={proportion_data.get('score')}/10, yükseklik/genişlik oranı={proportion_data.get('height_width_ratio')} (ideal: 1.618)
-- Çene: puan={jaw_data.get('score')}/10
+- Çene: puan={jaw_data.get('score')}/10{" (NOT: yan profil fotoğrafı tespit edilemedi, bu kaba bir ön-fotoğraf tahmini - jaw_summary'de bunu belirt, kesin konuşma)" if jaw_data.get('is_fallback') else ""}
 {knowledge_block}
 KURALLAR:
 1. SADECE TÜRKÇE yaz.
@@ -1031,6 +1104,7 @@ KURALLAR:
    su tüketimi/şişkinlik gibi yaşam tarzı konularında). ASLA tıbbi tedavi, ilaç, operasyon önerme.
 4. Asla abartılı, kesinlik iddia eden ifadeler kullanma ("kesin", "garanti" gibi) — bu estetik
    bir değerlendirme, tıbbi teşhis değil.
+5. Kullanıcıya resmi "siz" diliyle hitap et. "Kral", "kanka" gibi argo/gayriresmi hitaplar kullanma.
 """
 
     try:
@@ -1317,7 +1391,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 <b>💡 Otomatikleştirme:</b> Kestirmeler &rarr; Otomasyon sekmesinden <i>"Sabah Alarmı Durdurulduğunda"</i> bu kestirmeyi seçerseniz verileriniz her sabah otomatik panele düşer.
             </div>
 
-            <button class="btn-log" onclick="toggleGuideModal(false)" style="margin-top:0;">Anladım Kral 🦍</button>
+            <button class="btn-log" onclick="toggleGuideModal(false)" style="margin-top:0;">Anladım</button>
         </div>
     </div>
 
@@ -1329,7 +1403,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
             
             <div id="auditLoadingState" style="text-align:center; padding:30px; display:none;">
-                <div style="font-size:2.2rem; margin-bottom:8px;">🦍</div>
+                <div style="font-size:2.2rem; margin-bottom:8px;">🧠</div>
                 <div style="font-weight:700; color:#f59e0b;">Koç tüm antrenman, sakatlık, makro ve uyku verilerini denetliyor...</div>
             </div>
 
@@ -1361,7 +1435,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
 
             <div id="barcodeNotFoundState" style="display:none; text-align:center; padding:20px; color:#9ca3af; font-size:0.85rem;">
-                Bu barkod veritabanında bulunamadı kral. Yazarak elle ekleyebilirsin.
+                Bu barkod veritabanında bulunamadı. Yazarak elle ekleyebilirsiniz.
                 <button class="btn-log" onclick="resetBarcodeScanner()" style="margin-top:12px;">Tekrar Tara</button>
             </div>
 
@@ -1484,7 +1558,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         <div class="view-panel" id="coachView">
             <div class="chat-container">
                 <div class="messages" id="chatBox">
-                    <div class="msg coach">Selam kral! Ben senin Looksmax & Overload başantrenörünüm. Sakatlığın varsa doğrudan güvenli açı ve rehab protokolü veririm; toparlanman iyiyse hedefleri koyar geçerim. Sorunu sor veya sağ üstteki <b>🧠 Koçun Raporu</b> butonuna bas.</div>
+                    <div class="msg coach">Merhaba, ben Looksmax & Overload başantrenörünüzüm. Bir sakatlığınız varsa güvenli açı ve rehabilitasyon protokolü öneririm; toparlanmanız iyiyse hedeflerinizi birlikte belirleriz. Sorunuzu sorabilir veya sağ üstteki <b>🧠 Koçun Raporu</b> butonuna tıklayabilirsiniz.</div>
                 </div>
 
                 <div class="preview-box" id="previewBox">
@@ -1574,7 +1648,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             <div class="overload-col-left">
                 <div class="chat-container">
                     <div class="messages" id="nutriChatBox">
-                        <div class="msg coach">Afiyet olsun kral! Ne yediysen doğal dilde yaz (örn: <i>"1 adet sahanda yumurta"</i>, <i>"3 haşlanmış yumurta 2 dilim tam buğday"</i>); tam porsiyon üzerinden net hesaplarım.</div>
+                        <div class="msg coach">Yediklerinizi doğal dille yazabilirsiniz; girdiğiniz porsiyonlara göre kalori ve makro hesaplaması yaparım.</div>
                     </div>
 
                     <div class="preview-box" id="nutriPreviewBox">
@@ -1913,17 +1987,17 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                             </div>
                         </div>
                         <div class="photo-card-slot" id="slot_face_side" onclick="triggerFacePhotoUpload('side')" style="height:220px;">
-                            <div class="slot-badge">YAN PROFİL</div>
+                            <div class="slot-badge">3/4 PROFİL</div>
                             <img id="img_face_side" src="" style="display:none;" />
                             <div class="slot-placeholder" id="hint_face_side">
                                 <div style="font-size:1.6rem; margin-bottom:4px;">🤳</div>
-                                <div>Yan Profil</div>
+                                <div>Hafif Yan Dönük</div>
                             </div>
                         </div>
                     </div>
                     <input type="file" id="faceUniversalPhotoInput" accept="image/*" onchange="handleFacePhotoUpload(event)" style="display:none;" />
                     <div style="font-size:0.72rem; color:#6b7280; line-height:1.4; margin-top:10px;">
-                        Net, aydınlık, doğrudan kameraya bakan (ön) ve tam yandan (profil) iki fotoğraf en doğru sonucu verir. Sonuçlar bilgilendirme amaçlıdır, tıbbi teşhis değildir.
+                        Net, aydınlık, doğrudan kameraya bakan bir ön fotoğraf ve başını yaklaşık 45° çevirdiğin (tam yandan DEĞİL, 3/4 açı) bir profil fotoğrafı en doğru sonucu verir. Tam yandan (90°) fotoğraflar yüz tespitinde sık sık başarısız olur. Sonuçlar bilgilendirme amaçlıdır, tıbbi teşhis değildir.
                     </div>
                     <button class="btn-log" id="analyzeFaceBtn" onclick="analyzeFacePhotos()" style="margin-top:10px;">📐 Yüzünü Analiz Et</button>
                 </div>
@@ -2223,12 +2297,12 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         function copyWebhookUrl() {
             const url = document.getElementById("webhookUrlText").innerText;
             navigator.clipboard.writeText(url).then(() => {
-                alert("Webhook URL adresi kopyalandı kral!");
+                alert("Webhook URL adresi kopyalandı.");
             });
         }
 
         async function triggerCoachAudit() {
-            if (!currentUser) return alert("Lütfen önce giriş yap kral!");
+            if (!currentUser) return alert("Lütfen önce giriş yapın.");
             toggleAuditModal(true);
 
             const loadEl = document.getElementById("auditLoadingState");
@@ -2251,7 +2325,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (!hasProfile && !hasWorkouts && !hasNutri && !hasHealth && !hasInjuries) {
                 loadEl.style.display = "none";
                 textEl.style.display = "block";
-                textEl.innerHTML = "<b>Henüz yeterli veri girişi yapmadın kral.</b><br><br>Sana özel haftalık karne çıkarabilmem için:<br>• <b>Profil</b> bilgilerini kaydetmeli,<br>• <b>Overload</b> sekmesinden birkaç set veya <b>Beslenme</b> öğünü girmelisin.<br><br>Verilerini girdikten sonra tekrar dene!";
+                textEl.innerHTML = "<b>Henüz yeterli veri girişi yapılmamış.</b><br><br>Size özel haftalık rapor çıkarabilmem için:<br>• <b>Profil</b> bilgilerinizi kaydetmeniz,<br>• <b>Overload</b> sekmesinden birkaç set veya <b>Beslenme</b> öğünü girmeniz gerekiyor.<br><br>Verilerinizi girdikten sonra tekrar deneyin.";
                 return;
             }
 
@@ -2640,7 +2714,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
     } catch (e) {
         if (e.name === "QuotaExceededError" || e.code === 22 || e.code === 1014) {
             alert(
-                "⚠️ Depolama alanı doldu kral!\n\n" +
+                "⚠️ Depolama alanı doldu.\n\n" +
                 "Tarayıcın için ayrılan alan (fotoğraflar + veriler) limitine ulaştı. " +
                 "Kayıt gerçekleşmedi.\n\n" +
                 "Çözüm: Profil sekmesinden eski/gereksiz dönem fotoğraflarını sil, " +
@@ -2671,7 +2745,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             saveUserInjuries(currentUser.username, injuries);
             document.getElementById("injuryDetails").value = "";
             renderInjuriesUI();
-            alert("Sakatlık kaydı alındı! AI Koç antrenman ve önerilerini bu kısıtlamaya göre uyarlayacak kral.");
+            alert("Sakatlık kaydı alındı. AI Koç antrenman ve önerilerini bu kısıtlamaya göre uyarlayacak.");
         }
 
         function resolveInjury(id) {
@@ -2691,7 +2765,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             list.innerHTML = "";
 
             if (injuries.length === 0) {
-                list.innerHTML = `<div style="font-size:0.75rem; color:#6b7280; text-align:center; padding:10px;">Aktif sakatlık kaydı yok. Vücut sağlam! 🦍</div>`;
+                list.innerHTML = `<div style="font-size:0.75rem; color:#6b7280; text-align:center; padding:10px;">Aktif sakatlık kaydı bulunmuyor.</div>`;
                 return;
             }
 
@@ -2775,7 +2849,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             const steps = parseInt(document.getElementById("healthSteps").value, 10) || 0;
 
             if (sleep <= 0 || hrv <= 0 || rhr <= 0) {
-                return alert("Lütfen en az Uyku Süresi, HRV ve Dinlenik Nabız değerlerini gir kral!");
+                return alert("Lütfen en az Uyku Süresi, HRV ve Dinlenik Nabız değerlerini girin.");
             }
 
             const log = {
@@ -2921,7 +2995,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             saveUserProfileData(currentUser.username, userProfile);
             calculateMetabolismAndMacros();
-            alert("Profil bilgileri ve hedeflerin başarıyla kaydedildi kral! 🦍");
+            alert("Profil bilgileri ve hedefleriniz başarıyla kaydedildi.");
         }
 
         function loadUserPhasesUI() {
@@ -2981,7 +3055,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         }
 
         function deleteCurrentPhase() {
-            if (userPhases.length <= 1) return alert("En az bir dönem bulunmalıdır kral!");
+            if (userPhases.length <= 1) return alert("En az bir dönem bulunmalıdır.");
             if (!confirm("Bu dönemi ve içindeki fotoğrafları silmek istiyor musun?")) return;
 
             userPhases = userPhases.filter(p => p.id !== activePhaseId);
@@ -3077,10 +3151,10 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         async function analyzeFacePhotos() {
             if (!currentUser) return;
             if (!currentUser.token) {
-                return alert("Bu özellik için hesabının backend'e bağlı olması gerekiyor. Lütfen çıkış yapıp tekrar giriş yap kral!");
+                return alert("Bu özellik için hesabınızın backend'e bağlı olması gerekiyor. Lütfen çıkış yapıp tekrar giriş yapın.");
             }
             if (!faceFrontImageB64 || !faceSideImageB64) {
-                return alert("Lütfen hem ön hem yan profil fotoğrafını yükle kral!");
+                return alert("Lütfen hem ön hem yan profil fotoğrafını yükleyin.");
             }
 
             const btn = document.getElementById("analyzeFaceBtn");
@@ -3126,6 +3200,10 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             document.getElementById("faceScoreJaw").innerText = `${result.jaw.score}/10`;
             document.getElementById("faceScoreProportion").innerText = `${result.proportion.score}/10`;
             document.getElementById("faceScoreSkin").innerText = `${result.skin.score}/10`;
+
+            if (result.jaw.raw && result.jaw.raw.is_fallback) {
+                document.getElementById("faceScoreJaw").innerHTML += ` <span style="font-size:0.6rem; color:#f59e0b;" title="Yan profil tespit edilemedi, ön fotoğraftan kaba tahmin">⚠️</span>`;
+            }
 
             const summariesBox = document.getElementById("faceSummariesBox");
             summariesBox.innerHTML = "";
@@ -3270,7 +3348,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     <div class="empty-day-box" style="text-align:center; padding:20px; color:#6b7280;">
                         <div style="font-size:1.8rem; margin-bottom:4px;">😴</div>
                         <div style="font-weight:700; color:#9ca3af;">Dinlenme Günü (Off Day)</div>
-                        <div style="font-size:0.75rem;">${currentDay.fullDate} tarihinde kayıtlı set yok kral.</div>
+                        <div style="font-size:0.75rem;">${currentDay.fullDate} tarihinde kayıtlı set bulunmuyor.</div>
                     </div>
                 `;
                 return;
@@ -3298,9 +3376,9 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             const repsVal = document.getElementById("exerciseReps").value.trim();
             const dateVal = document.getElementById("exerciseDate").value.trim() || weekDaysData[selectedWorkoutDayIdx].fullDate;
 
-            if (!name) return alert("Lütfen hareket adını gir kral!");
-            if (!weightVal || isNaN(Number(weightVal))) return alert("Lütfen ağırlığı (kg) gir kral!");
-            if (!repsVal || isNaN(Number(repsVal))) return alert("Lütfen tekrar sayısını gir kral!");
+            if (!name) return alert("Lütfen hareket adını girin.");
+            if (!weightVal || isNaN(Number(weightVal))) return alert("Lütfen ağırlığı (kg) girin.");
+            if (!repsVal || isNaN(Number(repsVal))) return alert("Lütfen tekrar sayısını girin.");
 
             const setNum = parseInt(setVal, 10) || 1;
             const weight = parseFloat(weightVal);
@@ -3659,7 +3737,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             const reps = document.getElementById("progManualReps").value.trim() || "8-10";
             const note = document.getElementById("progManualNote").value.trim();
 
-            if (!name) return alert("Lütfen hareket adını gir kral!");
+            if (!name) return alert("Lütfen hareket adını girin.");
 
             addExerciseToProgramDay(selectedProgramDayIdx, name, sets, reps, note);
 
@@ -3771,13 +3849,13 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         }
 
         async function generateAiProgram() {
-            if (!currentUser) return alert("Lütfen önce giriş yap kral!");
+            if (!currentUser) return alert("Lütfen önce giriş yapın.");
             const numDays = parseInt(document.getElementById("programSplitSelect").value, 10) || 5;
             const btn = document.getElementById("generateProgramBtn");
 
             const prof = getUserProfileData(currentUser.username) || {};
             if (!prof.weight || !prof.height) {
-                return alert("AI programı oluşturmadan önce Profil sekmesinden boy/kilo/hedef bilgini kaydetmelisin kral!");
+                return alert("AI programı oluşturmadan önce Profil sekmesinden boy/kilo/hedef bilginizi kaydetmelisiniz.");
             }
 
             const injuries = getUserInjuries(currentUser.username) || [];
@@ -3820,9 +3898,9 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 renderProgramSourcesBadge(usedSources);
 
                 if (usedSources.length > 0) {
-                    alert(`Programın hazır kral! Şu kaynaklardan yararlanıldı: ${usedSources.join(", ")} 📚`);
+                    alert(`Programınız hazır. Şu kaynaklardan yararlanıldı: ${usedSources.join(", ")} 📚`);
                 } else {
-                    alert("Programın hazır kral! (Bu seferki program için knowledge base'den ilgili bir PDF pasajı bulunamadı, genel bilgiyle oluşturuldu.) Her gün için hareketleri sol üstteki sekmelerden inceleyebilirsin. 🦍");
+                    alert("Programınız hazır. (Bu seferki program için knowledge base'den ilgili bir PDF pasajı bulunamadı, genel bilgiyle oluşturuldu.) Her gün için hareketleri sol üstteki sekmelerden inceleyebilirsiniz.");
                 }
             } catch (err) {
                 alert("Sunucu bağlantı hatası: " + err.message);
@@ -3970,7 +4048,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         function addBarcodeProductToMeal() {
             if (!currentUser || !currentBarcodeProduct) return;
             const grams = parseFloat(document.getElementById("barcodeAmountGrams").value) || 0;
-            if (grams <= 0) return alert("Lütfen geçerli bir miktar gir kral!");
+            if (grams <= 0) return alert("Lütfen geçerli bir miktar girin.");
             const ratio = grams / 100.0;
 
             const newMeal = {
@@ -4006,7 +4084,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
             chatBox.innerHTML += `<div class="msg user">${userHtml}</div>`;
             const currentImg = selectedBase64Image;
-            const currentText = text || "Bu görseli değerlendir kral.";
+            const currentText = text || "Bu görseli değerlendir.";
 
             input.value = "";
             clearImage();
@@ -4047,7 +4125,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                     loadEl.className = "msg coach error";
                     loadEl.innerHTML = `⚠️ <b>HATA DETAYI:</b><br>${data.coach_reply}`;
                 } else {
-                    let replyText = data.coach_reply || "Hedefe odaklan kral. Formunu koru ve kontrollü devam et.";
+                    let replyText = data.coach_reply || "Hedefinize odaklanın. Formunuzu koruyun ve kontrollü şekilde devam edin.";
                     let replyFormatted = replyText.replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
                     loadEl.innerHTML = replyFormatted;
                     conversationHistory.push({ role: "user", content: currentText });
@@ -4147,6 +4225,42 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 @app.get("/", response_class=HTMLResponse)
 def serve_ui():
     return HTML_INTERFACE
+
+
+@app.get("/api/rag-status")
+def rag_status_check(q: str = "antrenman programı"):
+    """Teşhis endpoint'i: RAG/knowledge base'in gerçekten çalışıp çalışmadığını
+    log kurcalamadan görmek için. Tarayıcıda /api/rag-status adresini acmak yeterli,
+    istersen ?q=... ile farklı bir sorgu da deneyebilirsin. RAG artik lazy
+    yuklendigi icin, bu endpoint yuklemeyi burada ACIKCA tetikler (aksi halde
+    hic sorgu atilmamis bir sunucuda yanlislikla 'yuklu degil' gorunurdu)."""
+    load_knowledge_base()
+
+    info = {
+        "vector_db_dir": VECTOR_DB_DIR,
+        "vector_db_dir_exists_on_disk": os.path.isdir(VECTOR_DB_DIR),
+        "vector_db_loaded_in_memory": vector_db is not None,
+        "chunk_count_in_collection": None,
+        "test_query": q,
+        "test_query_result_count": 0,
+        "test_query_sample_sources": [],
+    }
+
+    if vector_db is not None:
+        try:
+            info["chunk_count_in_collection"] = vector_db._collection.count()
+        except Exception as e:
+            info["chunk_count_error"] = str(e)
+
+        try:
+            snippets, sources = retrieve_knowledge_context(q, k=4)
+            info["test_query_result_count"] = len(sources)
+            info["test_query_sample_sources"] = sources
+            info["test_query_snippet_preview"] = snippets[:400] if snippets else None
+        except Exception as e:
+            info["test_query_error"] = str(e)
+
+    return info
 
 
 @app.get("/icon.png")
@@ -4575,10 +4689,10 @@ def save_phases_backend(payload: PhasesSyncInput, username: str = Depends(requir
 
 @app.post("/api/face-analysis")
 def analyze_face(payload: FaceAnalysisInput, username: str = Depends(require_auth_username)):
-    if not FACE_MESH_AVAILABLE:
+    if not _ensure_face_libs_loaded():
         return JSONResponse(
             status_code=503,
-            content={"detail": "Yüz analizi motoru (mediapipe) kurulu değil. requirements.txt güncellenmiş olabilir."}
+            content={"detail": "Yüz analizi motoru (mediapipe) yüklenemedi. Sunucu belleği yetersiz olabilir veya requirements.txt güncellenmemiş olabilir."}
         )
 
     front_img = decode_base64_image(payload.front_image_base64)
@@ -4593,14 +4707,18 @@ def analyze_face(payload: FaceAnalysisInput, username: str = Depends(require_aut
         })
 
     side_landmarks = get_face_landmarks(side_img)
-    if not side_landmarks:
-        return JSONResponse(status_code=422, content={
-            "detail": "Yan profil fotoğrafında yüz tespit edilemedi. Daha net, aydınlık bir fotoğraf dene."
-        })
 
     symmetry_data = compute_symmetry_score(front_landmarks)
     proportion_data = compute_proportion_score(front_landmarks)
-    jaw_data = compute_jaw_score(side_landmarks)
+
+    if side_landmarks:
+        jaw_data = compute_jaw_score(side_landmarks)
+    else:
+        # Yan profil tespit edilemedi (cok yaygin bir durum - mediapipe tam yandan
+        # fotograflarda zorlaniyor) - analizi tamamen durdurmak yerine on fotograftan
+        # kaba bir tahminle devam ediyoruz.
+        logger.warning("Yan profilde yuz tespit edilemedi, on fotograftan yedek cene tahmini kullaniliyor.")
+        jaw_data = compute_jaw_score_fallback_from_front(front_landmarks)
 
     # Baglam icin (varsa) kullanicinin profilini de LLM'e veriyoruz (hedefine gore protokol onerisi icin)
     profile_data = {}
@@ -4727,6 +4845,7 @@ KURALLAR:
 - ⚡ **3 NET EMİR:** Bu hafta yapılacaklar.
 4. Bilgi bankasında ilgili bir pasaj varsa raporuna doğal şekilde harmanla, doğrudan alıntılama.
 5. UZUNLUK KURALI (ÇOK ÖNEMLİ): Her bölümde EN FAZLA 3 kısa madde kullan. Aşırı ayrıntıya (örn. dakika dakika ısı/soğuk protokolü, spesifik su sıcaklığı gibi gereksiz detaylara) GİRME — öz, vurucu ve uygulanabilir ol. Rapor kesinlikle yarım cümlede bitmemeli; bitiremeyeceğin kadar uzun yazacaksan, en başından beri daha kısa ve öz yaz.
+6. Kullanıcıya resmi "siz" diliyle hitap et. "Kral", "kanka" gibi argo/gayriresmi hitaplar kullanma.
 """
 
     def _run_audit_completion(prompt_text: str, token_budget: int):
@@ -4794,9 +4913,10 @@ FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
 2. ASLA markdown başlık (##, ###) kullanma. ASLA numaralı liste (1. 2. 3. ...) ile program/plan dökme.
 3. ASLA DÜŞÜNME ADIMI, TABLO VEYA İŞLEM LİSTESİ YAZMA.
 4. Uzun uzun 'Konu / Durum / Öneri' tabloları dökmek KESİNLİKLE YASAKTIR.
-5. Yanıtını doğrudan, net, kısa paragraflar ve tire (-) ile başlayan maddeler halinde, sohbet tonunda ver — resmi bir doküman gibi değil.
+5. Yanıtını doğrudan, net, kısa paragraflar ve tire (-) ile başlayan maddeler halinde ver — resmi bir doküman gibi kuru olmasın ama laubali de olmasın.
 6. Sakatlık varsa: Güvenli alternatif açıyı söyle ve 1 rehabilitasyon egzersizi emret.
 7. Bilgi bankasında ilgili bir pasaj varsa onu kendi cümlelerinle harmanla, doğrudan alıntılama.
+8. Kullanıcıya resmi "siz" diliyle hitap et. "Kral", "kanka" gibi argo/gayriresmi hitaplar KESİNLİKLE kullanma.
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
@@ -4841,7 +4961,7 @@ FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
                 break
 
         if not clean_text:
-            clean_text = "Hedefe odaklan kral. Formunu koru ve kontrollü devam et."
+            clean_text = "Hedefinize odaklanın. Formunuzu koruyun ve kontrollü şekilde devam edin."
 
         return {"user_message": data.user_message, "coach_reply": clean_text, "is_error": False}
     except Exception as e:
@@ -4859,14 +4979,14 @@ def nutrition_dialogue(data: NutritionChatInput):
     
     if detected_meal:
         reply_text = (
-            f"Afiyet olsun kral! Girdiğin **{detected_meal['items_summary']}** başarıyla listene eklendi:\n"
+            f"Girdiğiniz **{detected_meal['items_summary']}** başarıyla listenize eklendi:\n"
             f"🔥 **{detected_meal['calories']} kcal** | "
             f"🥩 **{detected_meal['protein']}g Protein** | "
             f"🍞 **{detected_meal['carbs']}g Karb** | "
             f"🥑 **{detected_meal['fat']}g Yağ**"
         )
     else:
-        reply_text = "Öğün bilgisi ayrıştırılamadı kral. Lütfen girdiğin yiyecekleri kontrol et."
+        reply_text = "Öğün bilgisi ayrıştırılamadı. Lütfen girdiğiniz yiyecekleri kontrol edin."
         detected_meal = None
 
     return {
@@ -5080,7 +5200,8 @@ KURALLAR:
 7. Bilgi bankasında ilgili bir pasaj varsa program tasarımının TEMELİ bu olsun — jenerik şablon değil, kaynaktaki metodolojiyi yansıt.
 8. "sets" alanı SADECE düz bir tam sayı olmalı (örn 4), ASLA '3-4' gibi bir aralık veya metin yazma. Aralık gerekiyorsa onu "reps" alanına yaz.
 9. "note" alanı olmayan hareketlerde boş string "" kullan, ASLA null/None döndürme.
-10. ASLA açıklama, markdown, yorum ekleme. Sadece saf JSON döndür.
+10. "note" alanlarında resmi "siz" diliyle yaz, "kral" gibi argo hitap kullanma.
+11. ASLA açıklama, markdown, yorum ekleme. Sadece saf JSON döndür.
 """
 
     last_error = "Bilinmeyen hata"
