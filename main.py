@@ -1216,12 +1216,17 @@ def get_reasoning_effort_kwargs(model_name: str) -> dict:
     metninde tuketip asil cevaba hic sira gelmeden bitirebiliyor - ozellikle
     JSON modu ile birlikte kullanildiginda bu 'gecersiz/bos JSON' hatasina yol
     aciyordu (yuz analizinde tespit edildi, ayni sorun beslenme/antrenman
-    programi uretiminde de cikabiliyor). Bu modeller icin dogrudan cevap istiyoruz."""
+    programi uretiminde de cikabiliyor). Bu modeller icin dogrudan cevap istiyoruz.
+    NOT: Model aileleri FARKLI deger kumeleri kabul ediyor - gpt-oss SADECE
+    low/medium/high kabul ediyor ("none" vermek 400 hatasi veriyor, canli test
+    ile dogrulandi), Qwen3 ise "none" ile dusunmeyi tam kapatabiliyor."""
     if not model_name:
         return {}
     name = model_name.lower()
-    if "gpt-oss" in name or "qwen3" in name:
+    if "qwen3" in name:
         return {"reasoning_effort": "none"}
+    if "gpt-oss" in name:
+        return {"reasoning_effort": "low"}  # "none" gecersiz - bu aile icin en dusuk secenek
     return {}
 
 
@@ -2034,7 +2039,14 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         <div class="form-grid-3x1">
                             <input type="number" id="profHeight" placeholder="Boy (cm)" step="0.5" />
                             <input type="number" id="profWeight" placeholder="Kilo (kg)" step="0.1" />
+                            <select id="profGender">
+                                <option value="male">Cinsiyet: Erkek</option>
+                                <option value="female">Cinsiyet: Kadın</option>
+                            </select>
+                        </div>
+                        <div class="form-grid-2x2">
                             <input type="number" id="profBodyfat" placeholder="Yağ Oranı (%)" step="0.5" />
+                            <button type="button" onclick="calculateBodyFatNavy()" style="background:#1a2232; color:#00f2fe; border:1px solid #2d3b54; border-radius:8px; font-weight:700; font-size:0.8rem; cursor:pointer;">📏 Yağ Oranını Hesapla</button>
                         </div>
                         <div class="form-grid-2x2">
                             <select id="profGoal">
@@ -2053,9 +2065,14 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         <div class="panel-header" style="margin-top:4px; font-size:0.85rem;">
                             <span>📏 Vücut Çevre Ölçüleri (cm)</span>
                         </div>
+                        <div style="font-size:0.68rem; color:#6b7280;">Boyun + Bel (+ Kadınlarda Kalça) ölçüleri, yukarıdaki "Yağ Oranını Hesapla" butonunun kullandığı US Navy formülü için gerekli.</div>
+                        <div class="form-grid-3x1">
+                            <input type="number" id="profNeck" placeholder="Boyun (cm)" step="0.5" />
+                            <input type="number" id="profWaist" placeholder="Bel (cm)" step="0.5" />
+                            <input type="number" id="profHip" placeholder="Kalça (cm, kadın)" step="0.5" />
+                        </div>
                         <div class="form-grid-3x1">
                             <input type="number" id="profArm" placeholder="Kol (cm)" step="0.5" />
-                            <input type="number" id="profWaist" placeholder="Bel (cm)" step="0.5" />
                             <input type="number" id="profShoulder" placeholder="Omuz (cm)" step="0.5" />
                         </div>
 
@@ -3632,9 +3649,12 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             document.getElementById("profHeight").value = userProfile.height || "";
             document.getElementById("profWeight").value = userProfile.weight || "";
             document.getElementById("profBodyfat").value = userProfile.bodyfat || "";
+            if (userProfile.gender) document.getElementById("profGender").value = userProfile.gender;
             if (userProfile.goal) document.getElementById("profGoal").value = userProfile.goal;
             if (userProfile.activity) document.getElementById("profActivity").value = userProfile.activity;
 
+            document.getElementById("profNeck").value = userProfile.neck || "";
+            document.getElementById("profHip").value = userProfile.hip || "";
             document.getElementById("profArm").value = userProfile.arm || "";
             document.getElementById("profWaist").value = userProfile.waist || "";
             document.getElementById("profShoulder").value = userProfile.shoulder || "";
@@ -3642,15 +3662,60 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             calculateMetabolismAndMacros();
         }
 
+        function calculateBodyFatNavy() {
+            const gender = document.getElementById("profGender").value;
+            const heightCm = parseFloat(document.getElementById("profHeight").value) || 0;
+            const neckCm = parseFloat(document.getElementById("profNeck").value) || 0;
+            const waistCm = parseFloat(document.getElementById("profWaist").value) || 0;
+            const hipCm = parseFloat(document.getElementById("profHip").value) || 0;
+
+            if (heightCm <= 0 || neckCm <= 0 || waistCm <= 0) {
+                return alert("Yağ oranını hesaplamak için Boy, Boyun ve Bel ölçünüzü girin.");
+            }
+            if (gender === 'female' && hipCm <= 0) {
+                return alert("Kadınlar için Kalça ölçüsü de gereklidir.");
+            }
+
+            // US Navy Body Fat formulu (metrik, cm) - agirsaglam.com'un da kullandigi yontem
+            let bodyFatPct;
+            if (gender === 'female') {
+                bodyFatPct = 495 / (1.29579 - 0.35004 * Math.log10(waistCm + hipCm - neckCm) + 0.22100 * Math.log10(heightCm)) - 450;
+            } else {
+                bodyFatPct = 495 / (1.0324 - 0.19077 * Math.log10(waistCm - neckCm) + 0.15456 * Math.log10(heightCm)) - 450;
+            }
+
+            if (!isFinite(bodyFatPct) || isNaN(bodyFatPct)) {
+                return alert("Ölçülerinizle hesaplama yapılamadı, lütfen değerleri kontrol edin (bel, boyundan büyük olmalı).");
+            }
+
+            bodyFatPct = Math.max(2, Math.min(60, bodyFatPct));
+            document.getElementById("profBodyfat").value = bodyFatPct.toFixed(1);
+            calculateMetabolismAndMacros();
+            alert(`Tahmini yağ oranınız: %${bodyFatPct.toFixed(1)} (US Navy formülü — mezura ile ölçümde ±%3-5 hata payı olabilir, düzenli takip önerilir).`);
+        }
+
         function calculateMetabolismAndMacros() {
             const h = parseFloat(document.getElementById("profHeight").value) || 0;
             const w = parseFloat(document.getElementById("profWeight").value) || 0;
             const a = parseFloat(document.getElementById("profAge").value) || 22;
+            const bf = parseFloat(document.getElementById("profBodyfat").value) || 0;
             const act = parseFloat(document.getElementById("profActivity").value) || 1.55;
             const goal = document.getElementById("profGoal").value;
 
             if (h > 0 && w > 0) {
-                const bmr = 10 * w + 6.25 * h - 5 * a + 5;
+                let bmr, formulaLabel;
+                if (bf > 0 && bf < 60) {
+                    // Katch-McArdle: yag orani biliniyorsa yagsiz vucut kitlesine (LBM)
+                    // dayanarak daha isabetli hesaplar (agirsaglam.com'un tercih ettigi yontem,
+                    // ozellikle sporcularda Mifflin-St Jeor'dan daha dogru kabul edilir).
+                    const lbm = w * (1 - bf / 100);
+                    bmr = 370 + (21.6 * lbm);
+                    formulaLabel = "Katch-McArdle";
+                } else {
+                    // Yag orani girilmemisse Mifflin-St Jeor'a geri don (yedek)
+                    bmr = 10 * w + 6.25 * h - 5 * a + 5;
+                    formulaLabel = "Mifflin-St Jeor";
+                }
                 const tdee = bmr * act;
 
                 let targetCal = tdee;
@@ -3662,7 +3727,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 const fatGrams = Math.round((targetCal * 0.25) / 9);
                 const carbGrams = Math.max(0, Math.round((targetCal - (proteinGrams * 4 + fatGrams * 9)) / 4));
 
-                document.getElementById("bmrCalculatedBadge").innerText = `BMR: ${Math.round(bmr)} kcal | TDEE: ${Math.round(tdee)} kcal`;
+                document.getElementById("bmrCalculatedBadge").innerText = `BMR: ${Math.round(bmr)} kcal (${formulaLabel}) | TDEE: ${Math.round(tdee)} kcal`;
                 document.getElementById("calcTargetCal").innerText = `${Math.round(targetCal)} kcal`;
                 document.getElementById("calcTargetPro").innerText = `${proteinGrams}g`;
                 document.getElementById("calcTargetCarb").innerText = `${carbGrams}g`;
@@ -3686,9 +3751,12 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             userProfile.height = document.getElementById("profHeight").value;
             userProfile.weight = document.getElementById("profWeight").value;
             userProfile.bodyfat = document.getElementById("profBodyfat").value;
+            userProfile.gender = document.getElementById("profGender").value;
             userProfile.goal = document.getElementById("profGoal").value;
             userProfile.activity = document.getElementById("profActivity").value;
 
+            userProfile.neck = document.getElementById("profNeck").value;
+            userProfile.hip = document.getElementById("profHip").value;
             userProfile.arm = document.getElementById("profArm").value;
             userProfile.waist = document.getElementById("profWaist").value;
             userProfile.shoulder = document.getElementById("profShoulder").value;
@@ -6150,7 +6218,7 @@ def generate_program(payload: GenerateProgramInput):
 # Kullanicinin verdigi kesin kurallar/esdegerlikler/paternler - HEM prompt'a
 # kural olarak veriliyor HEM DE arayuzde kullaniciya oldugu gibi gosteriliyor
 # (AI'nin yeniden yazip yanlis aktarma riskine karsi, bu metin SABIT/statik).
-NUTRITION_PROGRAM_GUIDELINES_TEXT = """Programınızdaki besinlere aşağıda belirtilen besinlerden gramajına ve makro değerine uyarak alternatif oluşturabilirsiniz. Önemli bir husus ise hesaplamalar mutlaka hassas tartı ile yapılmalıdır. Programlarınız aylıktır. En az 1 ay uygulayın, sonra diğer program için form atın; form atarken lütfen 3 gün kuralına da uyalım.
+NUTRITION_PROGRAM_GUIDELINES_TEXT = """Programınızdaki besinlere aşağıda belirtilen besinlerden gramajına ve makro değerine uyarak alternatif oluşturabilirsiniz. Önemli bir husus ise hesaplamalar mutlaka hassas tartı ile yapılmalıdır. Programlarınız aylıktır. En az 1 ay uygulayın, sonra diğer program için form atın.
 
 Besinler mutlaka çiğ ağırlık olarak hesaplanmalı, kesinlikle piştikten sonra hesap yapılmamalıdır — bu hesap yanlış olur.
 
@@ -6374,4 +6442,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
