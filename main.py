@@ -1210,6 +1210,21 @@ def compute_jaw_score_fallback_from_front(front_points: list) -> Dict[str, Any]:
 # NOT: Groq'un vision model lineup'i sik degisiyor - asagidaki liste web aramasiyla
 # DOGRULANMIS guncel bir modelle basliyor (Temmuz 2026 itibariyle), eskiler (artik
 # deprecated/retired) yedek olarak birakildi.
+def get_reasoning_effort_kwargs(model_name: str) -> dict:
+    """Bazi Groq modelleri (gpt-oss ailesi, qwen3 ailesi) varsayilan olarak
+    'dusunme' (reasoning) moduna giriyor ve token butcesini gorunmez bir analiz
+    metninde tuketip asil cevaba hic sira gelmeden bitirebiliyor - ozellikle
+    JSON modu ile birlikte kullanildiginda bu 'gecersiz/bos JSON' hatasina yol
+    aciyordu (yuz analizinde tespit edildi, ayni sorun beslenme/antrenman
+    programi uretiminde de cikabiliyor). Bu modeller icin dogrudan cevap istiyoruz."""
+    if not model_name:
+        return {}
+    name = model_name.lower()
+    if "gpt-oss" in name or "qwen3" in name:
+        return {"reasoning_effort": "none"}
+    return {}
+
+
 VISION_MODEL_PREFERENCES = [
     "qwen/qwen3.6-27b",  # Groq'un guncel (preview) vision-destekli modeli
     "meta-llama/llama-4-maverick-17b-128e-instruct",  # deprecated olabilir, yedek
@@ -1721,6 +1736,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
             <button class="btn-log" onclick="chooseFaceSource('camera')">📷 Kamerayla Çek (Önerilir)</button>
             <button class="btn-log" onclick="chooseFaceSource('gallery')" style="background:#1a2232; color:#00f2fe;">🖼️ Galeriden Seç</button>
+            <div style="font-size:0.7rem; color:#f59e0b; text-align:center; margin-top:2px;">⚠️ Galeriden seçilen fotoğraflarda açı/mesafe kaynaklı hata payı daha yüksek olabilir — en doğru sonuç için kamerayı öneririz.</div>
         </div>
     </div>
 
@@ -5708,7 +5724,8 @@ KURALLAR:
             messages=[{"role": "system", "content": prompt_text}],
             model=active_model,
             temperature=0.3,
-            max_tokens=token_budget
+            max_tokens=token_budget,
+            **get_reasoning_effort_kwargs(active_model)
         )
         choice = completion.choices[0]
         return (choice.message.content or ""), getattr(choice, "finish_reason", None)
@@ -5807,6 +5824,7 @@ FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
                 model=active_model,
                 temperature=0.3 if attempt == 1 else 0.15,
                 max_tokens=450,
+                **get_reasoning_effort_kwargs(active_model)
             )
             choice = chat_completion.choices[0]
             raw_text = choice.message.content or ""
@@ -6080,11 +6098,14 @@ KURALLAR:
                     {"role": "user", "content": f"{num_days} günlük programımı oluştur."}
                 ],
                 model=active_model,
-                response_format={"type": "json_object"},
-                temperature=0.4 if attempt == 1 else 0.15  # tekrar denemede daha tutarli/duz cikti icin sicakligi dusur
+                # NOT: response_format=json_object BILINCLI OLARAK KULLANILMIYOR (bkz.
+                # generate_nutrition_program_with_llm'deki ayni aciklama - reasoning
+                # modelleriyle celisebiliyor). extract_json_object() ile esnek ayristiriyoruz.
+                temperature=0.4 if attempt == 1 else 0.15,  # tekrar denemede daha tutarli/duz cikti icin sicakligi dusur
+                **get_reasoning_effort_kwargs(active_model)
             )
             raw_content = completion.choices[0].message.content
-            parsed_json = json.loads(raw_content)
+            parsed_json = extract_json_object(raw_content)
             parsed_json = _sanitize_program_json(parsed_json)
             data = WorkoutProgramResponse(**parsed_json)
 
@@ -6255,12 +6276,17 @@ YENİ bir program oluştur. Toplam kalori/makroların hedefe ±%10 tolerans içi
                     {"role": "user", "content": f"{payload.target_calories:.0f} kcal hedefime göre beslenme programımı oluştur."}
                 ],
                 model=active_model,
-                response_format={"type": "json_object"},
+                # NOT: response_format=json_object BILINCLI OLARAK KULLANILMIYOR - bazi
+                # modeller (gpt-oss/qwen3 ailesi, "reasoning" moduna giriyor) bununla
+                # birlikte bos/gecersiz cikti donebiliyor (yuz analizinde tespit edildi).
+                # Bunun yerine JSON'u prompt uzerinden istiyoruz, extract_json_object()
+                # ile esnek ayristiriyoruz.
                 temperature=temp,
-                max_tokens=tokens
+                max_tokens=tokens,
+                **get_reasoning_effort_kwargs(active_model)
             )
             raw = completion.choices[0].message.content
-            parsed = json.loads(raw)
+            parsed = extract_json_object(raw)
             data = NutritionProgramResponse(**parsed)
             if not data.meals or len(data.meals) < 3:
                 raise ValueError("Eksik öğün listesi döndü.")
