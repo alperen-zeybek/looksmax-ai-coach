@@ -465,15 +465,17 @@ def get_best_available_model() -> str:
     if _CACHED_MODEL:
         return _CACHED_MODEL
 
+    # NOT: llama-3.1-8b-instant, llama-3.3-70b-versatile, mixtral-8x7b-32768,
+    # gemma2-9b-it Groq tarafindan deprecated edildi (2026 itibariyle). Guncel,
+    # web aramasiyla dogrulanmis genel-amacli metin modelleri sadece gpt-oss
+    # ailesi - ikisi de "reasoning" (dusunme) modeli, bu yuzden get_reasoning_effort_kwargs
+    # ve genis max_tokens butcesi ile birlikte kullanilmalari sart.
     preferences = [
-        "llama-3.1-8b-instant",
-        "llama3-8b-8192",
-        "gemma2-9b-it",
-        "mixtral-8x7b-32768",
-        "openai/gpt-oss-20b"
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
     ]
     if not client:
-        _CACHED_MODEL = "llama-3.1-8b-instant"
+        _CACHED_MODEL = "openai/gpt-oss-20b"
         return _CACHED_MODEL
     try:
         models_response = client.models.list()
@@ -492,7 +494,7 @@ def get_best_available_model() -> str:
     except Exception as e:
         logger.warning(f"Dinamik model secilemedi, varsayilana donuluyor: {e}")
 
-    _CACHED_MODEL = "llama-3.1-8b-instant"
+    _CACHED_MODEL = "openai/gpt-oss-20b"
     return _CACHED_MODEL
 
 def strip_thinking_and_tables(text: str) -> str:
@@ -5842,7 +5844,7 @@ KURALLAR:
 
     try:
         active_model = get_best_available_model()
-        raw_report, finish_reason = _run_audit_completion(audit_prompt, 2000)
+        raw_report, finish_reason = _run_audit_completion(audit_prompt, 3200)
 
         if finish_reason == "length":
             # Yanit token siniri yuzunden yarim kaldi - daha kisa yazmasi icin bir kez daha dene
@@ -5851,7 +5853,7 @@ KURALLAR:
                 "\n\nEK UYARI: Önceki yanıtın çok uzundu ve kesildi. Bu sefer HER bölümde EN FAZLA 2 kısa madde kullan, "
                 "hiçbir bölümü uzatma, kısa ve tamamlanmış bir rapor yaz."
             )
-            retry_report, _ = _run_audit_completion(shorter_prompt, 1600)
+            retry_report, _ = _run_audit_completion(shorter_prompt, 2400)
             if retry_report.strip():
                 raw_report = retry_report
 
@@ -5933,7 +5935,7 @@ FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
                 messages=attempt_messages,
                 model=active_model,
                 temperature=0.3 if attempt == 1 else 0.15,
-                max_tokens=450,
+                max_tokens=1200,
                 **get_reasoning_effort_kwargs(active_model)
             )
             choice = chat_completion.choices[0]
@@ -6212,7 +6214,7 @@ KURALLAR:
                 # generate_nutrition_program_with_llm'deki ayni aciklama - reasoning
                 # modelleriyle celisebiliyor). extract_json_object() ile esnek ayristiriyoruz.
                 temperature=0.4 if attempt == 1 else 0.15,  # tekrar denemede daha tutarli/duz cikti icin sicakligi dusur
-                max_tokens=2200,
+                max_tokens=4000,
                 **get_reasoning_effort_kwargs(active_model)
             )
             choice = completion.choices[0]
@@ -6357,15 +6359,10 @@ DIGER KURALLAR:
 - TUM besinler CIG AGIRLIK olarak hesaplanmali.
 - Baharat, sirke, limon serbest (makroya dahil etme).
 
-REFERANS ORNEK PATERNLER (AYNISINI KOPYALAMA, ama bu TARZ/YAPIDA ve BU BESINLERLE uret):
-Örnek A (~2700 kcal): Kahvaltı: 2 yumurta sarısı + 4 beyazı, 100g tam buğday ekmek, 100g muz, 40g
-fıstık ezmesi, 10g zeytinyağı. Öğle: 150g tavuk, 125g tam buğdaylı makarna, 100g yeşil elma, 100g
-brokoli (salata içinde), 25g badem, 10g zeytinyağı. Akşam: 150g tavuk, 125g pirinç, 100g kivi, 100g
-brokoli (salata içinde), 30g badem, 10g zeytinyağı.
-Örnek B (~2000 kcal): Kahvaltı: 5 yumurta beyazı + 1 sarısı, 100g muz, 50g yulaf, 20g fıstık ezmesi,
-5g zeytinyağı. Öğle: 150g tavuk, 80g pirinç, 5g keten tohumu, 150g karışık salata, 15g ceviz, 10g
-zeytinyağı. Akşam: 150g tavuk, 80g pirinç, 100g meyve, 150g karışık salata, 5g keten tohumu, 10g
-zeytinyağı.
+REFERANS ORNEK PATERN (AYNISINI KOPYALAMA, ama bu TARZ/YAPIDA ve BU BESINLERLE uret):
+Örnek (~2000 kcal): Kahvaltı: 5 yumurta beyazı + 1 sarısı, 100g muz, 50g yulaf, 20g fıstık ezmesi,
+5g zeytinyağı. Öğle: 150g tavuk, 80g pirinç, 150g karışık salata, 15g ceviz, 10g zeytinyağı.
+Akşam: 150g tavuk, 80g pirinç, 100g meyve, 150g karışık salata, 10g zeytinyağı.
 {knowledge_block}
 GÖREVİN: Kullanıcının {payload.target_calories:.0f} kcal / {payload.target_protein:.0f}g protein hedefine göre,
 yukarıdaki pattern ve izin verilen besinleri kullanarak 3 öğünlük (Kahvaltı, Öğle Yemeği, Akşam Yemeği)
@@ -6380,7 +6377,7 @@ YENİ bir program oluştur. Toplam kalori/makroların hedefe ±%10 tolerans içi
    sadece varsa açıklama metninde)."""
 
     last_error = "Bilinmeyen hata"
-    attempts = [(0.4, 2200), (0.15, 1800)]
+    attempts = [(0.4, 4000), (0.15, 3000)]
 
     for attempt_num, (temp, tokens) in enumerate(attempts, start=1):
         active_model = get_best_available_model()
