@@ -274,6 +274,13 @@ def init_auth_db():
                     updated_at TIMESTAMPTZ DEFAULT now()
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_nutrition_programs (
+                    username TEXT PRIMARY KEY REFERENCES users(username) ON DELETE CASCADE,
+                    program_data JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT now()
+                )
+            """)
             # FAZ 3: haftalik antrenman loglari ve beslenme verisi. Frontend zaten
             # her seyi "hafta anahtari" (Pazartesi tarihi) bazinda organize ediyor,
             # o yuzden biz de kullanici+hafta basina bir JSONB satiri tutuyoruz -
@@ -1734,13 +1741,18 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             <button class="btn-log" id="faceCaptureShootBtn" onclick="captureFaceFrame()" style="margin-top:10px;">📸 Fotoğrafı Çek</button>
 
             <div id="faceCapturePreviewState" style="display:none; flex-direction:column; gap:10px;">
-                <div style="position:relative; width:100%; border-radius:12px; overflow:hidden; background:#000;">
-                    <img id="faceCapturePreviewImg" src="" style="width:100%; display:block;" />
+                <div id="facePreviewViewport" style="position:relative; width:100%; aspect-ratio:3/4; border-radius:12px; overflow:hidden; background:#000; touch-action:none;">
+                    <img id="faceCapturePreviewImg" src="" style="position:absolute; top:0; left:0; transform-origin:0 0; cursor:grab;" draggable="false" />
                     <svg id="faceCapturePreviewGuideSvg" viewBox="0 0 300 400" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></svg>
                 </div>
-                <div style="font-size:0.78rem; color:#9ca3af; text-align:center;">Kılavuza uyuyor mu? Uymuyorsa tekrar çek.</div>
+                <div style="display:flex; align-items:center; gap:10px; justify-content:center;">
+                    <button onclick="adjustFaceZoom(-0.15)" style="background:#1a2232; color:#00f2fe; border:1px solid #2d3b54; width:36px; height:36px; border-radius:50%; font-size:1.1rem; cursor:pointer;">−</button>
+                    <span style="font-size:0.72rem; color:#9ca3af;">Sürükle & Yakınlaştır</span>
+                    <button onclick="adjustFaceZoom(0.15)" style="background:#1a2232; color:#00f2fe; border:1px solid #2d3b54; width:36px; height:36px; border-radius:50%; font-size:1.1rem; cursor:pointer;">+</button>
+                </div>
+                <div style="font-size:0.78rem; color:#9ca3af; text-align:center;">Yüzünü sürükleyip yakınlaştırarak kılavuza sığdır, sonra onayla.</div>
                 <button class="btn-log" onclick="confirmFaceCapture()">✅ Bunu Kullan</button>
-                <button onclick="retakeFaceCapture()" style="background:none; border:none; color:#9ca3af; font-size:0.8rem; cursor:pointer;">🔄 Tekrar Çek</button>
+                <button onclick="retakeFaceCapture()" style="background:none; border:none; color:#9ca3af; font-size:0.8rem; cursor:pointer;">🔄 Tekrar Çek / Seç</button>
             </div>
         </div>
     </div>
@@ -1827,6 +1839,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         <div class="card-desc">Altın oran, simetri ve çene ölçümüyle yüz puanın; kişiye özel protokol önerileri.</div>
                     </div>
                     <div class="card-action">Analiz Et →</div>
+                </div>
+
+                <div class="hub-card" onclick="openView('nutritionProgram')">
+                    <div>
+                        <div class="card-icon">🍱</div>
+                        <div class="card-heading">Beslenme Programı</div>
+                        <div class="card-desc">Hedef makrolarına göre aylık, sabit bir öğün planı — izin verilen besinler ve eşdeğerlik kurallarıyla.</div>
+                    </div>
+                    <div class="card-action">Program Oluştur →</div>
                 </div>
             </div>
         </div>
@@ -2337,6 +2358,85 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             </div>
         </div>
 
+        <div class="view-panel" id="nutritionProgramView">
+            <div class="overload-col-left">
+                <div class="panel-card">
+                    <div class="panel-header">
+                        <span>🍱 Program Oluştur</span>
+                        <span class="badge-cyan" id="nutritionProgramSourcesBadge" style="display:none; border-color:#10b981; color:#10b981;"></span>
+                    </div>
+                    <div class="input-form">
+                        <div class="macro-stat-grid" style="margin-bottom:4px;">
+                            <div class="macro-card">
+                                <div class="macro-label">Hedef Kalori</div>
+                                <div class="macro-val macro-c-cal" id="npTargetCalDisplay">-</div>
+                            </div>
+                            <div class="macro-card">
+                                <div class="macro-label">Protein</div>
+                                <div class="macro-val macro-c-pro" id="npTargetProDisplay">-</div>
+                            </div>
+                            <div class="macro-card">
+                                <div class="macro-label">Karb</div>
+                                <div class="macro-val macro-c-carb" id="npTargetCarbDisplay">-</div>
+                            </div>
+                            <div class="macro-card">
+                                <div class="macro-label">Yağ</div>
+                                <div class="macro-val macro-c-fat" id="npTargetFatDisplay">-</div>
+                            </div>
+                        </div>
+                        <div style="font-size:0.72rem; color:#6b7280;">Hedefler Profil sekmenizdeki hesaplamadan alınır. Boy/kilo/hedef girilmemişse önce Profil'i doldurun.</div>
+                        <button class="btn-log" id="generateNutritionProgramBtn" onclick="generateNutritionProgram()">🍱 Beslenme Programımı Oluştur</button>
+                    </div>
+                </div>
+
+                <div class="panel-card" style="flex:1; overflow-y:auto;">
+                    <div class="panel-header">
+                        <span>📋 Kurallar & Eşdeğerlikler</span>
+                    </div>
+                    <div style="font-size:0.76rem; color:#c5c9d1; line-height:1.6; white-space:pre-line;" id="nutritionGuidelinesText">Yükleniyor...</div>
+                </div>
+            </div>
+
+            <div class="overload-col-right">
+                <div class="panel-card" style="height:100%;">
+                    <div class="panel-header">
+                        <span>📅 Aylık Programınız</span>
+                    </div>
+
+                    <div id="nutritionProgramEmptyState" style="text-align:center; padding:40px; color:#6b7280;">
+                        <div style="font-size:2rem; margin-bottom:8px;">🍱</div>
+                        <div style="font-weight:700; color:#9ca3af;">Henüz program oluşturulmadı</div>
+                        <div style="font-size:0.8rem; margin-top:4px;">Sol taraftan "Beslenme Programımı Oluştur" butonuna basın.</div>
+                    </div>
+
+                    <div id="nutritionProgramContent" style="display:none; flex-direction:column; gap:14px; overflow-y:auto;">
+                        <div id="nutritionProgramMealsList" style="display:flex; flex-direction:column; gap:12px;"></div>
+                        <div class="panel-header" style="font-size:0.85rem; margin-top:4px;">
+                            <span>📊 Günlük Toplam</span>
+                        </div>
+                        <div class="macro-stat-grid">
+                            <div class="macro-card">
+                                <div class="macro-label">Kalori</div>
+                                <div class="macro-val macro-c-cal" id="npTotalCal">0</div>
+                            </div>
+                            <div class="macro-card">
+                                <div class="macro-label">Protein</div>
+                                <div class="macro-val macro-c-pro" id="npTotalPro">0g</div>
+                            </div>
+                            <div class="macro-card">
+                                <div class="macro-label">Karb</div>
+                                <div class="macro-val macro-c-carb" id="npTotalCarb">0g</div>
+                            </div>
+                            <div class="macro-card">
+                                <div class="macro-label">Yağ</div>
+                                <div class="macro-val macro-c-fat" id="npTotalFat">0g</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script>
@@ -2515,7 +2615,19 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         let pendingFaceSlot = null;
         let faceCameraStream = null;
         let faceCapturedDataUrl = null;
+        let faceBaseScale = 1;
+        let faceZoomScale = 1;
+        let faceZoomX = 0;
+        let faceZoomY = 0;
+        let faceDragActive = false;
+        let faceDragStartClientX = 0, faceDragStartClientY = 0;
+        let faceDragStartOffsetX = 0, faceDragStartOffsetY = 0;
+        let facePinchStartDist = 0;
+        let facePinchStartScale = 1;
         let faceCaptureSource = null; // 'camera' | 'gallery'
+        let calculatedTargets = { calories: 0, protein: 0, carbs: 0, fat: 0, goal: "" };
+        let cachedNutritionGuidelines = null;
+        let currentNutritionProgram = null;
 
         const FACE_CAPTURE_TITLES = {
             front: "📐 Ön Yüz - Kameraya Dosdoğru Bak",
@@ -2609,9 +2721,116 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (e.target.id === "faceCaptureModal") closeFaceCaptureModal();
         }
 
+        function setupFacePreviewImage(dataUrl) {
+            const img = document.getElementById("faceCapturePreviewImg");
+            const viewport = document.getElementById("facePreviewViewport");
+
+            img.onload = () => {
+                const vpRect = viewport.getBoundingClientRect();
+                const nw = img.naturalWidth, nh = img.naturalHeight;
+                faceBaseScale = Math.max(vpRect.width / nw, vpRect.height / nh);
+                faceZoomScale = 1;
+                faceZoomX = (vpRect.width - nw * faceBaseScale) / 2;
+                faceZoomY = (vpRect.height - nh * faceBaseScale) / 2;
+                img.style.width = nw + "px";
+                img.style.height = nh + "px";
+                applyFaceTransform();
+            };
+            img.src = dataUrl;
+            attachFacePreviewInteraction();
+        }
+
+        function applyFaceTransform() {
+            const img = document.getElementById("faceCapturePreviewImg");
+            const scale = faceBaseScale * faceZoomScale;
+            img.style.transform = `translate(${faceZoomX}px, ${faceZoomY}px) scale(${scale})`;
+        }
+
+        function adjustFaceZoom(delta) {
+            faceZoomScale = Math.min(3, Math.max(0.5, faceZoomScale + delta));
+            applyFaceTransform();
+        }
+
+        function _faceDragStart(clientX, clientY) {
+            faceDragActive = true;
+            faceDragStartClientX = clientX;
+            faceDragStartClientY = clientY;
+            faceDragStartOffsetX = faceZoomX;
+            faceDragStartOffsetY = faceZoomY;
+        }
+        function _faceDragMove(clientX, clientY) {
+            if (!faceDragActive) return;
+            faceZoomX = faceDragStartOffsetX + (clientX - faceDragStartClientX);
+            faceZoomY = faceDragStartOffsetY + (clientY - faceDragStartClientY);
+            applyFaceTransform();
+        }
+        function _faceGetTouchDist(touches) {
+            const dx = touches[0].clientX - touches[1].clientX;
+            const dy = touches[0].clientY - touches[1].clientY;
+            return Math.hypot(dx, dy);
+        }
+
+        function attachFacePreviewInteraction() {
+            const viewport = document.getElementById("facePreviewViewport");
+            if (viewport.dataset.boundInteraction) return; // sadece bir kez baglama
+            viewport.dataset.boundInteraction = "1";
+
+            viewport.addEventListener("mousedown", (e) => { _faceDragStart(e.clientX, e.clientY); });
+            window.addEventListener("mousemove", (e) => { if (faceDragActive) _faceDragMove(e.clientX, e.clientY); });
+            window.addEventListener("mouseup", () => { faceDragActive = false; });
+
+            viewport.addEventListener("touchstart", (e) => {
+                if (e.touches.length === 1) {
+                    _faceDragStart(e.touches[0].clientX, e.touches[0].clientY);
+                } else if (e.touches.length === 2) {
+                    faceDragActive = false;
+                    facePinchStartDist = _faceGetTouchDist(e.touches);
+                    facePinchStartScale = faceZoomScale;
+                }
+            }, { passive: true });
+
+            viewport.addEventListener("touchmove", (e) => {
+                if (e.touches.length === 1 && faceDragActive) {
+                    _faceDragMove(e.touches[0].clientX, e.touches[0].clientY);
+                } else if (e.touches.length === 2) {
+                    const dist = _faceGetTouchDist(e.touches);
+                    const ratio = dist / facePinchStartDist;
+                    faceZoomScale = Math.min(3, Math.max(0.5, facePinchStartScale * ratio));
+                    applyFaceTransform();
+                }
+            }, { passive: true });
+
+            viewport.addEventListener("touchend", () => { faceDragActive = false; });
+        }
+
+        function renderFaceCropToCanvas() {
+            const img = document.getElementById("faceCapturePreviewImg");
+            const viewport = document.getElementById("facePreviewViewport");
+            const vpRect = viewport.getBoundingClientRect();
+
+            const outW = 600;
+            const outH = Math.round(600 * vpRect.height / vpRect.width);
+            const canvas = document.createElement("canvas");
+            canvas.width = outW;
+            canvas.height = outH;
+            const ctx = canvas.getContext("2d");
+
+            const outScale = outW / vpRect.width;
+            const totalScale = faceBaseScale * faceZoomScale * outScale;
+
+            ctx.drawImage(
+                img,
+                0, 0, img.naturalWidth, img.naturalHeight,
+                faceZoomX * outScale, faceZoomY * outScale,
+                img.naturalWidth * totalScale, img.naturalHeight * totalScale
+            );
+
+            return canvas.toDataURL('image/jpeg', 0.85);
+        }
+
         function captureFaceFrame() {
             const video = document.getElementById("faceCaptureVideo");
-            const maxWidth = 800;
+            const maxWidth = 1000;
             let w = video.videoWidth || 640;
             let h = video.videoHeight || 480;
             if (w > maxWidth) {
@@ -2627,13 +2846,13 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             ctx.translate(w, 0);
             ctx.scale(-1, 1);
             ctx.drawImage(video, 0, 0, w, h);
-            faceCapturedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            const rawDataUrl = canvas.toDataURL('image/jpeg', 0.85);
 
-            document.getElementById("faceCapturePreviewImg").src = faceCapturedDataUrl;
             document.getElementById("faceCaptureLiveState").style.display = "none";
             document.getElementById("faceCaptureShootBtn").style.display = "none";
             document.getElementById("faceCaptureInstruction").style.display = "none";
             document.getElementById("faceCapturePreviewState").style.display = "flex";
+            setupFacePreviewImage(rawDataUrl);
             renderFaceGuideOverlay("faceCapturePreviewGuideSvg", pendingFaceSlot);
         }
 
@@ -2650,16 +2869,18 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         }
 
         function confirmFaceCapture() {
-            if (!faceCapturedDataUrl || !pendingFaceSlot) return;
+            if (!pendingFaceSlot) return;
+            const finalDataUrl = renderFaceCropToCanvas();
+
             if (pendingFaceSlot === 'front') {
-                faceFrontImageB64 = faceCapturedDataUrl;
+                faceFrontImageB64 = finalDataUrl;
             } else {
-                faceSideImageB64 = faceCapturedDataUrl;
+                faceSideImageB64 = finalDataUrl;
             }
             const imgEl = document.getElementById("img_face_" + pendingFaceSlot);
             const hintEl = document.getElementById("hint_face_" + pendingFaceSlot);
             if (imgEl && hintEl) {
-                imgEl.src = faceCapturedDataUrl;
+                imgEl.src = finalDataUrl;
                 imgEl.style.display = "block";
                 hintEl.style.display = "none";
             }
@@ -2674,19 +2895,18 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             const file = event.target.files[0];
             if (!file || !pendingFaceSlot) return;
 
-            const compressedBase64 = await compressImage(file, 800, 0.7);
-            faceCapturedDataUrl = compressedBase64;
+            const compressedBase64 = await compressImage(file, 1000, 0.8);
 
-            // Galeriden secilen fotografi da kamerayla ayni onizleme + kilavuz
-            // ekraninda gosterip onaylatiyoruz - boylece hangi yoldan gelirse
-            // gelsin ayni "dogru konumlandirma" kontrolu yapiliyor.
+            // Galeriden secilen fotografi da kamerayla ayni onizleme + kilavuz +
+            // yakinlastir/surukle ekraninda gosterip onaylatiyoruz - boylece hangi
+            // yoldan gelirse gelsin ayni "dogru konumlandirma" kontrolu yapiliyor.
             document.getElementById("faceCaptureModal").style.display = "flex";
             document.getElementById("faceCaptureTitle").innerText = FACE_CAPTURE_TITLES[pendingFaceSlot] || "📐 Fotoğrafı Onayla";
             document.getElementById("faceCaptureLiveState").style.display = "none";
             document.getElementById("faceCaptureShootBtn").style.display = "none";
             document.getElementById("faceCaptureInstruction").style.display = "none";
-            document.getElementById("faceCapturePreviewImg").src = compressedBase64;
             document.getElementById("faceCapturePreviewState").style.display = "flex";
+            setupFacePreviewImage(compressedBase64);
             renderFaceGuideOverlay("faceCapturePreviewGuideSvg", pendingFaceSlot);
 
             document.getElementById("faceUniversalPhotoInput").value = "";
@@ -2823,6 +3043,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (viewName === 'health') { loadHealthUI(); renderInjuriesUI(); }
             if (viewName === 'program') { loadProgramUI(); }
             if (viewName === 'face') { loadFaceScanHistory(); }
+            if (viewName === 'nutritionProgram') { loadNutritionProgramUI(); }
         }
 
         function checkAuth() {
@@ -3430,6 +3651,15 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 document.getElementById("calcTargetPro").innerText = `${proteinGrams}g`;
                 document.getElementById("calcTargetCarb").innerText = `${carbGrams}g`;
                 document.getElementById("calcTargetFat").innerText = `${fatGrams}g`;
+
+                // Beslenme programi olusturucunun kullanmasi icin sayisal degerleri de sakla
+                calculatedTargets = {
+                    calories: Math.round(targetCal),
+                    protein: proteinGrams,
+                    carbs: carbGrams,
+                    fat: fatGrams,
+                    goal: goal
+                };
             }
         }
 
@@ -3713,6 +3943,174 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             } catch (err) {
                 console.warn("Yüz analizi geçmişi yüklenemedi:", err);
             }
+        }
+
+        // ================= BESLENME PROGRAMI =================
+        async function loadNutritionGuidelines() {
+            const box = document.getElementById("nutritionGuidelinesText");
+            if (!box) return;
+            if (cachedNutritionGuidelines) {
+                box.innerText = cachedNutritionGuidelines;
+                return;
+            }
+            try {
+                const res = await fetch('/api/nutrition-guidelines');
+                const data = await res.json();
+                cachedNutritionGuidelines = data.guidelines_text || "";
+                box.innerText = cachedNutritionGuidelines;
+            } catch (err) {
+                box.innerText = "Kurallar yüklenemedi.";
+                console.warn("Beslenme kuralları yüklenemedi:", err);
+            }
+        }
+
+        function loadNutritionProgramUI() {
+            if (!currentUser) return;
+            loadNutritionGuidelines();
+
+            // Profil hedeflerini goster (henuz hesaplanmadiysa 0 kalir)
+            document.getElementById("npTargetCalDisplay").innerText = calculatedTargets.calories ? `${calculatedTargets.calories} kcal` : "-";
+            document.getElementById("npTargetProDisplay").innerText = calculatedTargets.protein ? `${calculatedTargets.protein}g` : "-";
+            document.getElementById("npTargetCarbDisplay").innerText = calculatedTargets.carbs ? `${calculatedTargets.carbs}g` : "-";
+            document.getElementById("npTargetFatDisplay").innerText = calculatedTargets.fat ? `${calculatedTargets.fat}g` : "-";
+
+            const saved = currentNutritionProgram || getLocalNutritionProgram();
+            if (saved && saved.meals) {
+                renderNutritionProgramResult(saved);
+            }
+
+            syncNutritionProgramFromServer();
+        }
+
+        function getLocalNutritionProgram() {
+            if (!currentUser) return null;
+            try {
+                return JSON.parse(localStorage.getItem("nutrition_program_" + currentUser.username) || "null");
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function saveLocalNutritionProgram(program) {
+            if (!currentUser) return;
+            safeLocalStorageSet("nutrition_program_" + currentUser.username, JSON.stringify(program));
+            if (currentUser.token) {
+                fetch('/api/nutrition-program', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + currentUser.token },
+                    body: JSON.stringify({ program_data: program })
+                }).catch(err => console.warn("Beslenme programı backend'e senkronize edilemedi:", err));
+            }
+        }
+
+        async function syncNutritionProgramFromServer() {
+            if (!currentUser || !currentUser.token) return;
+            try {
+                const res = await fetch('/api/nutrition-program', {
+                    headers: { 'Authorization': 'Bearer ' + currentUser.token }
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.program_data && data.program_data.meals) {
+                    currentNutritionProgram = data.program_data;
+                    safeLocalStorageSet("nutrition_program_" + currentUser.username, JSON.stringify(currentNutritionProgram));
+                    const viewEl = document.getElementById("nutritionProgramView");
+                    if (viewEl && viewEl.classList.contains("active")) {
+                        renderNutritionProgramResult(currentNutritionProgram);
+                    }
+                }
+            } catch (err) {
+                console.warn("Beslenme programı sunucudan senkronize edilemedi:", err);
+            }
+        }
+
+        async function generateNutritionProgram() {
+            if (!currentUser) return;
+            if (!calculatedTargets.calories || calculatedTargets.calories <= 0) {
+                return alert("Önce Profil sekmesinden boy/kilo/hedef bilgilerinizi girip kaydedin, hedef makrolarınız oradan hesaplanıyor.");
+            }
+
+            const btn = document.getElementById("generateNutritionProgramBtn");
+            const originalText = btn.innerText;
+            btn.disabled = true;
+            btn.innerText = "🍱 Program hazırlanıyor...";
+
+            try {
+                const res = await fetch('/generate-nutrition-program', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        target_calories: calculatedTargets.calories,
+                        target_protein: calculatedTargets.protein,
+                        target_carbs: calculatedTargets.carbs,
+                        target_fat: calculatedTargets.fat,
+                        goal: calculatedTargets.goal
+                    })
+                });
+                const data = await res.json();
+
+                if (data.is_error || !data.program || !Array.isArray(data.program.meals)) {
+                    alert("Program oluşturulamadı: " + (data.error_detail || "Bilinmeyen hata"));
+                    return;
+                }
+
+                currentNutritionProgram = data.program;
+                saveLocalNutritionProgram(currentNutritionProgram);
+                renderNutritionProgramResult(currentNutritionProgram);
+
+                const sourcesBadge = document.getElementById("nutritionProgramSourcesBadge");
+                if (data.used_sources && data.used_sources.length > 0) {
+                    sourcesBadge.style.display = "inline-block";
+                    sourcesBadge.innerText = `📚 ${data.used_sources.length} kaynak kullanıldı`;
+                    sourcesBadge.title = data.used_sources.join(", ");
+                } else {
+                    sourcesBadge.style.display = "none";
+                }
+            } catch (err) {
+                alert("Sunucu bağlantı hatası: " + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = originalText;
+            }
+        }
+
+        function renderNutritionProgramResult(program) {
+            document.getElementById("nutritionProgramEmptyState").style.display = "none";
+            document.getElementById("nutritionProgramContent").style.display = "flex";
+
+            const mealsList = document.getElementById("nutritionProgramMealsList");
+            mealsList.innerHTML = "";
+
+            let totalCal = 0, totalPro = 0, totalCarb = 0, totalFat = 0;
+
+            program.meals.forEach(meal => {
+                totalCal += Number(meal.total_calories || 0);
+                totalPro += Number(meal.total_protein || 0);
+                totalCarb += Number(meal.total_carbs || 0);
+                totalFat += Number(meal.total_fat || 0);
+
+                const itemsHtml = (meal.items || []).map(item =>
+                    `<div style="font-size:0.82rem; color:#d1d5db; padding:4px 0; border-bottom:1px solid #1c2230;">${item.name} — <b style="color:#00f2fe;">${item.grams}g</b></div>`
+                ).join("");
+
+                mealsList.innerHTML += `
+                    <div class="panel-card" style="padding:14px;">
+                        <div class="panel-header" style="font-size:0.88rem;">
+                            <span>${meal.meal_name}</span>
+                            <span class="badge-cyan">${Math.round(meal.total_calories)} kcal</span>
+                        </div>
+                        <div>${itemsHtml}</div>
+                        <div style="font-size:0.75rem; color:#9ca3af; margin-top:8px;">
+                            P: ${Math.round(meal.total_protein)}g · K: ${Math.round(meal.total_carbs)}g · Y: ${Math.round(meal.total_fat)}g
+                        </div>
+                    </div>
+                `;
+            });
+
+            document.getElementById("npTotalCal").innerText = `${Math.round(totalCal)}`;
+            document.getElementById("npTotalPro").innerText = `${Math.round(totalPro)}g`;
+            document.getElementById("npTotalCarb").innerText = `${Math.round(totalCarb)}g`;
+            document.getElementById("npTotalFat").innerText = `${Math.round(totalFat)}g`;
         }
 
         function removePhoto(event, slotKey) {
@@ -5725,6 +6123,225 @@ def generate_program(payload: GenerateProgramInput):
         }
 
     return {"program": program, "used_sources": used_sources, "is_error": False}
+
+
+# ================= BESLENME PROGRAMI (AYLIK, MAKRO HEDEFLI) =================
+# Kullanicinin verdigi kesin kurallar/esdegerlikler/paternler - HEM prompt'a
+# kural olarak veriliyor HEM DE arayuzde kullaniciya oldugu gibi gosteriliyor
+# (AI'nin yeniden yazip yanlis aktarma riskine karsi, bu metin SABIT/statik).
+NUTRITION_PROGRAM_GUIDELINES_TEXT = """Programınızdaki besinlere aşağıda belirtilen besinlerden gramajına ve makro değerine uyarak alternatif oluşturabilirsiniz. Önemli bir husus ise hesaplamalar mutlaka hassas tartı ile yapılmalıdır. Programlarınız aylıktır. En az 1 ay uygulayın, sonra diğer program için form atın; form atarken lütfen 3 gün kuralına da uyalım.
+
+Besinler mutlaka çiğ ağırlık olarak hesaplanmalı, kesinlikle piştikten sonra hesap yapılmamalıdır — bu hesap yanlış olur.
+
+Beslenme programlarında belirtilen zeytinyağı, yemeklerin pişirilmesi için verilmiştir.
+
+Yemekler esnasında baharat, sirke, limon serbesttir.
+
+Tuz kullanımı günlük 1 çay kaşığıdır; tuz olarak kaya tuzu ve deniz tuzu idealdir.
+
+PROTEİN KAYNAKLARI: Tavuk, Hindi, Yağsız Kırmızı Et (haftada 2 kez), Light Ton Balığı (haftada 2 kez). Bu besinler aynı besin içeriğine yaklaşık değerler içermektedir, programınızdaki gramajına göre dilediğinizi seçebilirsiniz.
+
+KARBONHİDRAT KAYNAKLARI: Basmati Pirinç, Siyah Pirinç, Kepekli Pirinç, Tam Buğdaylı Makarna, Kepekli Makarna, Patates.
+Eşdeğerlik (çiğ ağırlığa göre): 100 g pirinç türü = 125 g makarna türü = 400 g patates. 100 g makarna türü = 300 g patates.
+
+YAĞ KAYNAKLARI (pişirme için): Zeytinyağı, Hindistan Cevizi Yağı, Badem Yağı, Fındık Yağı — hepsi aynı besin değerine sahiptir.
+
+KURUYEMİŞ KAYNAKLARI: Saf Fıstık Ezmesi, Çiğ Kaju, Çiğ Badem, Çiğ Fındık, Ceviz — hepsi aynı besin değerine sahiptir. Kavrulmuş kuruyemişlerden uzak durunuz.
+
+İÇECEKLER: Zero Kola (haftada 2-3), Soda (günde 1), Şekersiz Çay (günde 1-2), Kahve (günde 1-2), Yeşil Çay (günde 1-2). SÜT YASAK! AYRAN YASAK! Badem sütü / soya sütü serbest, günde 150-200 gram. Aynı gün içinde çok fazla çay/kahve içmeyiniz.
+
+SALATA: Her öğünün yanında büyük boy karışık salata tüketin — Marul, Semizotu, Dereotu, Çeri Domates, Salatalık, Havuç, Siyah ve Mor Lahana, Kıvırcık, Maydonoz, Soğan. Kalorileri yok denecek kadar azdır, sınır yoktur. Sirke, limon kullanabilirsiniz. Brokoli yemekte zorlananlar brokoliyi salatanın içine atabilir.
+
+Zamanla bu bilgiler güncellenebilir ve eklemeler yapılabilir."""
+
+
+class NutritionProgramItem(BaseModel):
+    name: str = Field(description="Besin adi, orn 'Tavuk Gogsu', 'Pirinc', 'Yumurta (5 beyaz 1 sari)'")
+    grams: float = Field(description="CIG agirlik, gram cinsinden")
+
+
+class NutritionProgramMeal(BaseModel):
+    meal_name: str = Field(description="'Kahvaltı', 'Öğle Yemeği' veya 'Akşam Yemeği'")
+    items: List[NutritionProgramItem]
+    total_calories: float = Field(description="Bu ogunun toplam kalorisi (kcal)")
+    total_protein: float = Field(description="Bu ogunun toplam proteini (g)")
+    total_carbs: float = Field(description="Bu ogunun toplam karbonhidrati (g)")
+    total_fat: float = Field(description="Bu ogunun toplam yagi (g)")
+
+
+class NutritionProgramResponse(BaseModel):
+    meals: List[NutritionProgramMeal]
+
+
+class GenerateNutritionProgramInput(BaseModel):
+    target_calories: float
+    target_protein: float
+    target_carbs: float
+    target_fat: float
+    goal: Optional[str] = ""
+
+
+def generate_nutrition_program_with_llm(payload: GenerateNutritionProgramInput):
+    """Beslenme programi uretir. (program_dict, kaynak_listesi, None) basarili;
+    (None, [], hata_mesaji) basarisiz doner."""
+    if not client:
+        return None, [], "GROQ_API_KEY bulunamadı."
+
+    query = f"beslenme makro protein karbonhidrat yag diyet programi {payload.goal}"
+    knowledge_snippets, knowledge_sources = retrieve_knowledge_context(query, k=6)
+    knowledge_block = (
+        f"\nBİLGİ BANKASI (yüklenen makalelerden ilgili pasajlar — varsa program tasarımına dayanak yap):\n{knowledge_snippets}\n"
+        if knowledge_snippets else ""
+    )
+
+    system_prompt = f"""Sen bir spor beslenme uzmanisin. Kullanicinin hedef kalori/makrolarina gore, ASAGIDAKI
+KESIN KURALLARA ve ORNEK PATERNE sadik kalarak GUNLUK bir beslenme programi olusturacaksin. Bu
+program kullanicinin AYLARCA (en az 1 ay) tekrar edecegi SABIT bir sablon olacak.
+
+HEDEF: {payload.target_calories:.0f} kcal, {payload.target_protein:.0f}g protein, {payload.target_carbs:.0f}g karbonhidrat, {payload.target_fat:.0f}g yag
+KULLANICI HEDEFI (bulk/cut/recomp): {payload.goal or 'belirtilmedi'}
+
+ZORUNLU OGUN PATERNI:
+- KAHVALTI: Tam bugdayli ekmek VEYA yulaf + bir yumurta varyanti (orn "5 beyaz 1 sari" gibi acikca
+  belirt) + genelde bir yag/kuruyemis kaynagi (fistik ezmesi vb) + bazen bir meyve (muz gibi).
+- OGLE ve AKSAM: Bir protein kaynagi + bir karbonhidrat kaynagi + bir kuruyemis + zeytinyagi +
+  cogunlukla bir meyve + HER IKISINDE DE buyuk bir karisik salata.
+
+IZIN VERILEN BESIN KAYNAKLARI (SADECE BUNLARI KULLAN, baska besin onerme):
+- PROTEIN: Tavuk, Hindi, Yagsiz Kirmizi Et (haftada en fazla 2 kez), Light Ton Baligi (haftada en fazla 2 kez)
+- KARBONHIDRAT: Basmati Pirinc, Siyah Pirinc, Kepekli Pirinc, Tam Bugdayli Makarna, Kepekli Makarna, Patates
+  (esdegerlik CIG agirlikta: 100g pirinc turu = 125g makarna turu = 400g patates; 100g makarna turu = 300g patates)
+- YAG (pisirme): Zeytinyagi, Hindistan Cevizi Yagi, Badem Yagi, Findik Yagi (hepsi ayni deger)
+- KURUYEMIS: Saf Fistik Ezmesi, Cig Kaju, Cig Badem, Cig Findik, Ceviz (hepsi ayni deger, KAVRULMAMIS)
+- ICECEKLER onerilmez (program sadece katı gida ogunlerini icerir), ama YASAK: sut, ayran
+- SALATA: Marul, Semizotu, Dereotu, Ceri domates, Salatalik, Havuc, Siyah/mor lahana, Kivircik,
+  Maydonoz, Sogan - her ogunun yaninda, kalorisi ihmal edilebilir kabul et (makro hesabina katma)
+
+DIGER KURALLAR:
+- TUM besinler CIG AGIRLIK olarak hesaplanmali.
+- Baharat, sirke, limon serbest (makroya dahil etme).
+
+REFERANS ORNEK PATERNLER (AYNISINI KOPYALAMA, ama bu TARZ/YAPIDA ve BU BESINLERLE uret):
+Örnek A (~2700 kcal): Kahvaltı: 2 yumurta sarısı + 4 beyazı, 100g tam buğday ekmek, 100g muz, 40g
+fıstık ezmesi, 10g zeytinyağı. Öğle: 150g tavuk, 125g tam buğdaylı makarna, 100g yeşil elma, 100g
+brokoli (salata içinde), 25g badem, 10g zeytinyağı. Akşam: 150g tavuk, 125g pirinç, 100g kivi, 100g
+brokoli (salata içinde), 30g badem, 10g zeytinyağı.
+Örnek B (~2000 kcal): Kahvaltı: 5 yumurta beyazı + 1 sarısı, 100g muz, 50g yulaf, 20g fıstık ezmesi,
+5g zeytinyağı. Öğle: 150g tavuk, 80g pirinç, 5g keten tohumu, 150g karışık salata, 15g ceviz, 10g
+zeytinyağı. Akşam: 150g tavuk, 80g pirinç, 100g meyve, 150g karışık salata, 5g keten tohumu, 10g
+zeytinyağı.
+{knowledge_block}
+GÖREVİN: Kullanıcının {payload.target_calories:.0f} kcal / {payload.target_protein:.0f}g protein hedefine göre,
+yukarıdaki pattern ve izin verilen besinleri kullanarak 3 öğünlük (Kahvaltı, Öğle Yemeği, Akşam Yemeği)
+YENİ bir program oluştur. Toplam kalori/makroların hedefe ±%10 tolerans içinde olmasına dikkat et.
+
+ÇIKTI KURALLARI:
+1. YALNIZCA JSON formatında çıktı ver, açıklama/markdown ekleme.
+2. Her öğün için total_calories/total_protein/total_carbs/total_fat alanlarını SEN, gerçekçi
+   değerlerle hesapla (çiğ ağırlık bazlı standart besin değerlerini kullan).
+3. "name" alanında yumurta gibi varyantlarda parantez içinde detay belirt (örn "Yumurta (5 beyaz 1 sarı)").
+4. SADECE TÜRKÇE yaz. Kullanıcıya resmi "siz" diliyle hitap et (item/meal isimlerinde geçerli değil,
+   sadece varsa açıklama metninde)."""
+
+    last_error = "Bilinmeyen hata"
+    attempts = [(0.4, 1400), (0.15, 1000)]
+
+    for attempt_num, (temp, tokens) in enumerate(attempts, start=1):
+        try:
+            active_model = get_best_available_model()
+            completion = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"{payload.target_calories:.0f} kcal hedefime göre beslenme programımı oluştur."}
+                ],
+                model=active_model,
+                response_format={"type": "json_object"},
+                temperature=temp,
+                max_tokens=tokens
+            )
+            raw = completion.choices[0].message.content
+            parsed = json.loads(raw)
+            data = NutritionProgramResponse(**parsed)
+            if not data.meals or len(data.meals) < 3:
+                raise ValueError("Eksik öğün listesi döndü.")
+            return data.model_dump(), knowledge_sources, None
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"Beslenme programı denemesi {attempt_num}/{len(attempts)} başarısız: {e}")
+
+    logger.error(f"Beslenme programı üretim hatası (tüm denemeler başarısız): {last_error}")
+    traceback.print_exc()
+    return None, [], last_error
+
+
+@app.get("/api/nutrition-guidelines")
+def get_nutrition_guidelines():
+    """Statik kural/esdegerlik metnini dondurur (AI uretmez, sabit)."""
+    return {"guidelines_text": NUTRITION_PROGRAM_GUIDELINES_TEXT}
+
+
+@app.post("/generate-nutrition-program")
+def generate_nutrition_program(payload: GenerateNutritionProgramInput):
+    if not client:
+        return {
+            "program": None,
+            "is_error": True,
+            "error_detail": "GROQ_API_KEY bulunamadı! Lütfen sunucu ortam değişkenine veya .env dosyasına ekle."
+        }
+
+    program, used_sources, error_detail = generate_nutrition_program_with_llm(payload)
+    if not program:
+        return {
+            "program": None,
+            "is_error": True,
+            "error_detail": f"Beslenme programı oluştururken bir hata oluştu: {error_detail}" if error_detail
+                             else "Beslenme programı oluştururken bir hata oluştu. Lütfen tekrar dene."
+        }
+
+    return {"program": program, "used_sources": used_sources, "is_error": False}
+
+
+class NutritionProgramSyncInput(BaseModel):
+    program_data: dict
+
+
+@app.get("/api/nutrition-program")
+def get_nutrition_program_backend(username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT program_data FROM user_nutrition_programs WHERE username = %s", (username,))
+            row = cur.fetchone()
+        conn.close()
+        return {"program_data": row["program_data"] if row else None}
+    except Exception as e:
+        logger.error(f"Beslenme programı okuma hatası ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+@app.post("/api/nutrition-program")
+def save_nutrition_program_backend(payload: NutritionProgramSyncInput, username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return JSONResponse(status_code=503, content={"detail": "not_configured"})
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO user_nutrition_programs (username, program_data, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (username) DO UPDATE SET program_data = EXCLUDED.program_data, updated_at = now()
+            """, (username, psycopg2.extras.Json(payload.program_data)))
+        conn.commit()
+        conn.close()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Beslenme programı yazma hatası ({username}): {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": "server_error"})
+
 
 
 if __name__ == "__main__":
