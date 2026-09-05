@@ -512,33 +512,52 @@ def strip_thinking_and_tables(text: str) -> str:
 
 
 def extract_json_object(text: str) -> dict:
-    """Bazi vision modelleri (orn qwen3.6-27b), gorsel girisle birlikte response_format=
-    json_object kullanildiginda guvenilir calismiyor (bos/gecersiz cikti donebiliyor).
-    Bu yuzden JSON modu ZORLANMADAN, sadece prompt talimatiyla JSON istenen yerlerde,
-    donen metni esnek sekilde JSON'a cevirir: markdown kod bloklarini (```json ... ```)
-    temizler, dogrudan parse dener, olmazsa ilk '{' ile son '}' arasini cikarip dener."""
+    """Bazi modeller (vision + JSON modu celisebiliyor, ya da uzun/karmasik
+    JSON'larda kucuk sozdizimi hatasi yapabiliyor - orn fazladan virgul,
+    kacirilmamis kontrol karakteri) tam gecerli JSON donmeyebiliyor. Bu fonksiyon
+    once ham metni oldugu gibi, sonra birkac yaygin LLM-JSON hatasini onararak
+    (markdown kod bloklari, disaridaki fazladan metin, sondaki fazladan virgul,
+    kacmamis kontrol karakterleri) sirayla parse etmeyi dener."""
     if not text or not text.strip():
         raise ValueError("Model boş içerik döndürdü.")
 
     cleaned = text.strip()
-    # ```json ... ``` veya ``` ... ``` kod bloklarini temizle
     cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
     cleaned = re.sub(r'\s*```$', '', cleaned)
     cleaned = cleaned.strip()
 
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        pass
+    candidates = [cleaned]
 
-    # Ilk '{' ile son '}' arasini cikarip tekrar dene (modelin araya
-    # aciklama cumlesi sikistirmis olma ihtimaline karsi)
     start = cleaned.find('{')
     end = cleaned.rfind('}')
     if start != -1 and end != -1 and end > start:
-        return json.loads(cleaned[start:end + 1])
+        candidates.append(cleaned[start:end + 1])
 
-    raise ValueError(f"Geçerli JSON bulunamadı. Ham çıktı: {cleaned[:200]}")
+    last_error = "bilinmeyen hata"
+    for candidate in candidates:
+        # 1) oldugu gibi dene
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as e:
+            last_error = str(e)
+
+        # 2) en yaygin LLM-JSON hatasi: dizi/nesne kapanmadan once fazladan
+        # virgul birakmak (orn '"a": 1,}' ya da '[1, 2,]')
+        repaired = re.sub(r',(\s*[\]}])', r'\1', candidate)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError as e:
+            last_error = str(e)
+
+        # 3) string icinde kacmamis (escape edilmemis) kontrol karakteri
+        # (orn literal newline/tab) - JSON spec'inde gecersiz, boslukla degistir
+        repaired2 = re.sub(r'[\x00-\x1f]+', ' ', repaired)
+        try:
+            return json.loads(repaired2)
+        except json.JSONDecodeError as e:
+            last_error = str(e)
+
+    raise ValueError(f"Geçerli JSON bulunamadı ({last_error}). Ham çıktı: {cleaned[:200]}")
 
 
 def violates_coach_format_rules(text: str) -> bool:
@@ -1272,6 +1291,8 @@ class FaceProtocolItem(BaseModel):
 
 
 class FaceLLMAnalysis(BaseModel):
+    is_human_face: bool = Field(description="Fotografta GERCEK, net bir INSAN yuzu var mi? Hayvan, cizim, karikatur, obje, bulanik/yuzsuz foto ise false yaz")
+    rejection_reason: Optional[str] = Field(default="", description="is_human_face=false ise KISA sebep (orn 'Bu bir hayvan fotografi'), true ise bos birak")
     skin_score: float = Field(description="Fotograftan gorsel degerlendirmeye dayali 0-10 arasi cilt puani")
     skin_summary: str = Field(description="Cildin gorsel degerlendirmesi, 1-2 cumle")
     symmetry_summary: str = Field(description="Verilen simetri sayisal bulgusunun yorumu, 1-2 cumle")
@@ -1311,19 +1332,27 @@ def generate_face_protocol_with_llm(front_image_b64: str, symmetry_data: dict, p
 {knowledge_block}"""
 
     json_example = (
-        '{"skin_score": 7, "skin_summary": "...", "symmetry_summary": "...", '
-        '"jaw_summary": "...", "proportion_summary": "...", '
+        '{"is_human_face": true, "rejection_reason": "", "skin_score": 7, "skin_summary": "...", '
+        '"symmetry_summary": "...", "jaw_summary": "...", "proportion_summary": "...", '
         '"protocol": [{"title": "...", "description": "...", "category": "cilt"}]}'
     )
 
-    full_system_prompt = f"""Sen bir yuz estetigi ve "looksmax" uzmanisin. Sana bir kisinin on yuz fotografi ve
-geometrik olcum sonuclari verilecek. Gorevin YALNIZCA JSON formatinda, tam olarak su sekilde
-bir cikti vermek (ornek sema): {json_example}
+    full_system_prompt = f"""Sen bir yuz estetigi ve "looksmax" uzmanisin. Sana bir fotograf ve (fotograf
+gercek bir insan yuzuyse anlamli olan) geometrik olcum sonuclari verilecek. Gorevin YALNIZCA JSON
+formatinda, tam olarak su sekilde bir cikti vermek (ornek sema): {json_example}
 
-1. Fotograftan cildin gorsel durumunu (ton esitligi, parlaklik, gozeneklilik, kizariklik gibi
-   gozle gorulur ipuclarindan) degerlendirip 0-10 arasi bir "skin_score" ver.
-2. Asagidaki geometrik bulgulari kisa, anlasilir cumlelerle yorumla (summary alanlari).
-3. Bilgi bankasindaki icerige dayanarak (varsa) kisiye ozel, uygulanabilir protokol onerileri sun.
+0. EN ONEMLI ADIM - ONCE BUNU KONTROL ET: Fotografta GERCEK, NET bir INSAN YUZU var mi? Eger
+   fotograf bir HAYVAN (maymun, kopek vb.), CIZIM/KARIKATUR/AVATAR, bir OBJE, bulanik/yuzsuz bir
+   goruntu, ya da INSAN YUZU OLMAYAN herhangi bir sey ise: "is_human_face" alanini false yap,
+   "rejection_reason" alanina KISA bir sebep yaz (orn "Bu bir hayvan fotografi", "Yuz net secilmiyor"),
+   ve diger TUM alanlari (skin_score=0, summary'ler bos string "", protocol=bos dizi []) varsayilan/bos
+   birak - ANALIZ YAPMA. Sadece gercek bir insan yuzu ise is_human_face=true yap ve asagidaki
+   adimlara devam et.
+1. (SADECE is_human_face=true ise) Fotograftan cildin gorsel durumunu (ton esitligi, parlaklik,
+   gozeneklilik, kizariklik gibi gozle gorulur ipuclarindan) degerlendirip 0-10 arasi bir "skin_score" ver.
+2. (SADECE is_human_face=true ise) Asagidaki geometrik bulgulari kisa, anlasilir cumlelerle yorumla.
+3. (SADECE is_human_face=true ise) Bilgi bankasindaki icerige dayanarak (varsa) kisiye ozel,
+   uygulanabilir protokol onerileri sun.
 
 {findings_block}
 KURALLAR:
@@ -1337,7 +1366,9 @@ KURALLAR:
 6. KISALIK KURALI: skin_summary ve diğer özet alanları EN FAZLA 1-2 kısa cümle olsun. Protokol önerilerini (protocol) EN FAZLA 4 madde ile sınırla, her description EN FAZLA 1 cümle olsun."""
 
     simple_system_prompt = f"""Yuz estetigi uzmanisin. YALNIZCA su JSON semasina uygun, kisa bir cikti ver: {json_example}
-Bulgular: Simetri={symmetry_data.get('score')}/10, Oran={proportion_data.get('score')}/10, Çene={jaw_data.get('score')}/10.
+ONCE KONTROL ET: fotografta gercek bir insan yuzu yoksa (hayvan/cizim/obje/bulanik ise) is_human_face=false
+yap, rejection_reason'a kisa sebep yaz, diger alanlari bos/0 birak, analiz yapma.
+Insan yuzuyse: Bulgular: Simetri={symmetry_data.get('score')}/10, Oran={proportion_data.get('score')}/10, Çene={jaw_data.get('score')}/10.
 Fotograftaki cilde bakip skin_score (0-10) ver. Her alan 1 kisa cumle. protocol dizisinde EN FAZLA 2 madde olsun.
 SADECE TÜRKÇE ve SADECE JSON yaz, baska hicbir sey ekleme."""
 
@@ -5676,6 +5707,17 @@ def analyze_face(payload: FaceAnalysisInput, username: str = Depends(require_aut
     llm_result, llm_error = generate_face_protocol_with_llm(
         payload.front_image_base64, symmetry_data, proportion_data, jaw_data, profile_data
     )
+
+    # ONEMLI: LLM fotografin gercek bir insan yuzu olmadigini tespit ettiyse
+    # (hayvan, cizim, obje vb.) TUM analizi reddet - mediapipe'in dusuk guven
+    # esiginde (zor acili gercek selfie'leri kurtarmak icin gevsetilmisti)
+    # insan-disi goruntulere de "yuz" muamelesi yapip sayisal skor uretmesi
+    # (orn bir maymun fotografina 10/10 cene puani vermesi) boyle onleniyor.
+    if llm_result and llm_result.get("is_human_face") is False:
+        rejection_reason = llm_result.get("rejection_reason") or "Fotoğrafta net bir insan yüzü tespit edilemedi."
+        return JSONResponse(status_code=422, content={
+            "detail": f"{rejection_reason} Lütfen gerçek, net bir insan yüz fotoğrafı yükleyin."
+        })
 
     if not llm_result:
         logger.warning(f"Face LLM analiz basarisiz, geometrik sonuclar protokolsuz donduruluyor: {llm_error}")
