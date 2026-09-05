@@ -6332,9 +6332,22 @@ def generate_nutrition_program_with_llm(payload: GenerateNutritionProgramInput):
         if knowledge_snippets else ""
     )
 
+    json_example = (
+        '{"meals": [{"meal_name": "Kahvaltı", "items": [{"name": "Yumurta (5 beyaz 1 sarı)", "grams": 250}, '
+        '{"name": "Yulaf", "grams": 50}, {"name": "Fıstık Ezmesi", "grams": 20}], "total_calories": 450, '
+        '"total_protein": 30, "total_carbs": 40, "total_fat": 15}, {"meal_name": "Öğle Yemeği", "items": [...], '
+        '"total_calories": 700, "total_protein": 50, "total_carbs": 60, "total_fat": 20}, '
+        '{"meal_name": "Akşam Yemeği", "items": [...], "total_calories": 700, "total_protein": 50, '
+        '"total_carbs": 60, "total_fat": 20}]}'
+    )
+
     system_prompt = f"""Sen bir spor beslenme uzmanisin. Kullanicinin hedef kalori/makrolarina gore, ASAGIDAKI
 KESIN KURALLARA ve ORNEK PATERNE sadik kalarak GUNLUK bir beslenme programi olusturacaksin. Bu
 program kullanicinin AYLARCA (en az 1 ay) tekrar edecegi SABIT bir sablon olacak.
+
+ZORUNLU JSON CIKTI SEMASI (alan adlarini AYNEN, DEGISTIRMEDEN kullan - kendi Turkce alan adlarini
+UYDURMA, "hedef"/"ogunler"/"kalori" gibi isimler DEGIL, tam olarak bu ornekteki isimler kullanilacak):
+{json_example}
 
 HEDEF: {payload.target_calories:.0f} kcal, {payload.target_protein:.0f}g protein, {payload.target_carbs:.0f}g karbonhidrat, {payload.target_fat:.0f}g yag
 KULLANICI HEDEFI (bulk/cut/recomp): {payload.goal or 'belirtilmedi'}
@@ -6358,26 +6371,25 @@ IZIN VERILEN BESIN KAYNAKLARI (SADECE BUNLARI KULLAN, baska besin onerme):
 DIGER KURALLAR:
 - TUM besinler CIG AGIRLIK olarak hesaplanmali.
 - Baharat, sirke, limon serbest (makroya dahil etme).
-
-REFERANS ORNEK PATERN (AYNISINI KOPYALAMA, ama bu TARZ/YAPIDA ve BU BESINLERLE uret):
-Örnek (~2000 kcal): Kahvaltı: 5 yumurta beyazı + 1 sarısı, 100g muz, 50g yulaf, 20g fıstık ezmesi,
-5g zeytinyağı. Öğle: 150g tavuk, 80g pirinç, 150g karışık salata, 15g ceviz, 10g zeytinyağı.
-Akşam: 150g tavuk, 80g pirinç, 100g meyve, 150g karışık salata, 10g zeytinyağı.
 {knowledge_block}
 GÖREVİN: Kullanıcının {payload.target_calories:.0f} kcal / {payload.target_protein:.0f}g protein hedefine göre,
 yukarıdaki pattern ve izin verilen besinleri kullanarak 3 öğünlük (Kahvaltı, Öğle Yemeği, Akşam Yemeği)
 YENİ bir program oluştur. Toplam kalori/makroların hedefe ±%10 tolerans içinde olmasına dikkat et.
 
 ÇIKTI KURALLARI:
-1. YALNIZCA JSON formatında çıktı ver, açıklama/markdown ekleme.
+1. YALNIZCA JSON formatında, YUKARIDAKI SEMADAKİ ALAN ADLARIYLA BİREBİR AYNI çıktı ver (meals,
+   meal_name, items, name, grams, total_calories, total_protein, total_carbs, total_fat) —
+   açıklama/markdown ekleme, başka alan adı uydurma.
 2. Her öğün için total_calories/total_protein/total_carbs/total_fat alanlarını SEN, gerçekçi
    değerlerle hesapla (çiğ ağırlık bazlı standart besin değerlerini kullan).
 3. "name" alanında yumurta gibi varyantlarda parantez içinde detay belirt (örn "Yumurta (5 beyaz 1 sarı)").
 4. SADECE TÜRKÇE yaz. Kullanıcıya resmi "siz" diliyle hitap et (item/meal isimlerinde geçerli değil,
-   sadece varsa açıklama metninde)."""
+   sadece varsa açıklama metninde).
+5. KISALIK: Her öğünde EN FAZLA 5 besin maddesi olsun, gereksiz uzatma — çıktı token bütçesine
+   rahat sığmalı."""
 
     last_error = "Bilinmeyen hata"
-    attempts = [(0.4, 4000), (0.15, 3000)]
+    attempts = [(0.4, 6000), (0.15, 4500)]
 
     for attempt_num, (temp, tokens) in enumerate(attempts, start=1):
         active_model = get_best_available_model()
