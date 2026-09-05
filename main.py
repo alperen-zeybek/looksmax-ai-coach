@@ -6158,8 +6158,8 @@ KURALLAR:
     max_attempts = 2
 
     for attempt in range(1, max_attempts + 1):
+        active_model = get_best_available_model()
         try:
-            active_model = get_best_available_model()
             completion = client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -6170,9 +6170,14 @@ KURALLAR:
                 # generate_nutrition_program_with_llm'deki ayni aciklama - reasoning
                 # modelleriyle celisebiliyor). extract_json_object() ile esnek ayristiriyoruz.
                 temperature=0.4 if attempt == 1 else 0.15,  # tekrar denemede daha tutarli/duz cikti icin sicakligi dusur
+                max_tokens=2200,
                 **get_reasoning_effort_kwargs(active_model)
             )
-            raw_content = completion.choices[0].message.content
+            choice = completion.choices[0]
+            raw_content = choice.message.content
+            finish_reason = getattr(choice, "finish_reason", None)
+            if not raw_content or not raw_content.strip():
+                raise ValueError(f"Model boş içerik döndürdü (model={active_model}, finish_reason={finish_reason}).")
             parsed_json = extract_json_object(raw_content)
             parsed_json = _sanitize_program_json(parsed_json)
             data = WorkoutProgramResponse(**parsed_json)
@@ -6186,7 +6191,7 @@ KURALLAR:
 
         except Exception as e:
             last_error = str(e)
-            logger.warning(f"Program üretim denemesi {attempt}/{max_attempts} başarısız: {e}")
+            logger.warning(f"Program üretim denemesi {attempt}/{max_attempts} başarısız (model={active_model}): {e}")
 
     logger.error(f"LLM Program Uretim Hatasi (tum denemeler basarisiz): {last_error}")
     traceback.print_exc()
@@ -6333,11 +6338,11 @@ YENİ bir program oluştur. Toplam kalori/makroların hedefe ±%10 tolerans içi
    sadece varsa açıklama metninde)."""
 
     last_error = "Bilinmeyen hata"
-    attempts = [(0.4, 1400), (0.15, 1000)]
+    attempts = [(0.4, 2200), (0.15, 1800)]
 
     for attempt_num, (temp, tokens) in enumerate(attempts, start=1):
+        active_model = get_best_available_model()
         try:
-            active_model = get_best_available_model()
             completion = client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -6353,15 +6358,19 @@ YENİ bir program oluştur. Toplam kalori/makroların hedefe ±%10 tolerans içi
                 max_tokens=tokens,
                 **get_reasoning_effort_kwargs(active_model)
             )
-            raw = completion.choices[0].message.content
+            choice = completion.choices[0]
+            raw = choice.message.content
+            finish_reason = getattr(choice, "finish_reason", None)
+            if not raw or not raw.strip():
+                raise ValueError(f"Model boş içerik döndürdü (model={active_model}, finish_reason={finish_reason}).")
             parsed = extract_json_object(raw)
             data = NutritionProgramResponse(**parsed)
             if not data.meals or len(data.meals) < 3:
-                raise ValueError("Eksik öğün listesi döndü.")
+                raise ValueError(f"Eksik öğün listesi döndü (model={active_model}, finish_reason={finish_reason}).")
             return data.model_dump(), knowledge_sources, None
         except Exception as e:
             last_error = str(e)
-            logger.warning(f"Beslenme programı denemesi {attempt_num}/{len(attempts)} başarısız: {e}")
+            logger.warning(f"Beslenme programı denemesi {attempt_num}/{len(attempts)} başarısız (model={active_model}): {e}")
 
     logger.error(f"Beslenme programı üretim hatası (tüm denemeler başarısız): {last_error}")
     traceback.print_exc()
