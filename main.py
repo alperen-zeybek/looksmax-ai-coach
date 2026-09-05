@@ -1004,10 +1004,42 @@ def _pt_dist(p1, p2) -> float:
     return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
 
 
+def _rotate_points_to_level_eyes(points: list) -> list:
+    """Fotograf cekilirken kafa/telefon hafif egikse (roll/tilt), bu durum
+    simetri olcumunu YAPAY OLARAK ciddi sekilde bozuyordu - internetten
+    bulunan profesyonel referans fotograflar genelde kameraya dosdogru
+    cekildigi icin sorun cikmiyordu, ama normal selfie'lerde (nadiren tam
+    duz) simetri puani gercek disi dusuk cikiyordu. Bunu onlemek icin once
+    goz hattini (LM_LEFT_EYE_OUTER - LM_RIGHT_EYE_OUTER) yataya getirecek
+    sekilde TUM noktalari donduruyoruz, olcumu ondan sonra yapiyoruz.
+    NOT: Bu sadece duzlemsel egikligi (roll) duzeltir - basin sola/saga
+    donuk olmasi (yaw, 3 boyutlu poz) hala olcumu etkileyebilir, o yuzden
+    kullaniciya kameraya dosdogru bakmasi tavsiye ediliyor."""
+    left_eye = points[LM_LEFT_EYE_OUTER]
+    right_eye = points[LM_RIGHT_EYE_OUTER]
+    dx = right_eye[0] - left_eye[0]
+    dy = right_eye[1] - left_eye[1]
+    angle = math.atan2(dy, dx)
+
+    cx = (left_eye[0] + right_eye[0]) / 2.0
+    cy = (left_eye[1] + right_eye[1]) / 2.0
+    cos_a, sin_a = math.cos(-angle), math.sin(-angle)
+
+    rotated = []
+    for (x, y) in points:
+        rx, ry = x - cx, y - cy
+        new_x = rx * cos_a - ry * sin_a + cx
+        new_y = rx * sin_a + ry * cos_a + cy
+        rotated.append((new_x, new_y))
+    return rotated
+
+
 def compute_symmetry_score(points: list) -> Dict[str, Any]:
     """On yuz fotografindan sol-sag landmark ciftlerinin dikey orta hatta olan
     uzakliklarini karsilastirarak bir simetri puani (0-10) hesaplar."""
     try:
+        points = _rotate_points_to_level_eyes(points)  # once kafa egikligini (roll) duzelt
+
         top = points[LM_FOREHEAD_TOP]
         bottom = points[LM_CHIN]
         midline_x = (top[0] + bottom[0]) / 2.0
@@ -1670,6 +1702,45 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 </div>
                 <button class="btn-log" onclick="addBarcodeProductToMeal()">Öğüne Ekle</button>
                 <button onclick="resetBarcodeScanner()" style="background:none; border:none; color:#9ca3af; font-size:0.75rem; cursor:pointer;">Başka bir ürün tara</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="faceSourceChoiceModal" onclick="closeFaceSourceChoiceOnBg(event)">
+        <div class="modal-box" onclick="event.stopPropagation()" style="max-width:360px;">
+            <div class="modal-header">
+                <h3>📐 Fotoğraf Ekle</h3>
+                <button class="modal-close-btn" onclick="closeFaceSourceChoice()">✕</button>
+            </div>
+            <button class="btn-log" onclick="chooseFaceSource('camera')">📷 Kamerayla Çek (Önerilir)</button>
+            <button class="btn-log" onclick="chooseFaceSource('gallery')" style="background:#1a2232; color:#00f2fe;">🖼️ Galeriden Seç</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="faceCaptureModal" onclick="closeFaceCaptureModalOnBg(event)">
+        <div class="modal-box" onclick="event.stopPropagation()" style="max-width:420px;">
+            <div class="modal-header">
+                <h3 id="faceCaptureTitle">📐 Yüzünü Yerleştir</h3>
+                <button class="modal-close-btn" onclick="closeFaceCaptureModal()">✕</button>
+            </div>
+
+            <div id="faceCaptureLiveState" style="position:relative; width:100%; border-radius:12px; overflow:hidden; background:#000;">
+                <video id="faceCaptureVideo" autoplay playsinline muted style="width:100%; display:block; transform:scaleX(-1);"></video>
+                <svg id="faceCaptureGuideSvg" viewBox="0 0 300 400" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></svg>
+            </div>
+            <div style="font-size:0.78rem; color:#9ca3af; text-align:center; margin-top:8px;" id="faceCaptureInstruction">
+                Yüzünü çerçevenin içine yerleştir, gözlerini çizgiye hizala.
+            </div>
+            <button class="btn-log" id="faceCaptureShootBtn" onclick="captureFaceFrame()" style="margin-top:10px;">📸 Fotoğrafı Çek</button>
+
+            <div id="faceCapturePreviewState" style="display:none; flex-direction:column; gap:10px;">
+                <div style="position:relative; width:100%; border-radius:12px; overflow:hidden; background:#000;">
+                    <img id="faceCapturePreviewImg" src="" style="width:100%; display:block;" />
+                    <svg id="faceCapturePreviewGuideSvg" viewBox="0 0 300 400" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></svg>
+                </div>
+                <div style="font-size:0.78rem; color:#9ca3af; text-align:center;">Kılavuza uyuyor mu? Uymuyorsa tekrar çek.</div>
+                <button class="btn-log" onclick="confirmFaceCapture()">✅ Bunu Kullan</button>
+                <button onclick="retakeFaceCapture()" style="background:none; border:none; color:#9ca3af; font-size:0.8rem; cursor:pointer;">🔄 Tekrar Çek</button>
             </div>
         </div>
     </div>
@@ -2442,6 +2513,184 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
         let faceFrontImageB64 = null;
         let faceSideImageB64 = null;
         let pendingFaceSlot = null;
+        let faceCameraStream = null;
+        let faceCapturedDataUrl = null;
+        let faceCaptureSource = null; // 'camera' | 'gallery'
+
+        const FACE_CAPTURE_TITLES = {
+            front: "📐 Ön Yüz - Kameraya Dosdoğru Bak",
+            side: "📐 3/4 Profil - Hafif Yan Dön"
+        };
+        const FACE_CAPTURE_INSTRUCTIONS = {
+            front: "Yüzünü çerçevenin içine yerleştir, kameraya dosdoğru bak, gözlerini çizgiye hizala.",
+            side: "Başını yaklaşık 45° çevir (turuncu ok yönünde), tam yandan değil hafif dönük dur."
+        };
+
+        function renderFaceGuideOverlay(svgId, slot) {
+            const svg = document.getElementById(svgId);
+            if (!svg) return;
+            if (slot === 'side') {
+                svg.innerHTML = `
+                    <defs>
+                        <marker id="arrowFace_${svgId}" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+                            <path d="M0,0 L8,4 L0,8 Z" fill="#f59e0b"/>
+                        </marker>
+                    </defs>
+                    <ellipse cx="160" cy="200" rx="75" ry="125" fill="none" stroke="#00f2fe" stroke-width="3" stroke-dasharray="8,6" opacity="0.85"/>
+                    <line x1="95" y1="175" x2="225" y2="175" stroke="#00f2fe" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.6"/>
+                    <path d="M 55 210 A 45 45 0 0 1 95 165" fill="none" stroke="#f59e0b" stroke-width="3" opacity="0.85" marker-end="url(#arrowFace_${svgId})"/>
+                `;
+            } else {
+                svg.innerHTML = `
+                    <ellipse cx="150" cy="200" rx="85" ry="125" fill="none" stroke="#00f2fe" stroke-width="3" stroke-dasharray="8,6" opacity="0.85"/>
+                    <line x1="65" y1="175" x2="235" y2="175" stroke="#00f2fe" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.6"/>
+                `;
+            }
+        }
+
+        function triggerFacePhotoUpload(slot) {
+            pendingFaceSlot = slot;
+            document.getElementById("faceSourceChoiceModal").style.display = "flex";
+        }
+
+        function closeFaceSourceChoice() {
+            document.getElementById("faceSourceChoiceModal").style.display = "none";
+        }
+
+        function closeFaceSourceChoiceOnBg(e) {
+            if (e.target.id === "faceSourceChoiceModal") closeFaceSourceChoice();
+        }
+
+        function chooseFaceSource(source) {
+            closeFaceSourceChoice();
+            faceCaptureSource = source;
+            if (source === 'camera') {
+                openFaceCaptureModal();
+            } else {
+                document.getElementById("faceUniversalPhotoInput").click();
+            }
+        }
+
+        async function openFaceCaptureModal() {
+            document.getElementById("faceCaptureModal").style.display = "flex";
+            document.getElementById("faceCaptureTitle").innerText = FACE_CAPTURE_TITLES[pendingFaceSlot] || "📐 Fotoğrafı Çek";
+            document.getElementById("faceCaptureInstruction").innerText = FACE_CAPTURE_INSTRUCTIONS[pendingFaceSlot] || "";
+            document.getElementById("faceCaptureInstruction").style.display = "block";
+            document.getElementById("faceCaptureLiveState").style.display = "block";
+            document.getElementById("faceCaptureShootBtn").style.display = "block";
+            document.getElementById("faceCapturePreviewState").style.display = "none";
+            renderFaceGuideOverlay("faceCaptureGuideSvg", pendingFaceSlot);
+
+            try {
+                faceCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+                document.getElementById("faceCaptureVideo").srcObject = faceCameraStream;
+            } catch (err) {
+                alert("Kameraya erişilemedi: " + err.message + ". Tarayıcı izinlerini kontrol edin ya da galeriden seçmeyi deneyin.");
+                closeFaceCaptureModal();
+            }
+        }
+
+        function stopFaceCameraStream() {
+            if (faceCameraStream) {
+                faceCameraStream.getTracks().forEach(track => track.stop());
+                faceCameraStream = null;
+            }
+        }
+
+        function closeFaceCaptureModal() {
+            stopFaceCameraStream();
+            document.getElementById("faceCaptureModal").style.display = "none";
+            pendingFaceSlot = null;
+            faceCapturedDataUrl = null;
+            faceCaptureSource = null;
+        }
+
+        function closeFaceCaptureModalOnBg(e) {
+            if (e.target.id === "faceCaptureModal") closeFaceCaptureModal();
+        }
+
+        function captureFaceFrame() {
+            const video = document.getElementById("faceCaptureVideo");
+            const maxWidth = 800;
+            let w = video.videoWidth || 640;
+            let h = video.videoHeight || 480;
+            if (w > maxWidth) {
+                h = Math.round(h * maxWidth / w);
+                w = maxWidth;
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            // Video ekranda aynalanmis gorunuyor (selfie hissi) - kullanicinin
+            // gordugu ile ayni fotografi almak icin ayni sekilde ceviriyoruz.
+            ctx.translate(w, 0);
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, 0, 0, w, h);
+            faceCapturedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+
+            document.getElementById("faceCapturePreviewImg").src = faceCapturedDataUrl;
+            document.getElementById("faceCaptureLiveState").style.display = "none";
+            document.getElementById("faceCaptureShootBtn").style.display = "none";
+            document.getElementById("faceCaptureInstruction").style.display = "none";
+            document.getElementById("faceCapturePreviewState").style.display = "flex";
+            renderFaceGuideOverlay("faceCapturePreviewGuideSvg", pendingFaceSlot);
+        }
+
+        function retakeFaceCapture() {
+            if (faceCaptureSource === 'gallery') {
+                document.getElementById("faceCaptureModal").style.display = "none";
+                document.getElementById("faceUniversalPhotoInput").click();
+            } else {
+                document.getElementById("faceCapturePreviewState").style.display = "none";
+                document.getElementById("faceCaptureLiveState").style.display = "block";
+                document.getElementById("faceCaptureShootBtn").style.display = "block";
+                document.getElementById("faceCaptureInstruction").style.display = "block";
+            }
+        }
+
+        function confirmFaceCapture() {
+            if (!faceCapturedDataUrl || !pendingFaceSlot) return;
+            if (pendingFaceSlot === 'front') {
+                faceFrontImageB64 = faceCapturedDataUrl;
+            } else {
+                faceSideImageB64 = faceCapturedDataUrl;
+            }
+            const imgEl = document.getElementById("img_face_" + pendingFaceSlot);
+            const hintEl = document.getElementById("hint_face_" + pendingFaceSlot);
+            if (imgEl && hintEl) {
+                imgEl.src = faceCapturedDataUrl;
+                imgEl.style.display = "block";
+                hintEl.style.display = "none";
+            }
+            stopFaceCameraStream();
+            document.getElementById("faceCaptureModal").style.display = "none";
+            pendingFaceSlot = null;
+            faceCapturedDataUrl = null;
+            faceCaptureSource = null;
+        }
+
+        async function handleFacePhotoUpload(event) {
+            const file = event.target.files[0];
+            if (!file || !pendingFaceSlot) return;
+
+            const compressedBase64 = await compressImage(file, 800, 0.7);
+            faceCapturedDataUrl = compressedBase64;
+
+            // Galeriden secilen fotografi da kamerayla ayni onizleme + kilavuz
+            // ekraninda gosterip onaylatiyoruz - boylece hangi yoldan gelirse
+            // gelsin ayni "dogru konumlandirma" kontrolu yapiliyor.
+            document.getElementById("faceCaptureModal").style.display = "flex";
+            document.getElementById("faceCaptureTitle").innerText = FACE_CAPTURE_TITLES[pendingFaceSlot] || "📐 Fotoğrafı Onayla";
+            document.getElementById("faceCaptureLiveState").style.display = "none";
+            document.getElementById("faceCaptureShootBtn").style.display = "none";
+            document.getElementById("faceCaptureInstruction").style.display = "none";
+            document.getElementById("faceCapturePreviewImg").src = compressedBase64;
+            document.getElementById("faceCapturePreviewState").style.display = "flex";
+            renderFaceGuideOverlay("faceCapturePreviewGuideSvg", pendingFaceSlot);
+
+            document.getElementById("faceUniversalPhotoInput").value = "";
+        }
 
         document.getElementById("exerciseDate").value = weekDaysData[selectedWorkoutDayIdx].fullDate;
 
@@ -3324,35 +3573,6 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 }
 
         // ================= YUZ ANALIZI =================
-        function triggerFacePhotoUpload(slot) {
-            pendingFaceSlot = slot;
-            document.getElementById("faceUniversalPhotoInput").click();
-        }
-
-        async function handleFacePhotoUpload(event) {
-            const file = event.target.files[0];
-            if (!file || !pendingFaceSlot) return;
-
-            const compressedBase64 = await compressImage(file, 800, 0.7);
-            const imgEl = document.getElementById("img_face_" + pendingFaceSlot);
-            const hintEl = document.getElementById("hint_face_" + pendingFaceSlot);
-
-            if (pendingFaceSlot === 'front') {
-                faceFrontImageB64 = compressedBase64;
-            } else {
-                faceSideImageB64 = compressedBase64;
-            }
-
-            if (imgEl && hintEl) {
-                imgEl.src = compressedBase64;
-                imgEl.style.display = "block";
-                hintEl.style.display = "none";
-            }
-
-            pendingFaceSlot = null;
-            document.getElementById("faceUniversalPhotoInput").value = "";
-        }
-
         async function analyzeFacePhotos() {
             if (!currentUser) return;
             if (!currentUser.token) {
