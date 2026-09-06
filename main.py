@@ -4412,7 +4412,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 return alert("Bu özellik için hesabınızın backend'e bağlı olması gerekiyor. Lütfen çıkış yapıp tekrar giriş yapın.");
             }
             const allBtns = document.querySelectorAll("#looksmaxGuideEmptyState button, #looksmaxGuideContent button");
-            allBtns.forEach(b => { b.disabled = true; b.dataset.originalText = b.innerText; b.innerText = "📚 Oluşturuluyor... (biraz sürebilir)"; });
+            allBtns.forEach(b => { b.disabled = true; b.dataset.originalText = b.innerText; b.innerText = "📚 Oluşturuluyor... (2-3 dakika sürebilir, sayfadan ayrılma)"; });
 
             try {
                 const res = await fetch('/generate-looksmax-guide', {
@@ -6950,104 +6950,108 @@ def save_nutrition_program_backend(payload: NutritionProgramSyncInput, username:
 
 
 # ================= LOOKSMAX REHBERI (TUM PDF'LERDEN SENTEZLENEN, TEK/PAYLASILAN) =================
-LOOKSMAX_GUIDE_TOPIC_QUERIES = [
-    "cilt bakımı rutini gözenek ton temizlik",
-    "yüz simetrisi altın oran ölçüm estetik",
-    "çene hattı tanımlılık egzersiz mewing duruş",
-    "saç bakımı dökülme sağlıklı büyüme",
-    "duruş postür omuz düzeltme",
-    "beslenme makro görünüm vücut kompozisyonu etkisi",
-    "uyku kalitesi cilt toparlanma hormon",
-    "su tüketimi şişkinlik cilt görünüm",
-    "kaş kıl bakım yüz bölgesi tıraş",
-    "genel looksmax protokol öneri gelişim",
+# NOT: Bu konu gruplari halinde tutuluyor (10 konu yerine 5 grup x 2 konu) - hesabin
+# dakikalik token kotasi (8000 TPM) SERT bir tavan: tum konulari TEK istekte
+# birlestirmek ~12000+ token istiyordu ve Groq bunu aninda (bekleme faydasiz)
+# 413/429 ile reddediyordu. Kucuk gruplar + gruplar arasi bekleme ile ayni
+# kapsamliligi, limiti asmadan elde ediyoruz.
+LOOKSMAX_GUIDE_TOPIC_BATCHES = [
+    ["cilt bakımı rutini gözenek ton temizlik", "yüz simetrisi altın oran ölçüm estetik"],
+    ["çene hattı tanımlılık egzersiz mewing duruş", "saç bakımı dökülme sağlıklı büyüme"],
+    ["duruş postür omuz düzeltme", "beslenme makro görünüm vücut kompozisyonu etkisi"],
+    ["uyku kalitesi cilt toparlanma hormon", "su tüketimi şişkinlik cilt görünüm"],
+    ["kaş kıl bakım yüz bölgesi tıraş", "genel looksmax protokol öneri gelişim"],
 ]
 
 
+def _generate_looksmax_guide_section(topic_queries: list):
+    """Tek bir kucuk konu grubu icin rehber bolumu uretir (kucuk istek - hesabin
+    8000 TPM sert tavanini asmamak icin). (section_text, sources) doner, basarisiz
+    olursa (None, sources)."""
+    batch_snippets = []
+    batch_sources = set()
+    for query in topic_queries:
+        snippets, sources = retrieve_knowledge_context(query, k=5)
+        if snippets:
+            batch_snippets.append(snippets)
+        batch_sources.update(sources)
+
+    combined = "\n\n---\n\n".join(batch_snippets)
+    if not combined.strip():
+        return None, batch_sources  # bu grup icin bilgi bankasinda icerik yok
+
+    system_prompt = f"""Sen bir looksmax (gorunum gelisimi) uzmanisin. Asagida bilgi bankasindan
+(yuklenen PDF'lerden) belirli konularda toplanmis pasajlar var. Gorevin bu icerikteki HER SEYI
+ATLAMADAN, markdown basliklarla (## Konu Basligi) duzenlenmis, DETAYLI bir rehber bolumu yazmak -
+bu bir ozet DEGIL, PDF'lerdeki bilgiyi tam aktaran bir rehber parcasi.
+
+KURALLAR:
+1. Verilen TUM icerigi kullan, kisaltip gecme. Ayni bilgi tekrar ediyorsa bir kere, en eksiksiz haliyle yaz.
+2. Her ana konu icin ayri bir ## baslik ac.
+3. Somut, uygulanabilir bilgi ver - PDF'lerdeki spesifik bilgiyi (sayilar/yontemler/adimlar varsa) aktar.
+4. SADECE TURKCE yaz. Tibbi tedavi/ilac/operasyon onerme.
+5. Kaynak/dosya adi belirtme, bilgiyi dogrudan ver.
+
+BİLGİ BANKASI İÇERİĞİ:
+{combined}"""
+
+    active_model = get_best_available_model()
+    kwargs = dict(
+        messages=[{"role": "system", "content": system_prompt}],
+        model=active_model,
+        temperature=0.3,
+        max_tokens=1600,
+        **get_reasoning_effort_kwargs(active_model)
+    )
+    try:
+        completion = client.chat.completions.create(**kwargs)
+        content = completion.choices[0].message.content
+        return (content.strip() if content and content.strip() else None), batch_sources
+    except Exception as e:
+        error_str = str(e)
+        if is_rate_limit_error(error_str):
+            wait_s = extract_retry_after_seconds(error_str, default=15.0)
+            logger.warning(f"Looksmax rehberi bölümü - rate limit, {wait_s:.1f}s bekleniyor: {error_str}")
+            time.sleep(wait_s)
+            try:
+                completion = client.chat.completions.create(**kwargs)
+                content = completion.choices[0].message.content
+                return (content.strip() if content and content.strip() else None), batch_sources
+            except Exception as e2:
+                logger.warning(f"Looksmax rehberi bölümü tekrar denemede de başarısız: {e2}")
+                return None, batch_sources
+        logger.warning(f"Looksmax rehberi bölümü başarısız (model={active_model}): {e}")
+        return None, batch_sources
+
+
 def generate_looksmax_guide_with_llm():
-    """Bilgi bankasindaki (yuklenen PDF'ler) TUM konulari tarayip, hicbirini
-    atlamadan kapsamli bir rehber/makale uretir. (content, kaynaklar, None)
-    basarili; (None, [], hata) basarisiz doner."""
+    """Bilgi bankasindaki TUM konulari KUCUK GRUPLAR HALINDE ayri ayri isteklerle
+    isler (hesabin 8000 TPM sert tavanini tek dev istekle asmamak icin) ve
+    sonuclari birlestirir. (content, kaynaklar, None) basarili; (None, [], hata)
+    basarisiz doner."""
     if not client:
         return None, [], "GROQ_API_KEY bulunamadı."
 
-    all_snippet_blocks = []
+    guide_sections = []
     all_sources = set()
-    for query in LOOKSMAX_GUIDE_TOPIC_QUERIES:
-        snippets, sources = retrieve_knowledge_context(query, k=8)
-        if snippets:
-            all_snippet_blocks.append(snippets)
-        all_sources.update(sources)
 
-    combined_knowledge = "\n\n---\n\n".join(all_snippet_blocks)
-    if not combined_knowledge.strip():
-        return None, [], "Bilgi bankasında (yüklenen PDF'ler) hiç içerik bulunamadı. Önce knowledge_base klasörüne PDF ekleyip deploy etmen gerekiyor."
+    for batch_idx, topic_queries in enumerate(LOOKSMAX_GUIDE_TOPIC_BATCHES):
+        section_text, batch_sources = _generate_looksmax_guide_section(topic_queries)
+        all_sources.update(batch_sources)
+        if section_text:
+            guide_sections.append(section_text)
 
-    system_prompt = f"""Sen bir looksmax (gorunum gelisimi) uzmanisin. Sana asagida bilgi bankasindan
-(kullanicinin yukledigi PDF'lerden) cesitli konularda toplanmis pasajlar verilecek. Gorevin, BU
-ICERIKTEKI HER SEYI ATLAMADAN, kapsamli, iyi organize edilmis, DETAYLI bir "Looksmax Hakkında Her
-Şey" rehberi/makalesi yazmak - bu bir ozet DEGIL, PDF'lerdeki bilgiyi tam olarak aktaran bir rehber.
+        # Hesabin dakikalik token kotasini (8000 TPM) asmamak icin gruplar
+        # arasinda bekle - bu olmadan art arda istekler kotayi hemen doldurup
+        # 413/429 hatasi veriyordu.
+        if batch_idx < len(LOOKSMAX_GUIDE_TOPIC_BATCHES) - 1:
+            time.sleep(18)
 
-KURALLAR:
-1. Verilen TUM bilgi bankasi icerigini kullan - hicbir konuyu/detayi atlamadan, kisaltip gecmeden.
-   Ayni bilgi birden fazla pasajda tekrar ediyorsa bir kere, en eksiksiz haliyle yaz.
-2. Markdown basliklarla (## Konu Basligi) mantikli bolumlere ayir - icerikte hangi konular varsa
-   (orn Cilt Bakimi, Cene/Simetri, Durus, Beslenme, Sac, Uyku, Genel Protokoller vb).
-3. Her bolumde somut, uygulanabilir bilgi ver - genel geçer laflar degil, PDF'lerdeki SPESIFIK
-   bilgiyi (sayilar, yontemler, adimlar varsa) aktar.
-4. SADECE TURKCE yaz.
-5. Tibbi tedavi/ilac/operasyon onerme, estetik/yasam tarzi odakli kal.
-6. Kaynak/dosya adi belirtme (orn "PDF'e gore" deme), bilgiyi dogrudan ver.
-7. UZUN VE DETAYLI yaz - kisaltma, atlama. Icerik ne kadar zenginse rehber de o kadar uzun olsun.
+    if not guide_sections:
+        return None, [], "Hiçbir bölüm oluşturulamadı - bilgi bankasında ilgili içerik bulunamadı ya da tüm istekler başarısız oldu."
 
-BİLGİ BANKASI İÇERİĞİ (TÜMÜNÜ KULLAN):
-{combined_knowledge}"""
-
-    attempts = [(0.3, 7000), (0.15, 5000)]
-    last_error = "Bilinmeyen hata"
-
-    for temp, tokens in attempts:
-        active_model = get_best_available_model()
-        try:
-            completion = client.chat.completions.create(
-                messages=[{"role": "system", "content": system_prompt}],
-                model=active_model,
-                temperature=temp,
-                max_tokens=tokens,
-                **get_reasoning_effort_kwargs(active_model)
-            )
-            choice = completion.choices[0]
-            content = choice.message.content
-            finish_reason = getattr(choice, "finish_reason", None)
-            if not content or not content.strip():
-                raise ValueError(f"Model boş içerik döndürdü (model={active_model}, finish_reason={finish_reason}).")
-            return content.strip(), sorted(all_sources), None
-        except Exception as e:
-            error_str = str(e)
-            if is_rate_limit_error(error_str):
-                wait_s = extract_retry_after_seconds(error_str)
-                logger.warning(f"Looksmax rehberi - rate limit, {wait_s:.1f}s bekleniyor: {error_str}")
-                time.sleep(wait_s)
-                try:
-                    completion = client.chat.completions.create(
-                        messages=[{"role": "system", "content": system_prompt}],
-                        model=active_model,
-                        temperature=temp,
-                        max_tokens=tokens,
-                        **get_reasoning_effort_kwargs(active_model)
-                    )
-                    content = completion.choices[0].message.content
-                    if content and content.strip():
-                        return content.strip(), sorted(all_sources), None
-                except Exception as e2:
-                    last_error = str(e2)
-                    continue
-            last_error = error_str
-            logger.warning(f"Looksmax rehberi denemesi başarısız (model={active_model}): {e}")
-
-    logger.error(f"Looksmax rehberi üretim hatası: {last_error}")
-    traceback.print_exc()
-    return None, [], last_error
+    full_guide = "\n\n".join(guide_sections)
+    return full_guide, sorted(all_sources), None
 
 
 @app.post("/generate-looksmax-guide")
@@ -7115,4 +7119,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
