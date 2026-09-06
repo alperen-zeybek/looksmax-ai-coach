@@ -5907,7 +5907,20 @@ def coach_dialogue(data: ChatInput):
     )
 
     system_prompt = f"""
-Sen sporcusunu çok iyi anlayan ama asla laubaliliğe izin vermeyen bilge ve disiplinli bir 'Looksmax & Hipertrofi Başantrenörü'sün.
+Sen normal, yardımsever, genel amaçlı bir AI asistanısın. Kullanıcı Looksmax & Hipertrofi konusunda
+kurulmuş bu uygulamanın bir parçası olarak seninle konuşuyor, AMA bu SADECE kullanıcı gerçekten spor,
+beslenme, sakatlık, toparlanma veya görünüm (looksmax) hakkında bir şey sorduğunda "Başantrenör"
+kimliğine bürünmen gerektiği anlamına gelir.
+
+ÇOK ÖNEMLİ - NE ZAMAN KOÇ GİBİ, NE ZAMAN NORMAL ASİSTAN GİBİ DAVRAN:
+- Kullanıcının mesajı spor/antrenman/beslenme/sakatlık/toparlanma/görünüm hakkındaysa: bilge, disiplinli
+  bir "Looksmax & Hipertrofi Başantrenörü" gibi cevap ver, aşağıdaki bağlamı kullan.
+- Kullanıcının mesajı bunlarla İLGİSİZSE (günlük sohbet, "naber/napıyorsun" gibi bir selamlaşma, genel
+  bir soru, başka bir konu) — ASLA zorla spor/hedef/kalori/antrenman konusuna çekme, "yağ oranını
+  düşürelim", "HIIT yapalım" gibi konuyla alakasız spor tavsiyeleri UYDURMA. Bu durumda sadece normal,
+  sıcak, yardımsever bir asistan gibi doğal cevap ver — tıpkı konuyla ilgisi olmayan bir soruya herhangi
+  bir yardımcı asistanın cevap vereceği gibi.
+
 KULLANICI: {profile_context}
 SAĞLIK: {health_context}
 SAKATLIK DURUMU: {injuries_context}
@@ -5919,10 +5932,10 @@ FORMAT VE ÇIKTI KURALLARI (MUTLAK KURAL):
 3. ASLA DÜŞÜNME ADIMI, TABLO VEYA İŞLEM LİSTESİ YAZMA.
 4. Uzun uzun 'Konu / Durum / Öneri' tabloları dökmek KESİNLİKLE YASAKTIR.
 5. Yanıtını doğrudan, net, kısa paragraflar ve tire (-) ile başlayan maddeler halinde ver — resmi bir doküman gibi kuru olmasın ama laubali de olmasın.
-6. Sakatlık varsa: Güvenli alternatif açıyı söyle ve 1 rehabilitasyon egzersizi emret.
-7. Bilgi bankasında ilgili bir pasaj varsa onu kendi cümlelerinle harmanla, doğrudan alıntılama.
+6. (SADECE spor/saglik konulu mesajlarda) Sakatlık varsa: Güvenli alternatif açıyı söyle ve 1 rehabilitasyon egzersizi emret.
+7. Bilgi bankasında ilgili bir pasaj varsa (ve konu spor/beslenmeyse) onu kendi cümlelerinle harmanla, doğrudan alıntılama.
 8. Kullanıcıya resmi "siz" diliyle hitap et. "Kral", "kanka" gibi argo/gayriresmi hitaplar KESİNLİKLE kullanma.
-9. UZUNLUK (ÇOK ÖNEMLİ): Gerçek bir antrenörün mesajlaşma gibi düşün, rapor gibi değil. Basit bir soruya (örn "bugün ne yapayım") 2-4 CÜMLE yeterli. Sadece detaylı bir program/analiz istenirse biraz uzayabilir, o zaman bile 6-7 cümleyi geçme. Gereksiz doldurma cümlesi ("unutmayın ki...", "önemli olan şudur...") KULLANMA, direkt cevaba gir.
+9. UZUNLUK (ÇOK ÖNEMLİ): Gerçek bir antrenörün/asistanın mesajlaşma gibi düşün, rapor gibi değil. Basit bir soruya (örn "bugün ne yapayım" ya da alakasız bir soru) 2-4 CÜMLE yeterli. Sadece detaylı bir program/analiz istenirse biraz uzayabilir, o zaman bile 6-7 cümleyi geçme. Gereksiz doldurma cümlesi ("unutmayın ki...", "önemli olan şudur...") KULLANMA, direkt cevaba gir.
 """
     messages = [{"role": "system", "content": system_prompt}]
     for msg in data.history:
@@ -6088,6 +6101,39 @@ def _coerce_int(value: Any, default: int = 3) -> int:
         if match:
             return int(match.group())
     return default
+
+
+_COOKED_LABEL_PATTERN = re.compile(r'\s*[\(\[]?\s*(pişmiş|pismis|cooked)\s*[\)\]]?', re.IGNORECASE)
+_COOKED_TO_RAW_DIVISORS = [
+    (re.compile(r'pirin[cç]|pilav', re.IGNORECASE), 2.8),
+    (re.compile(r'makarna', re.IGNORECASE), 2.2),
+    (re.compile(r'bulgur', re.IGNORECASE), 2.5),
+    (re.compile(r'yulaf', re.IGNORECASE), 2.0),
+]
+
+
+def _sanitize_nutrition_json(parsed_json: Dict[str, Any]) -> Dict[str, Any]:
+    """Model kurala ragmen bazen item ismine '(pismis)' etiketi ekleyip GRAMAJI
+    DA pismis porsiyon mantigiyla veriyor (orn 200g pismis pirinc) - bu ciddi
+    bir hesap hatasi (gercek cig karsiligi cok daha az, orn ~70g). Once bu
+    isaretli kalemleri tespit edip GRAMAJI dogru orana bolerek duzeltiyoruz,
+    SONRA etiketi metinden temizliyoruz. Sadece etiketi silip sayiyi oldugu
+    gibi birakmak yetersizdi - asil hata sayidaydi, sadece yazidaki kelime degil."""
+    for meal in parsed_json.get("meals", []):
+        for item in meal.get("items", []):
+            name = item.get("name")
+            if not isinstance(name, str):
+                continue
+            if _COOKED_LABEL_PATTERN.search(name):
+                for food_pattern, divisor in _COOKED_TO_RAW_DIVISORS:
+                    if food_pattern.search(name):
+                        try:
+                            item["grams"] = round(float(item.get("grams", 0)) / divisor, 1)
+                        except (TypeError, ValueError):
+                            pass
+                        break
+                item["name"] = _COOKED_LABEL_PATTERN.sub("", name).strip()
+    return parsed_json
 
 
 def _sanitize_program_json(parsed_json: Dict[str, Any]) -> Dict[str, Any]:
@@ -6405,7 +6451,13 @@ IZIN VERILEN BESIN KAYNAKLARI (SADECE BUNLARI KULLAN, baska besin onerme):
   Maydonoz, Sogan - her ogunun yaninda, kalorisi ihmal edilebilir kabul et (makro hesabina katma)
 
 DIGER KURALLAR:
-- TUM besinler CIG AGIRLIK olarak hesaplanmali.
+- TUM besinler CIG AGIRLIK (pismemis, cig haldeki agirlik) olarak hesaplanmali. Verdigin HER gram
+  degeri OTOMATIK OLARAK cig agirlik demektir - bunu ayrica belirtmene GEREK YOK ve KESINLIKLE
+  YASAK: item isimlerinde "(pişmiş)", "(pismis)", "(cooked)" gibi bir ibare ASLA kullanma, ve
+  degerleri pismis agirliga gore HESAPLAMA. Sadece cig pirinc/cig makarna/cig patates agirligini
+  yaz ve besin degerini cig agirliga gore hesapla.
+  YANLIŞ ÖRNEK (ASLA BÖYLE YAZMA): "Basmati Pirinci (pişmiş) - 150g"
+  DOĞRU ÖRNEK: "Basmati Pirinci - 60g" (dogrudan cig agirlik, pismis referansi YOK, "pişmiş" kelimesi hic gecmez)
 - Baharat, sirke, limon serbest (makroya dahil etme).
 {knowledge_block}
 GÖREVİN: Kullanıcının {payload.target_calories:.0f} kcal / {payload.target_protein:.0f}g protein hedefine göre,
@@ -6446,6 +6498,7 @@ YENİ bir program oluştur. Toplam kalori/makroların hedefe ±%10 tolerans içi
         if not raw or not raw.strip():
             raise ValueError(f"Model boş içerik döndürdü (model={active_model}, finish_reason={finish_reason}).")
         parsed = extract_json_object(raw)
+        parsed = _sanitize_nutrition_json(parsed)
         data = NutritionProgramResponse(**parsed)
         if not data.meals or len(data.meals) < 3:
             raise ValueError(f"Eksik öğün listesi döndü (model={active_model}, finish_reason={finish_reason}).")
