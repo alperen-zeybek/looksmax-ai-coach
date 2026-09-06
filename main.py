@@ -282,6 +282,16 @@ def init_auth_db():
                     updated_at TIMESTAMPTZ DEFAULT now()
                 )
             """)
+            # Looksmax rehberi kullaniciya ozel degil - tum PDF bilgi bankasindan
+            # sentezlenen TEK, paylasilan bir makale. Tek satirlik (id=1) tablo.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS looksmax_guide (
+                    id INT PRIMARY KEY DEFAULT 1,
+                    content TEXT,
+                    sources JSONB,
+                    updated_at TIMESTAMPTZ DEFAULT now()
+                )
+            """)
             # FAZ 3: haftalik antrenman loglari ve beslenme verisi. Frontend zaten
             # her seyi "hafta anahtari" (Pazartesi tarihi) bazinda organize ediyor,
             # o yuzden biz de kullanici+hafta basina bir JSONB satiri tutuyoruz -
@@ -2498,6 +2508,21 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                             <span class="badge-cyan" id="faceWeakestAreaBadge" style="display:none;"></span>
                         </div>
                         <div class="history-list" id="faceProtocolList" style="max-height:none;"></div>
+
+                        <div style="border-top:1px solid #1c2230; margin-top:18px; padding-top:16px;">
+                            <div class="panel-header" style="font-size:0.9rem;">
+                                <span>📚 Looksmax Hakkında Her Şey</span>
+                            </div>
+                            <div id="looksmaxGuideEmptyState" style="text-align:center; padding:20px; color:#6b7280;">
+                                <div style="font-size:0.8rem; margin-bottom:12px;">Yüklenen tüm PDF'lerdeki bilgiyi kapsamlı, tek bir rehbere dönüştür.</div>
+                                <button class="btn-log" onclick="generateLooksmaxGuide()">📚 Rehberi Oluştur</button>
+                            </div>
+                            <div id="looksmaxGuideContent" style="display:none;">
+                                <div id="looksmaxGuideUpdatedAt" style="font-size:0.68rem; color:#6b7280; margin-bottom:10px;"></div>
+                                <div id="looksmaxGuideText" style="font-size:0.85rem; color:#d1d5db; line-height:1.6;"></div>
+                                <button class="btn-log" onclick="generateLooksmaxGuide()" style="margin-top:14px; background:#1a2232; color:#00f2fe;">🔄 Yeniden Oluştur</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -3187,7 +3212,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             if (viewName === 'profile') { loadUserProfileUI(); loadUserPhasesUI(); }
             if (viewName === 'health') { loadHealthUI(); renderInjuriesUI(); }
             if (viewName === 'program') { loadProgramUI(); }
-            if (viewName === 'face') { loadFaceScanHistory(); }
+            if (viewName === 'face') { loadFaceScanHistory(); loadLooksmaxGuide(); }
             if (viewName === 'nutritionProgram') { loadNutritionProgramUI(); }
         }
 
@@ -4333,6 +4358,78 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             document.getElementById("npTotalPro").innerText = `${Math.round(totalPro)}g`;
             document.getElementById("npTotalCarb").innerText = `${Math.round(totalCarb)}g`;
             document.getElementById("npTotalFat").innerText = `${Math.round(totalFat)}g`;
+        }
+
+        // ================= LOOKSMAX REHBERI =================
+        function simpleMarkdownToHtml(md) {
+            if (!md) return "";
+            let html = md
+                .replace(/^### (.*$)/gim, '<h4 style="color:#00f2fe; margin:14px 0 6px; font-size:0.95rem;">$1</h4>')
+                .replace(/^## (.*$)/gim, '<h3 style="color:#00f2fe; margin:20px 0 10px; font-size:1.05rem; border-bottom:1px solid #1c2230; padding-bottom:6px;">$1</h3>')
+                .replace(/^# (.*$)/gim, '<h2 style="color:#00f2fe; margin:24px 0 12px; font-size:1.15rem;">$1</h2>')
+                .replace(/\*\*(.*?)\*\*/g, '<b style="color:#e5e7eb;">$1</b>')
+                .replace(/^- (.*$)/gim, '<li style="margin:4px 0 4px 18px;">$1</li>');
+            html = html.split(/\n\n+/).map(block => {
+                const t = block.trim();
+                if (t.startsWith('<h') || t.startsWith('<li')) return block;
+                if (!t) return '';
+                return `<p style="margin:8px 0;">${block.replace(/\n/g, '<br>')}</p>`;
+            }).join('');
+            return html;
+        }
+
+        function renderLooksmaxGuide(content, updatedAtIso) {
+            document.getElementById("looksmaxGuideEmptyState").style.display = "none";
+            document.getElementById("looksmaxGuideContent").style.display = "block";
+            document.getElementById("looksmaxGuideText").innerHTML = simpleMarkdownToHtml(content);
+            const updatedBox = document.getElementById("looksmaxGuideUpdatedAt");
+            if (updatedAtIso) {
+                try {
+                    const d = new Date(updatedAtIso);
+                    updatedBox.innerText = `Son güncelleme: ${d.toLocaleDateString('tr-TR')}`;
+                } catch (e) { updatedBox.innerText = ""; }
+            }
+        }
+
+        async function loadLooksmaxGuide() {
+            if (!currentUser || !currentUser.token) return;
+            try {
+                const res = await fetch('/api/looksmax-guide', {
+                    headers: { 'Authorization': 'Bearer ' + currentUser.token }
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.guide) {
+                    renderLooksmaxGuide(data.guide, data.updated_at);
+                }
+            } catch (err) {
+                console.warn("Looksmax rehberi yüklenemedi:", err);
+            }
+        }
+
+        async function generateLooksmaxGuide() {
+            if (!currentUser || !currentUser.token) {
+                return alert("Bu özellik için hesabınızın backend'e bağlı olması gerekiyor. Lütfen çıkış yapıp tekrar giriş yapın.");
+            }
+            const allBtns = document.querySelectorAll("#looksmaxGuideEmptyState button, #looksmaxGuideContent button");
+            allBtns.forEach(b => { b.disabled = true; b.dataset.originalText = b.innerText; b.innerText = "📚 Oluşturuluyor... (biraz sürebilir)"; });
+
+            try {
+                const res = await fetch('/generate-looksmax-guide', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + currentUser.token }
+                });
+                const data = await res.json();
+                if (data.is_error || !data.guide) {
+                    alert("Rehber oluşturulamadı: " + (data.error_detail || "Bilinmeyen hata"));
+                    return;
+                }
+                renderLooksmaxGuide(data.guide, data.updated_at || new Date().toISOString());
+            } catch (err) {
+                alert("Sunucu bağlantı hatası: " + err.message);
+            } finally {
+                allBtns.forEach(b => { b.disabled = false; if (b.dataset.originalText) b.innerText = b.dataset.originalText; });
+            }
         }
 
         function removePhoto(event, slotKey) {
@@ -6850,6 +6947,167 @@ def save_nutrition_program_backend(payload: NutritionProgramSyncInput, username:
         logger.error(f"Beslenme programı yazma hatası ({username}): {e}")
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"detail": "server_error"})
+
+
+# ================= LOOKSMAX REHBERI (TUM PDF'LERDEN SENTEZLENEN, TEK/PAYLASILAN) =================
+LOOKSMAX_GUIDE_TOPIC_QUERIES = [
+    "cilt bakımı rutini gözenek ton temizlik",
+    "yüz simetrisi altın oran ölçüm estetik",
+    "çene hattı tanımlılık egzersiz mewing duruş",
+    "saç bakımı dökülme sağlıklı büyüme",
+    "duruş postür omuz düzeltme",
+    "beslenme makro görünüm vücut kompozisyonu etkisi",
+    "uyku kalitesi cilt toparlanma hormon",
+    "su tüketimi şişkinlik cilt görünüm",
+    "kaş kıl bakım yüz bölgesi tıraş",
+    "genel looksmax protokol öneri gelişim",
+]
+
+
+def generate_looksmax_guide_with_llm():
+    """Bilgi bankasindaki (yuklenen PDF'ler) TUM konulari tarayip, hicbirini
+    atlamadan kapsamli bir rehber/makale uretir. (content, kaynaklar, None)
+    basarili; (None, [], hata) basarisiz doner."""
+    if not client:
+        return None, [], "GROQ_API_KEY bulunamadı."
+
+    all_snippet_blocks = []
+    all_sources = set()
+    for query in LOOKSMAX_GUIDE_TOPIC_QUERIES:
+        snippets, sources = retrieve_knowledge_context(query, k=8)
+        if snippets:
+            all_snippet_blocks.append(snippets)
+        all_sources.update(sources)
+
+    combined_knowledge = "\n\n---\n\n".join(all_snippet_blocks)
+    if not combined_knowledge.strip():
+        return None, [], "Bilgi bankasında (yüklenen PDF'ler) hiç içerik bulunamadı. Önce knowledge_base klasörüne PDF ekleyip deploy etmen gerekiyor."
+
+    system_prompt = f"""Sen bir looksmax (gorunum gelisimi) uzmanisin. Sana asagida bilgi bankasindan
+(kullanicinin yukledigi PDF'lerden) cesitli konularda toplanmis pasajlar verilecek. Gorevin, BU
+ICERIKTEKI HER SEYI ATLAMADAN, kapsamli, iyi organize edilmis, DETAYLI bir "Looksmax Hakkında Her
+Şey" rehberi/makalesi yazmak - bu bir ozet DEGIL, PDF'lerdeki bilgiyi tam olarak aktaran bir rehber.
+
+KURALLAR:
+1. Verilen TUM bilgi bankasi icerigini kullan - hicbir konuyu/detayi atlamadan, kisaltip gecmeden.
+   Ayni bilgi birden fazla pasajda tekrar ediyorsa bir kere, en eksiksiz haliyle yaz.
+2. Markdown basliklarla (## Konu Basligi) mantikli bolumlere ayir - icerikte hangi konular varsa
+   (orn Cilt Bakimi, Cene/Simetri, Durus, Beslenme, Sac, Uyku, Genel Protokoller vb).
+3. Her bolumde somut, uygulanabilir bilgi ver - genel geçer laflar degil, PDF'lerdeki SPESIFIK
+   bilgiyi (sayilar, yontemler, adimlar varsa) aktar.
+4. SADECE TURKCE yaz.
+5. Tibbi tedavi/ilac/operasyon onerme, estetik/yasam tarzi odakli kal.
+6. Kaynak/dosya adi belirtme (orn "PDF'e gore" deme), bilgiyi dogrudan ver.
+7. UZUN VE DETAYLI yaz - kisaltma, atlama. Icerik ne kadar zenginse rehber de o kadar uzun olsun.
+
+BİLGİ BANKASI İÇERİĞİ (TÜMÜNÜ KULLAN):
+{combined_knowledge}"""
+
+    attempts = [(0.3, 7000), (0.15, 5000)]
+    last_error = "Bilinmeyen hata"
+
+    for temp, tokens in attempts:
+        active_model = get_best_available_model()
+        try:
+            completion = client.chat.completions.create(
+                messages=[{"role": "system", "content": system_prompt}],
+                model=active_model,
+                temperature=temp,
+                max_tokens=tokens,
+                **get_reasoning_effort_kwargs(active_model)
+            )
+            choice = completion.choices[0]
+            content = choice.message.content
+            finish_reason = getattr(choice, "finish_reason", None)
+            if not content or not content.strip():
+                raise ValueError(f"Model boş içerik döndürdü (model={active_model}, finish_reason={finish_reason}).")
+            return content.strip(), sorted(all_sources), None
+        except Exception as e:
+            error_str = str(e)
+            if is_rate_limit_error(error_str):
+                wait_s = extract_retry_after_seconds(error_str)
+                logger.warning(f"Looksmax rehberi - rate limit, {wait_s:.1f}s bekleniyor: {error_str}")
+                time.sleep(wait_s)
+                try:
+                    completion = client.chat.completions.create(
+                        messages=[{"role": "system", "content": system_prompt}],
+                        model=active_model,
+                        temperature=temp,
+                        max_tokens=tokens,
+                        **get_reasoning_effort_kwargs(active_model)
+                    )
+                    content = completion.choices[0].message.content
+                    if content and content.strip():
+                        return content.strip(), sorted(all_sources), None
+                except Exception as e2:
+                    last_error = str(e2)
+                    continue
+            last_error = error_str
+            logger.warning(f"Looksmax rehberi denemesi başarısız (model={active_model}): {e}")
+
+    logger.error(f"Looksmax rehberi üretim hatası: {last_error}")
+    traceback.print_exc()
+    return None, [], last_error
+
+
+@app.post("/generate-looksmax-guide")
+def generate_looksmax_guide(username: str = Depends(require_auth_username)):
+    if not client:
+        return {"guide": None, "is_error": True, "error_detail": "GROQ_API_KEY bulunamadı."}
+
+    content, sources, error_detail = generate_looksmax_guide_with_llm()
+    if not content:
+        return {
+            "guide": None,
+            "is_error": True,
+            "error_detail": f"Rehber oluşturulurken bir hata oluştu: {error_detail}" if error_detail
+                             else "Rehber oluşturulurken bir hata oluştu. Lütfen tekrar dene."
+        }
+
+    updated_at_iso = None
+    if AUTH_BACKEND_AVAILABLE:
+        try:
+            conn = get_auth_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO looksmax_guide (id, content, sources, updated_at)
+                    VALUES (1, %s, %s, now())
+                    ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, sources = EXCLUDED.sources, updated_at = now()
+                    RETURNING updated_at
+                """, (content, psycopg2.extras.Json(sources)))
+                row = cur.fetchone()
+                if row and row.get("updated_at"):
+                    updated_at_iso = row["updated_at"].isoformat()
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Looksmax rehberi kaydetme hatası: {e}")
+            traceback.print_exc()
+
+    return {"guide": content, "sources": sources, "updated_at": updated_at_iso, "is_error": False}
+
+
+@app.get("/api/looksmax-guide")
+def get_looksmax_guide(username: str = Depends(require_auth_username)):
+    if not AUTH_BACKEND_AVAILABLE:
+        return {"guide": None}
+    try:
+        conn = get_auth_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT content, sources, updated_at FROM looksmax_guide WHERE id = 1")
+            row = cur.fetchone()
+        conn.close()
+        if row:
+            return {
+                "guide": row["content"],
+                "sources": row["sources"],
+                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None
+            }
+        return {"guide": None}
+    except Exception as e:
+        logger.error(f"Looksmax rehberi okuma hatası: {e}")
+        traceback.print_exc()
+        return {"guide": None}
 
 
 
