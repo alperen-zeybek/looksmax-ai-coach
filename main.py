@@ -4,6 +4,7 @@ import re
 import secrets
 import base64
 import math
+import time
 import urllib.request
 import urllib.parse
 import logging
@@ -1231,6 +1232,26 @@ def compute_jaw_score_fallback_from_front(front_points: list) -> Dict[str, Any]:
 # NOT: Groq'un vision model lineup'i sik degisiyor - asagidaki liste web aramasiyla
 # DOGRULANMIS guncel bir modelle basliyor (Temmuz 2026 itibariyle), eskiler (artik
 # deprecated/retired) yedek olarak birakildi.
+def is_rate_limit_error(error_str: str) -> bool:
+    """Groq'un 429/TPM (tokens-per-minute) kota hatasini tanir - bu bir kod
+    hatasi degil, hesabin dakikalik token kotasinin dolmasidir, birkac saniye
+    icinde kendiliginden acilir."""
+    s = error_str.lower()
+    return "rate_limit_exceeded" in s or "429" in s or "rate limit reached" in s
+
+
+def extract_retry_after_seconds(error_str: str, default: float = 8.0, cap: float = 25.0) -> float:
+    """Groq hata mesajindaki 'Please try again in 17.02s' gibi bir ifadeden
+    bekleme suresini cikarir, bulamazsa varsayilan bir sure doner."""
+    match = re.search(r'try again in ([\d.]+)s', error_str)
+    if match:
+        try:
+            return min(float(match.group(1)) + 1.0, cap)
+        except ValueError:
+            pass
+    return default
+
+
 def get_reasoning_effort_kwargs(model_name: str) -> dict:
     """Bazi Groq modelleri (gpt-oss ailesi, qwen3 ailesi) varsayilan olarak
     'dusunme' (reasoning) moduna giriyor ve token butcesini gorunmez bir analiz
@@ -6198,43 +6219,58 @@ KURALLAR:
 11. ASLA açıklama, markdown, yorum ekleme. Sadece saf JSON döndür.
 """
 
+    def _attempt_workout_call(temp, tokens, active_model):
+        completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"{num_days} günlük programımı oluştur."}
+            ],
+            model=active_model,
+            # NOT: response_format=json_object BILINCLI OLARAK KULLANILMIYOR (bkz.
+            # generate_nutrition_program_with_llm'deki ayni aciklama - reasoning
+            # modelleriyle celisebiliyor). extract_json_object() ile esnek ayristiriyoruz.
+            temperature=temp,
+            max_tokens=tokens,
+            **get_reasoning_effort_kwargs(active_model)
+        )
+        choice = completion.choices[0]
+        raw_content = choice.message.content
+        finish_reason = getattr(choice, "finish_reason", None)
+        if not raw_content or not raw_content.strip():
+            raise ValueError(f"Model boş içerik döndürdü (model={active_model}, finish_reason={finish_reason}).")
+        parsed_json = extract_json_object(raw_content)
+        parsed_json = _sanitize_program_json(parsed_json)
+        data = WorkoutProgramResponse(**parsed_json)
+
+        if not data.days:
+            raise ValueError("LLM boş bir gün listesi döndürdü.")
+        if any(len(d.exercises) == 0 for d in data.days):
+            raise ValueError("LLM en az bir günü hareketsiz bıraktı.")
+        return data.model_dump()
+
     last_error = "Bilinmeyen hata"
     max_attempts = 2
 
     for attempt in range(1, max_attempts + 1):
         active_model = get_best_available_model()
+        temp = 0.4 if attempt == 1 else 0.15  # tekrar denemede daha tutarli/duz cikti icin sicakligi dusur
         try:
-            completion = client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"{num_days} günlük programımı oluştur."}
-                ],
-                model=active_model,
-                # NOT: response_format=json_object BILINCLI OLARAK KULLANILMIYOR (bkz.
-                # generate_nutrition_program_with_llm'deki ayni aciklama - reasoning
-                # modelleriyle celisebiliyor). extract_json_object() ile esnek ayristiriyoruz.
-                temperature=0.4 if attempt == 1 else 0.15,  # tekrar denemede daha tutarli/duz cikti icin sicakligi dusur
-                max_tokens=4000,
-                **get_reasoning_effort_kwargs(active_model)
-            )
-            choice = completion.choices[0]
-            raw_content = choice.message.content
-            finish_reason = getattr(choice, "finish_reason", None)
-            if not raw_content or not raw_content.strip():
-                raise ValueError(f"Model boş içerik döndürdü (model={active_model}, finish_reason={finish_reason}).")
-            parsed_json = extract_json_object(raw_content)
-            parsed_json = _sanitize_program_json(parsed_json)
-            data = WorkoutProgramResponse(**parsed_json)
-
-            if not data.days:
-                raise ValueError("LLM boş bir gün listesi döndürdü.")
-            if any(len(d.exercises) == 0 for d in data.days):
-                raise ValueError("LLM en az bir günü hareketsiz bıraktı.")
-
-            return data.model_dump(), knowledge_sources, None
-
+            result = _attempt_workout_call(temp, 4000, active_model)
+            return result, knowledge_sources, None
         except Exception as e:
-            last_error = str(e)
+            error_str = str(e)
+            if is_rate_limit_error(error_str):
+                wait_s = extract_retry_after_seconds(error_str)
+                logger.warning(f"Rate limit - {wait_s:.1f}s bekleyip otomatik tekrar denenecek: {error_str}")
+                time.sleep(wait_s)
+                try:
+                    result = _attempt_workout_call(temp, 4000, active_model)
+                    return result, knowledge_sources, None
+                except Exception as e2:
+                    last_error = str(e2)
+                    logger.warning(f"Rate limit sonrası tekrar deneme de başarısız: {e2}")
+                    continue
+            last_error = error_str
             logger.warning(f"Program üretim denemesi {attempt}/{max_attempts} başarısız (model={active_model}): {e}")
 
     logger.error(f"LLM Program Uretim Hatasi (tum denemeler basarisiz): {last_error}")
@@ -6388,39 +6424,57 @@ YENİ bir program oluştur. Toplam kalori/makroların hedefe ±%10 tolerans içi
 5. KISALIK: Her öğünde EN FAZLA 5 besin maddesi olsun, gereksiz uzatma — çıktı token bütçesine
    rahat sığmalı."""
 
+    def _attempt_nutrition_call(temp, tokens, active_model):
+        completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"{payload.target_calories:.0f} kcal hedefime göre beslenme programımı oluştur."}
+            ],
+            model=active_model,
+            # NOT: response_format=json_object BILINCLI OLARAK KULLANILMIYOR - bazi
+            # modeller (gpt-oss/qwen3 ailesi, "reasoning" moduna giriyor) bununla
+            # birlikte bos/gecersiz cikti donebiliyor (yuz analizinde tespit edildi).
+            # Bunun yerine JSON'u prompt uzerinden istiyoruz, extract_json_object()
+            # ile esnek ayristiriyoruz.
+            temperature=temp,
+            max_tokens=tokens,
+            **get_reasoning_effort_kwargs(active_model)
+        )
+        choice = completion.choices[0]
+        raw = choice.message.content
+        finish_reason = getattr(choice, "finish_reason", None)
+        if not raw or not raw.strip():
+            raise ValueError(f"Model boş içerik döndürdü (model={active_model}, finish_reason={finish_reason}).")
+        parsed = extract_json_object(raw)
+        data = NutritionProgramResponse(**parsed)
+        if not data.meals or len(data.meals) < 3:
+            raise ValueError(f"Eksik öğün listesi döndü (model={active_model}, finish_reason={finish_reason}).")
+        return data.model_dump()
+
     last_error = "Bilinmeyen hata"
     attempts = [(0.4, 6000), (0.15, 4500)]
 
     for attempt_num, (temp, tokens) in enumerate(attempts, start=1):
         active_model = get_best_available_model()
         try:
-            completion = client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"{payload.target_calories:.0f} kcal hedefime göre beslenme programımı oluştur."}
-                ],
-                model=active_model,
-                # NOT: response_format=json_object BILINCLI OLARAK KULLANILMIYOR - bazi
-                # modeller (gpt-oss/qwen3 ailesi, "reasoning" moduna giriyor) bununla
-                # birlikte bos/gecersiz cikti donebiliyor (yuz analizinde tespit edildi).
-                # Bunun yerine JSON'u prompt uzerinden istiyoruz, extract_json_object()
-                # ile esnek ayristiriyoruz.
-                temperature=temp,
-                max_tokens=tokens,
-                **get_reasoning_effort_kwargs(active_model)
-            )
-            choice = completion.choices[0]
-            raw = choice.message.content
-            finish_reason = getattr(choice, "finish_reason", None)
-            if not raw or not raw.strip():
-                raise ValueError(f"Model boş içerik döndürdü (model={active_model}, finish_reason={finish_reason}).")
-            parsed = extract_json_object(raw)
-            data = NutritionProgramResponse(**parsed)
-            if not data.meals or len(data.meals) < 3:
-                raise ValueError(f"Eksik öğün listesi döndü (model={active_model}, finish_reason={finish_reason}).")
-            return data.model_dump(), knowledge_sources, None
+            result = _attempt_nutrition_call(temp, tokens, active_model)
+            return result, knowledge_sources, None
         except Exception as e:
-            last_error = str(e)
+            error_str = str(e)
+            if is_rate_limit_error(error_str):
+                # Bu bir kod hatasi degil, hesabin dakikalik token kotasi dolmus -
+                # Groq'un bildirdigi sureyi bekleyip AYNI denemeyi otomatik tekrarla.
+                wait_s = extract_retry_after_seconds(error_str)
+                logger.warning(f"Rate limit - {wait_s:.1f}s bekleyip otomatik tekrar denenecek: {error_str}")
+                time.sleep(wait_s)
+                try:
+                    result = _attempt_nutrition_call(temp, tokens, active_model)
+                    return result, knowledge_sources, None
+                except Exception as e2:
+                    last_error = str(e2)
+                    logger.warning(f"Rate limit sonrası tekrar deneme de başarısız: {e2}")
+                    continue
+            last_error = error_str
             logger.warning(f"Beslenme programı denemesi {attempt_num}/{len(attempts)} başarısız (model={active_model}): {e}")
 
     logger.error(f"Beslenme programı üretim hatası (tüm denemeler başarısız): {last_error}")
