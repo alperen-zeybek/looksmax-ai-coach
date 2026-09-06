@@ -1082,7 +1082,13 @@ def _rotate_points_to_level_eyes(points: list) -> list:
 
 def compute_symmetry_score(points: list) -> Dict[str, Any]:
     """On yuz fotografindan sol-sag landmark ciftlerinin dikey orta hatta olan
-    uzakliklarini karsilastirarak bir simetri puani (0-10) hesaplar."""
+    uzakliklarini karsilastirarak bir simetri puani (0-10) hesaplar.
+    KALIBRASYON NOTU: Ilk versiyon dogrusal bir olcek kullaniyordu (her %2 sapma
+    icin 1 puan), ama 3 gercek referans yuzle (Chico Lachowski %3.14, Jordan
+    Barrett %4.83, Drew Starkey %10.17) test edince bu olcegin gercekci/normal
+    seviyedeki sapmalar icin FAZLA SERT oldugu ortaya cikti - gercek bir insan
+    yuzunde (mukemmel stüdyo kosullari disinda) %8-12 sapma sasirtici degil,
+    bu "kotu simetri" degil normal varyasyon. Tolerans bandi eklendi."""
     try:
         points = _rotate_points_to_level_eyes(points)  # once kafa egikligini (roll) duzelt
 
@@ -1111,9 +1117,12 @@ def compute_symmetry_score(points: list) -> Dict[str, Any]:
             return {"score": 5.0, "avg_deviation_pct": None}
 
         avg_deviation = sum(deviations) / len(deviations)
-        # Her %2'lik ortalama sapma icin 1 puan dus (esik degeri kalibrasyon gerektirebilir)
-        score = max(0.0, min(10.0, 10.0 - (avg_deviation / 2.0)))
-        return {"score": round(score, 1), "avg_deviation_pct": round(avg_deviation, 2)}
+        symmetry_tolerance = 6.0  # bu esigin altindaki sapma dogal/normal kabul edilir
+        if avg_deviation <= symmetry_tolerance:
+            score = 10.0 - (avg_deviation / symmetry_tolerance) * 2.0  # tolerans icinde 8-10
+        else:
+            score = max(0.0, 8.0 - (avg_deviation - symmetry_tolerance) * 0.4)  # sonrasi daha yumusak duser
+        return {"score": round(max(0.0, min(10.0, score)), 1), "avg_deviation_pct": round(avg_deviation, 2)}
     except Exception as e:
         logger.error(f"Simetri hesaplama hatasi: {e}")
         return {"score": 5.0, "avg_deviation_pct": None}
@@ -1158,16 +1167,19 @@ def compute_proportion_score(points: list) -> Dict[str, Any]:
         ]
         avg_third = sum(thirds) / 3.0
         thirds_variance_pct = ((max(thirds) - min(thirds)) / avg_third * 100.0) if avg_third > 1e-6 else 0.0
-        # LM_NOSE_BRIDGE gercek kas hizasindan biraz asagida oldugu icin ilk
-        # uctebir dogal olarak kisa olculuyor - tolerans buna gore genis
-        # tutuldu (referans testte %31.6 cikti, bunu 'iyi' kabul ediyoruz).
         thirds_tolerance = 35.0
         if thirds_variance_pct <= thirds_tolerance:
             thirds_score = 10.0 - (thirds_variance_pct / thirds_tolerance) * 2.0
         else:
             thirds_score = max(0.0, 8.0 - (thirds_variance_pct - thirds_tolerance) / 5)
 
-        score = max(0.0, min(10.0, round((ratio_score + thirds_score) / 2.0, 1)))
+        # AGIRLIK NOTU: "thirds" alt-olcumu iki gercek referans yuzde (Chico %31.6,
+        # Drew Starkey %51.7) birbirinden COK farkli sonuclar verdi - bu, kullanilan
+        # landmark proxy'lerinin (nose bridge = "kas hizasi" degil) olcumu guvenilmez
+        # kildigini gosteriyor. Daha fazla toleransla "duzeltmeye" calismak yerine,
+        # bu alt-metrigin AGIRLIGINI dusurup daha tutarli olan yukseklik/genislik
+        # oranina daha fazla agirlik verdik.
+        score = max(0.0, min(10.0, round((ratio_score * 0.7 + thirds_score * 0.3), 1)))
 
         return {
             "score": score,
@@ -1335,10 +1347,13 @@ class FaceLLMAnalysis(BaseModel):
     rejection_reason: Optional[str] = Field(default="", description="is_human_face=false ise KISA sebep (orn 'Bu bir hayvan fotografi'), true ise bos birak")
     skin_score: float = Field(description="Fotograftan gorsel degerlendirmeye dayali 0-10 arasi cilt puani")
     skin_summary: str = Field(description="Cildin gorsel degerlendirmesi, 1-2 cumle")
+    symmetry_score_visual: float = Field(description="SADECE FOTOGRAFA BAKARAK (verilen geometrik sayidan BAGIMSIZ), yuzun genel simetrisini gozle degerlendirip verdigin 0-10 puan")
     symmetry_summary: str = Field(description="Verilen simetri sayisal bulgusunun yorumu, 1-2 cumle")
     jaw_score_visual: float = Field(description="SADECE FOTOGRAFA BAKARAK (geometrik olcumden BAGIMSIZ), cene hattinin tanimliligini/keskinligini/gonial acisini gozle degerlendirip verdigin 0-10 puan")
     jaw_summary: str = Field(description="Verilen cene sayisal bulgusunun yorumu, 1-2 cumle")
+    proportion_score_visual: float = Field(description="SADECE FOTOGRAFA BAKARAK (geometrik olcumden BAGIMSIZ), yuz oranlarinin/dengesinin genel gorsel uyumunu degerlendirip verdigin 0-10 puan")
     proportion_summary: str = Field(description="Verilen oran sayisal bulgusunun yorumu, 1-2 cumle")
+    weakest_area: str = Field(description="Dort metrikten (simetri/cene/oran/cilt) EN DUSUK puanli olan(lar)in adi/adlari, virgulle ayrilmis (orn 'cilt' ya da 'cilt, simetri')")
     protocol: List[FaceProtocolItem]
 
 
@@ -1382,7 +1397,8 @@ def generate_face_protocol_with_llm(front_image_b64: str, symmetry_data: dict, p
 
     json_example = (
         '{"is_human_face": true, "rejection_reason": "", "skin_score": 7, "skin_summary": "...", '
-        '"symmetry_summary": "...", "jaw_score_visual": 6, "jaw_summary": "...", "proportion_summary": "...", '
+        '"symmetry_score_visual": 7, "symmetry_summary": "...", "jaw_score_visual": 6, "jaw_summary": "...", '
+        '"proportion_score_visual": 7, "proportion_summary": "...", "weakest_area": "cilt", '
         '"protocol": [{"title": "...", "description": "...", "category": "cilt"}]}'
     )
 
@@ -1399,15 +1415,18 @@ formatinda, tam olarak su sekilde bir cikti vermek (ornek sema): {json_example}
    adimlara devam et.
 1. (SADECE is_human_face=true ise) Fotograftan cildin gorsel durumunu (ton esitligi, parlaklik,
    gozeneklilik, kizariklik gibi gozle gorulur ipuclarindan) degerlendirip 0-10 arasi bir "skin_score" ver.
-2. (SADECE is_human_face=true ise) Cene hattina SADECE FOTOGRAFA BAKARAK, gonial aci/tanimlılık/
-   keskinlik acisindan bagimsiz bir gorsel deger bicerek "jaw_score_visual" (0-10) ver - verilen
-   geometrik cene puanindan ETKILENME, bu ayrica capraz kontrol icin isteniyor cunku geometrik
-   formul sinirli sayida referansla kalibre edildi ve tek basina guvenilir degil.
+2. (SADECE is_human_face=true ise) Asagidaki UC metrik icin de SADECE FOTOGRAFA BAKARAK, verilen
+   geometrik sayidan TAMAMEN BAGIMSIZ kendi gorsel tahminini ver: "symmetry_score_visual" (yuzun
+   genel simetrisi), "jaw_score_visual" (cene hattinin tanimliligi/keskinligi), "proportion_score_visual"
+   (yuz oranlarinin genel gorsel uyumu). Bunlar CAPRAZ KONTROL icin isteniyor cunku geometrik
+   formuller sinirli sayida referansla kalibre edildi ve tek basina guvenilir degil - senin bagimsiz
+   gorsel yargın nihai puanla harmanlanacak.
 3. (SADECE is_human_face=true ise) Asagidaki geometrik bulgulari kisa, anlasilir cumlelerle yorumla.
-4. (SADECE is_human_face=true ise) Bilgi bankasindaki icerige dayanarak (varsa) kisiye ozel,
-   UYGULANABILIR VE CESITLI protokol onerileri sun - sadece cilt degil, simetri/cene/oran/genel
-   gorunum icin de somut, farkli kategorilerden (cilt, duruş, çene egzersizi, saç/kaş, yaşam tarzı,
-   beslenme) tavsiyeler ver.
+4. (SADECE is_human_face=true ise) Dort metrikten (simetri/cene/oran/cilt) hangisi/hangileri EN
+   DUSUK puanli, onu/onlari "weakest_area" alanina yaz.
+5. (SADECE is_human_face=true ise) Bilgi bankasindaki icerige dayanarak (varsa) kisiye ozel,
+   UYGULANABILIR VE CESITLI protokol onerileri sun - EN DUSUK puanli alan(lar)a ONCELIK ver, geri
+   kalanini diger alanlardan (cilt, duruş, çene egzersizi, saç/kaş, yaşam tarzı, beslenme) doldur.
 
 {findings_block}
 KURALLAR:
@@ -1424,9 +1443,11 @@ KURALLAR:
     simple_system_prompt = f"""Yuz estetigi uzmanisin. YALNIZCA su JSON semasina uygun bir cikti ver: {json_example}
 ONCE KONTROL ET: fotografta gercek bir insan yuzu yoksa (hayvan/cizim/obje/bulanik ise) is_human_face=false
 yap, rejection_reason'a kisa sebep yaz, diger alanlari bos/0 birak, analiz yapma.
-Insan yuzuyse: Bulgular: Simetri={symmetry_data.get('score')}/10, Oran={proportion_data.get('score')}/10, Çene(geometrik)={jaw_data.get('score')}/10.
-Fotograftaki cilde ve cene hattina bagimsiz bakip skin_score ve jaw_score_visual (0-10) ver. Her ozet
-alani 1-2 kisa cumle. protocol dizisinde 4-5 madde, farkli kategorilerden (cilt/duruş/beslenme/egzersiz).
+Insan yuzuyse: Bulgular: Simetri(geometrik)={symmetry_data.get('score')}/10, Oran(geometrik)={proportion_data.get('score')}/10, Çene(geometrik)={jaw_data.get('score')}/10.
+Fotograftaki cilde, simetriye, cene hattina ve orana BAGIMSIZ bakip skin_score, symmetry_score_visual,
+jaw_score_visual, proportion_score_visual (hepsi 0-10) ver. weakest_area'ya en dusuk metrigi yaz.
+Her ozet alani 1-2 kisa cumle. protocol dizisinde 4-5 madde (en dusuk alana oncelik), farkli
+kategorilerden (cilt/duruş/beslenme/egzersiz).
 SADECE TÜRKÇE ve SADECE JSON yaz, baska hicbir sey ekleme."""
 
     # Frontend zaten tam bir data URI gonderiyor (data:image/jpeg;base64,...) -
@@ -1436,8 +1457,8 @@ SADECE TÜRKÇE ve SADECE JSON yaz, baska hicbir sey ekleme."""
 
     last_error = "Bilinmeyen hata"
     attempts = [
-        (full_system_prompt, 3500, 0.3),
-        (simple_system_prompt, 2200, 0.1),  # ilk deneme basarisiz olursa: daha kisa/basit prompt, daha dusuk sicaklik
+        (full_system_prompt, 4000, 0.3),
+        (simple_system_prompt, 2500, 0.1),  # ilk deneme basarisiz olursa: daha kisa/basit prompt, daha dusuk sicaklik
     ]
 
     for prompt_text, token_budget, temp in attempts:
@@ -2437,6 +2458,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                         <span class="badge-cyan" id="faceOverallScoreBadge">--/10</span>
                     </div>
                     <div id="faceYawWarningBox" style="display:none; font-size:0.75rem; color:#f59e0b; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.3); border-radius:9px; padding:8px 10px;"></div>
+                    <div id="faceMethodologyNote" style="font-size:0.7rem; color:#6b7280; background:#0a0c10; border:1px solid #1c2230; border-radius:9px; padding:8px 10px;"></div>
 
                     <div id="faceResultEmptyState" style="text-align:center; padding:40px; color:#6b7280;">
                         <div style="font-size:2rem; margin-bottom:8px;">📐</div>
@@ -2473,6 +2495,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
                         <div class="panel-header" style="font-size:0.85rem; margin-top:4px;">
                             <span>💡 Protokol Önerileri</span>
+                            <span class="badge-cyan" id="faceWeakestAreaBadge" style="display:none;"></span>
                         </div>
                         <div class="history-list" id="faceProtocolList" style="max-height:none;"></div>
                     </div>
@@ -4029,6 +4052,11 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             document.getElementById("faceScoreProportion").innerText = `${result.proportion.score}/10`;
             document.getElementById("faceScoreSkin").innerText = `${result.skin.score}/10`;
 
+            const methodologyBox = document.getElementById("faceMethodologyNote");
+            if (methodologyBox) {
+                methodologyBox.innerText = result.methodology_note || "";
+            }
+
             if (result.jaw.raw && result.jaw.raw.is_fallback) {
                 document.getElementById("faceScoreJaw").innerHTML += ` <span style="font-size:0.6rem; color:#f59e0b;" title="Yan profil tespit edilemedi, ön fotoğraftan kaba tahmin">⚠️</span>`;
             }
@@ -4066,11 +4094,22 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                 const prop = result.proportion.raw || {};
                 const jaw = result.jaw.raw || {};
                 rawBox.innerHTML = `
-                    <div>Simetri ortalama sapma: %${sym.avg_deviation_pct ?? '-'}</div>
-                    <div>Yükseklik/genişlik oranı: ${prop.height_width_ratio ?? '-'} (altın oran hedefi: 1.618, sapma: %${prop.golden_ratio_deviation_pct ?? '-'})</div>
+                    <div>Simetri ortalama sapma: %${sym.avg_deviation_pct ?? '-'} — Geometrik: ${sym.geometric_score ?? '-'}/10, Görsel (AI): ${sym.visual_score ?? '-'}/10</div>
+                    <div>Yükseklik/genişlik oranı: ${prop.height_width_ratio ?? '-'} (altın oran hedefi: 1.618) — Geometrik: ${prop.geometric_score ?? '-'}/10, Görsel (AI): ${prop.visual_score ?? '-'}/10</div>
                     <div>Yüz üçte-bir dengesizliği: %${prop.thirds_variance_pct ?? '-'}</div>
-                    <div>Çene oranı (jaw_ratio): ${jaw.jaw_ratio ?? '-'} — Geometrik: ${jaw.geometric_score ?? '-'}/10, Görsel (AI): ${jaw.visual_score ?? '-'}/10 (gösterilen puan bu ikisinin ortalaması)</div>
+                    <div>Çene oranı (jaw_ratio): ${jaw.jaw_ratio ?? '-'} — Geometrik: ${jaw.geometric_score ?? '-'}/10, Görsel (AI): ${jaw.visual_score ?? '-'}/10</div>
+                    <div style="margin-top:6px; color:#6b7280;">Gösterilen puanlar, geometrik hesaplama ile AI'nin bağımsız görsel değerlendirmesinin ortalamasıdır.</div>
                 `;
+            }
+
+            const weakestBadge = document.getElementById("faceWeakestAreaBadge");
+            if (weakestBadge) {
+                if (result.weakest_area) {
+                    weakestBadge.style.display = "inline-block";
+                    weakestBadge.innerText = `Odak: ${result.weakest_area}`;
+                } else {
+                    weakestBadge.style.display = "none";
+                }
             }
 
             const protocolList = document.getElementById("faceProtocolList");
@@ -5794,39 +5833,61 @@ def analyze_face(payload: FaceAnalysisInput, username: str = Depends(require_aut
         llm_result = {
             "skin_score": 5.0,
             "skin_summary": f"Cilt değerlendirmesi şu an yapılamadı (AI servis hatası: {llm_error}).",
+            "symmetry_score_visual": None,
             "symmetry_summary": "",
             "jaw_score_visual": None,
             "jaw_summary": "",
+            "proportion_score_visual": None,
             "proportion_summary": "",
             "protocol": []
         }
 
-    # ONEMLI: Cene puanini SADECE geometrik formule birakmiyoruz - bu formul cok
-    # az sayida (2) referans yuzle kalibre edildigi icin ortalama/zayif cene
-    # hatlarini ayirt etme gucu zayif olabilir. LLM'in fotografa bakarak verdigi
-    # BAGIMSIZ gorsel tahminle (jaw_score_visual) harmanlayip daha dengeli bir
-    # sonuc elde ediyoruz.
+    # ONEMLI: Hicbir metrigi SADECE geometrik formule birakmiyoruz - bu formuller
+    # cok az sayida referans yuzle kalibre edildigi icin (2-3 veri noktasi) tek
+    # basina guvenilir degil. LLM'in fotografa bagimsiz bakarak verdigi gorsel
+    # tahminle harmanlayip daha dengeli bir sonuc elde ediyoruz.
+    def _blend(geometric_score, visual_score):
+        if isinstance(visual_score, (int, float)) and 0 <= visual_score <= 10:
+            return round((geometric_score + visual_score) / 2.0, 1)
+        return geometric_score
+
+    symmetry_score_visual = llm_result.get("symmetry_score_visual")
     jaw_score_visual = llm_result.get("jaw_score_visual")
-    if isinstance(jaw_score_visual, (int, float)) and 0 <= jaw_score_visual <= 10:
-        blended_jaw_score = round((jaw_data["score"] + jaw_score_visual) / 2.0, 1)
-    else:
-        blended_jaw_score = jaw_data["score"]
+    proportion_score_visual = llm_result.get("proportion_score_visual")
+
+    blended_symmetry_score = _blend(symmetry_data["score"], symmetry_score_visual)
+    blended_jaw_score = _blend(jaw_data["score"], jaw_score_visual)
+    blended_proportion_score = _blend(proportion_data["score"], proportion_score_visual)
 
     overall_score = round(
-        (symmetry_data["score"] + proportion_data["score"] + blended_jaw_score + llm_result["skin_score"]) / 4.0, 1
+        (blended_symmetry_score + blended_proportion_score + blended_jaw_score + llm_result["skin_score"]) / 4.0, 1
     )
 
     result = {
         "overall_score": overall_score,
-        "symmetry": {"score": symmetry_data["score"], "summary": llm_result["symmetry_summary"], "raw": symmetry_data},
+        "methodology_note": (
+            "Bu puanlar kesin bir ölçüm değil, yönlendirici bir tahmindir — geometrik hesaplama ile "
+            "AI'nin bağımsız görsel değerlendirmesinin ortalamasıdır. Poz, ışık ve açı sonucu belirgin "
+            "şekilde etkileyebilir; aynı yüz farklı fotoğraflarda farklı puan alabilir."
+        ),
+        "symmetry": {
+            "score": blended_symmetry_score,
+            "summary": llm_result["symmetry_summary"],
+            "raw": {**symmetry_data, "geometric_score": symmetry_data["score"], "visual_score": symmetry_score_visual}
+        },
         "jaw": {
             "score": blended_jaw_score,
             "summary": llm_result["jaw_summary"],
             "raw": {**jaw_data, "geometric_score": jaw_data["score"], "visual_score": jaw_score_visual}
         },
-        "proportion": {"score": proportion_data["score"], "summary": llm_result["proportion_summary"], "raw": proportion_data},
+        "proportion": {
+            "score": blended_proportion_score,
+            "summary": llm_result["proportion_summary"],
+            "raw": {**proportion_data, "geometric_score": proportion_data["score"], "visual_score": proportion_score_visual}
+        },
         "skin": {"score": llm_result["skin_score"], "summary": llm_result["skin_summary"]},
         "protocol": llm_result["protocol"],
+        "weakest_area": llm_result.get("weakest_area", ""),
     }
     if yaw_severity_pct > 12:
         result["yaw_warning"] = (
