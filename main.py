@@ -6141,6 +6141,43 @@ def _sanitize_nutrition_json(parsed_json: Dict[str, Any]) -> Dict[str, Any]:
     return parsed_json
 
 
+_CARB_SOURCE_PATTERNS = [
+    re.compile(r'pirin[cç]', re.IGNORECASE),
+    re.compile(r'makarna', re.IGNORECASE),
+    re.compile(r'patates', re.IGNORECASE),
+    re.compile(r'bulgur', re.IGNORECASE),
+]
+_BREAKFAST_FORBIDDEN_PATTERNS = [
+    re.compile(r'tavuk', re.IGNORECASE),
+    re.compile(r'hindi', re.IGNORECASE),
+    re.compile(r'k[ıi]rm[ıi]z[ıi]\s*et', re.IGNORECASE),
+    re.compile(r'ton\s*bal[ıi][ğg]', re.IGNORECASE),
+]
+
+
+def _validate_nutrition_program_structure(parsed_json: Dict[str, Any]) -> Optional[str]:
+    """Model bazen kurallara ragmen kahvaltiya et koyuyor ya da tek ogunde
+    birden fazla karbonhidrat kaynagini (orn hem pirinc hem patates) birlikte
+    kullaniyordu. Bu bir ihlal tespit ederse kisa bir hata mesaji doner (None
+    ise sorun yok) - cagiran yer bunu yakalayip retry dongusune sokuyor,
+    boylece hatali program sessizce kullaniciya gitmiyor."""
+    for meal in parsed_json.get("meals", []):
+        meal_name = meal.get("meal_name", "") or ""
+        items = meal.get("items", [])
+        item_names = [it.get("name", "") for it in items if isinstance(it.get("name"), str)]
+
+        if "kahvalt" in meal_name.lower():
+            for name in item_names:
+                if any(p.search(name) for p in _BREAKFAST_FORBIDDEN_PATTERNS):
+                    return f"Kahvaltıda et/tavuk/balık kullanılmış ('{name}') - bu kesinlikle yasak."
+
+        carb_matches = [name for name in item_names if any(p.search(name) for p in _CARB_SOURCE_PATTERNS)]
+        if len(carb_matches) > 1:
+            return f"'{meal_name}' öğününde birden fazla karbonhidrat kaynağı kullanılmış ({', '.join(carb_matches)}) - sadece 1 tane olmalı."
+
+    return None
+
+
 def _sanitize_program_json(parsed_json: Dict[str, Any]) -> Dict[str, Any]:
     """LLM ciktisindaki kucuk format sapmalarini (sets stringi, eksik note,
     reps'in sayi olarak gelmesi vb.) pydantic validasyonundan ONCE duzeltir.
@@ -6439,11 +6476,15 @@ UYDURMA, "hedef"/"ogunler"/"kalori" gibi isimler DEGIL, tam olarak bu ornekteki 
 HEDEF: {payload.target_calories:.0f} kcal, {payload.target_protein:.0f}g protein, {payload.target_carbs:.0f}g karbonhidrat, {payload.target_fat:.0f}g yag
 KULLANICI HEDEFI (bulk/cut/recomp): {payload.goal or 'belirtilmedi'}
 
-ZORUNLU OGUN PATERNI:
-- KAHVALTI: Tam bugdayli ekmek VEYA yulaf + bir yumurta varyanti (orn "5 beyaz 1 sari" gibi acikca
-  belirt) + genelde bir yag/kuruyemis kaynagi (fistik ezmesi vb) + bazen bir meyve (muz gibi).
-- OGLE ve AKSAM: Bir protein kaynagi + bir karbonhidrat kaynagi + bir kuruyemis + zeytinyagi +
-  cogunlukla bir meyve + HER IKISINDE DE buyuk bir karisik salata.
+ZORUNLU OGUN PATERNI (BU KURALLARI HARFİYEN UYGULA, İHLAL EDERSEN PROGRAM REDDEDİLİR):
+- KAHVALTI: SADECE tam bugdayli ekmek VEYA yulaf + bir yumurta varyanti (orn "5 beyaz 1 sari" gibi
+  acikca belirt) + genelde bir yag/kuruyemis kaynagi (fistik ezmesi vb) + bazen bir meyve (muz gibi).
+  KAHVALTIDA TAVUK/HINDI/KIRMIZI ET/TON BALIGI KESINLIKLE YASAK - bunlar SADECE ogle/aksamda olur.
+- OGLE ve AKSAM: Bir protein kaynagi + TAM OLARAK BIR (1) karbonhidrat kaynagi (pirinc VEYA makarna
+  VEYA patates - ASLA IKISI BIRDEN) + bir kuruyemis + zeytinyagi + cogunlukla bir meyve + HER IKISINDE
+  DE buyuk bir karisik salata.
+  YANLIŞ ÖRNEK (ASLA BÖYLE YAPMA): Öğle yemeğinde hem "Pirinç" hem "Patates" birlikte, ya da Akşam
+  yemeğinde hem "Makarna" hem "Pirinç" birlikte - BU KESINLIKLE YASAK, tek bir karbonhidrat kaynagi sec.
 
 IZIN VERILEN BESIN KAYNAKLARI (SADECE BUNLARI KULLAN, baska besin onerme):
 - PROTEIN: Tavuk, Hindi, Yagsiz Kirmizi Et (haftada en fazla 2 kez), Light Ton Baligi (haftada en fazla 2 kez)
@@ -6454,6 +6495,21 @@ IZIN VERILEN BESIN KAYNAKLARI (SADECE BUNLARI KULLAN, baska besin onerme):
 - ICECEKLER onerilmez (program sadece katı gida ogunlerini icerir), ama YASAK: sut, ayran
 - SALATA: Marul, Semizotu, Dereotu, Ceri domates, Salatalik, Havuc, Siyah/mor lahana, Kivircik,
   Maydonoz, Sogan - her ogunun yaninda, kalorisi ihmal edilebilir kabul et (makro hesabina katma)
+
+KULLANICININ KENDI DOGRULADIGI, BIREBIR CIG AGIRLIK ORNEK PATERNLERI (bunlardaki HER gram degeri
+%100 CIG agirliktir, hicbir donusum/pismis mantigi YOK - bu ornekteki SAYI BUYUKLUKLERINI (orn
+80-125g araligi pirinc/makarna icin, 150-200g araligi tavuk/hindi icin) referans al, kendi hedef
+kalorine gore olcekle):
+
+Örnek 1 (~2700 kcal): Kahvaltı: 2 yumurta sarısı + 4 beyazı, 100g tam buğday ekmek, 100g muz, 40g
+fıstık ezmesi, 10g zeytinyağı. Öğle: 150g tavuk, 125g tam buğdaylı makarna (ÇİĞ), 100g yeşil elma,
+100g brokoli, 25g badem, 10g zeytinyağı. Akşam: 150g tavuk, 125g pirinç (ÇİĞ), 100g kivi, 100g
+brokoli, 30g badem, 10g zeytinyağı.
+
+Örnek 2 (~2000 kcal): Kahvaltı: 5 yumurta beyazı + 1 sarısı, 100g muz, 50g yulaf, 20g fıstık ezmesi,
+5g zeytinyağı. Öğle: 150g tavuk, 80g pirinç (ÇİĞ), 5g keten tohumu, 150g karışık salata, 15g ceviz,
+10g zeytinyağı. Akşam: 150g tavuk, 80g pirinç (ÇİĞ), 100g meyve, 150g karışık salata, 5g keten
+tohumu, 10g zeytinyağı.
 
 DIGER KURALLAR:
 - TUM besinler CIG AGIRLIK (pismemis, cig haldeki agirlik) olarak hesaplanmali. Verdigin HER gram
@@ -6504,6 +6560,9 @@ YENİ bir program oluştur. Toplam kalori/makroların hedefe ±%10 tolerans içi
             raise ValueError(f"Model boş içerik döndürdü (model={active_model}, finish_reason={finish_reason}).")
         parsed = extract_json_object(raw)
         parsed = _sanitize_nutrition_json(parsed)
+        structure_error = _validate_nutrition_program_structure(parsed)
+        if structure_error:
+            raise ValueError(f"{structure_error} (model={active_model})")
         data = NutritionProgramResponse(**parsed)
         if not data.meals or len(data.meals) < 3:
             raise ValueError(f"Eksik öğün listesi döndü (model={active_model}, finish_reason={finish_reason}).")
