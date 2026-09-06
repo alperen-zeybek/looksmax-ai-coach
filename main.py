@@ -6120,6 +6120,9 @@ _COOKED_TO_RAW_DIVISORS = [
 _COOKING_OIL_PATTERN = re.compile(r'zeytinya[ğg]|hindistan cevizi ya[ğg]|badem ya[ğg]|f[ıi]nd[ıi]k ya[ğg]', re.IGNORECASE)
 MIN_COOKING_OIL_GRAMS = 5.0
 
+_FRUIT_PATTERN = re.compile(r'\bmuz\b|\belma\b|\bkivi\b|\bportakal\b|\bmeyve\b|\bçilek\b|\bcilek\b|\bmandalina\b|\barmut\b', re.IGNORECASE)
+MIN_FRUIT_GRAMS = 80.0
+
 
 def _sanitize_nutrition_json(parsed_json: Dict[str, Any]) -> Dict[str, Any]:
     """Model kurala ragmen bazen item ismine '(pismis)' etiketi ekleyip GRAMAJI
@@ -6151,6 +6154,13 @@ def _sanitize_nutrition_json(parsed_json: Dict[str, Any]) -> Dict[str, Any]:
                         item["grams"] = MIN_COOKING_OIL_GRAMS
                 except (TypeError, ValueError):
                     pass
+
+            if _FRUIT_PATTERN.search(name):
+                try:
+                    if float(item.get("grams", 0)) < MIN_FRUIT_GRAMS:
+                        item["grams"] = MIN_FRUIT_GRAMS
+                except (TypeError, ValueError):
+                    pass
     return parsed_json
 
 
@@ -6168,12 +6178,17 @@ _BREAKFAST_FORBIDDEN_PATTERNS = [
 ]
 
 
-def _validate_nutrition_program_structure(parsed_json: Dict[str, Any]) -> Optional[str]:
-    """Model bazen kurallara ragmen kahvaltiya et koyuyor ya da tek ogunde
-    birden fazla karbonhidrat kaynagini (orn hem pirinc hem patates) birlikte
-    kullaniyordu. Bu bir ihlal tespit ederse kisa bir hata mesaji doner (None
-    ise sorun yok) - cagiran yer bunu yakalayip retry dongusune sokuyor,
-    boylece hatali program sessizce kullaniciya gitmiyor."""
+def _validate_nutrition_program_structure(parsed_json: Dict[str, Any], target_calories: float = 0) -> Optional[str]:
+    """Model bazen kurallara ragmen kahvaltiya et koyuyor, tek ogunde birden
+    fazla karbonhidrat kaynagini (orn hem pirinc hem patates) birlikte
+    kullaniyor, ayni meyveyi gunun 3 ogunune kucuk parcalar halinde
+    bolustuyordu (orn 20g+20g+20g muz), ya da toplam kaloriyi hedefin belirgin
+    altinda birakiyordu (orn ~100 kcal eksik). Bu bir ihlal tespit ederse kisa
+    bir hata mesaji doner (None ise sorun yok) - cagiran yer bunu yakalayip
+    retry dongusune sokuyor, boylece hatali program sessizce kullaniciya gitmiyor."""
+    total_fruit_servings = 0
+    total_calories_sum = 0.0
+
     for meal in parsed_json.get("meals", []):
         meal_name = meal.get("meal_name", "") or ""
         items = meal.get("items", [])
@@ -6187,6 +6202,19 @@ def _validate_nutrition_program_structure(parsed_json: Dict[str, Any]) -> Option
         carb_matches = [name for name in item_names if any(p.search(name) for p in _CARB_SOURCE_PATTERNS)]
         if len(carb_matches) > 1:
             return f"'{meal_name}' öğününde birden fazla karbonhidrat kaynağı kullanılmış ({', '.join(carb_matches)}) - sadece 1 tane olmalı."
+
+        total_fruit_servings += sum(1 for name in item_names if _FRUIT_PATTERN.search(name))
+        try:
+            total_calories_sum += float(meal.get("total_calories", 0) or 0)
+        except (TypeError, ValueError):
+            pass
+
+    if total_fruit_servings > 2:
+        return f"Günde {total_fruit_servings} ayrı meyve porsiyonu kullanılmış - en fazla 2 olmalı, aynı meyveyi öğünlere bölüştürme."
+
+    if target_calories > 0 and total_calories_sum < target_calories * 0.95:
+        return (f"Toplam kalori ({total_calories_sum:.0f} kcal) hedefin ({target_calories:.0f} kcal) "
+                f"belirgin altında kalmış - porsiyonları büyüterek hedefe yaklaş.")
 
     return None
 
@@ -6498,6 +6526,11 @@ ZORUNLU OGUN PATERNI (BU KURALLARI HARFİYEN UYGULA, İHLAL EDERSEN PROGRAM REDD
   DE buyuk bir karisik salata.
   YANLIŞ ÖRNEK (ASLA BÖYLE YAPMA): Öğle yemeğinde hem "Pirinç" hem "Patates" birlikte, ya da Akşam
   yemeğinde hem "Makarna" hem "Pirinç" birlikte - BU KESINLIKLE YASAK, tek bir karbonhidrat kaynagi sec.
+- MEYVE KURALI: Meyveyi HER ZAMAN gerçekçi, TEK PARÇA bir porsiyon olarak ver (orn "1 muz = 100-120g",
+  "1 elma = 100-150g") - ASLA aynı meyveyi 3 öğüne bölüştürüp "20g muz, 20g muz, 20g muz" gibi anlamsız
+  küçük parçalara ayırma (kimse muzu 20g yemez). GÜNLÜK TOPLAM MEYVE en fazla 2 porsiyon olsun (örn
+  sadece kahvaltıda 1 muz + öğlede VEYA akşamda 1 elma) - fazla meyve = fazla şeker. Kalan kalori
+  ihtiyacını meyveyle DEĞİL, karbonhidrat kaynağının (pirinç/makarna/patates) gramajını artırarak karşıla.
 
 IZIN VERILEN BESIN KAYNAKLARI (SADECE BUNLARI KULLAN, baska besin onerme):
 - PROTEIN: Tavuk, Hindi, Yagsiz Kirmizi Et (haftada en fazla 2 kez), Light Ton Baligi (haftada en fazla 2 kez)
@@ -6514,20 +6547,22 @@ IZIN VERILEN BESIN KAYNAKLARI (SADECE BUNLARI KULLAN, baska besin onerme):
 
 KULLANICININ KENDI DOGRULADIGI, BIREBIR CIG AGIRLIK ORNEK PATERNLERI (bunlardaki HER gram degeri
 %100 CIG agirliktir, hicbir donusum/pismis mantigi YOK - bu ornekteki SAYI BUYUKLUKLERINI (orn
-80-125g araligi pirinc/makarna icin, 150-200g araligi tavuk/hindi icin) referans al, kendi hedef
-kalorine gore olcekle):
+80-125g araligi pirinc/makarna icin) referans al, kendi hedef kalorine gore olcekle):
 
 Örnek 1 (~2700 kcal): Kahvaltı: 2 yumurta sarısı + 4 beyazı, 100g tam buğday ekmek, 100g muz, 40g
-fıstık ezmesi, 10g zeytinyağı. Öğle: 150g tavuk, 125g tam buğdaylı makarna (ÇİĞ), 100g yeşil elma,
-100g brokoli, 25g badem, 10g zeytinyağı. Akşam: 150g tavuk, 125g pirinç (ÇİĞ), 100g kivi, 100g
-brokoli, 30g badem, 10g zeytinyağı.
+fıstık ezmesi, 10g zeytinyağı. Öğle: 300g tavuk, 125g tam buğdaylı makarna (ÇİĞ), 100g yeşil elma,
+100g brokoli, 25g badem, 10g zeytinyağı. Akşam: 300g tavuk, 125g pirinç (ÇİĞ), 100g brokoli, 30g
+badem, 10g zeytinyağı.
 
 Örnek 2 (~2000 kcal): Kahvaltı: 5 yumurta beyazı + 1 sarısı, 100g muz, 50g yulaf, 20g fıstık ezmesi,
-5g zeytinyağı. Öğle: 150g tavuk, 80g pirinç (ÇİĞ), 5g keten tohumu, 150g karışık salata, 15g ceviz,
-10g zeytinyağı. Akşam: 150g tavuk, 80g pirinç (ÇİĞ), 100g meyve, 150g karışık salata, 5g keten
-tohumu, 10g zeytinyağı.
+5g zeytinyağı. Öğle: 250g tavuk, 80g pirinç (ÇİĞ), 5g keten tohumu, 150g karışık salata, 15g ceviz,
+10g zeytinyağı. Akşam: 250g tavuk, 80g pirinç (ÇİĞ), 150g karışık salata, 5g keten tohumu, 10g
+zeytinyağı.
 
 DIGER KURALLAR:
+- PROTEIN PORSIYONU: Tavuk/hindi gogsu porsiyonu ogun basina genelde 250-300g araliginda olsun
+  (150g gibi kucuk bir porsiyon YETERSIZ kalir, hem protein hedefini hem kalori hedefini tutturmayi
+  zorlastirir). Hedef proteine gore bu araliktan sec.
 - TUM besinler CIG AGIRLIK (pismemis, cig haldeki agirlik) olarak hesaplanmali. Verdigin HER gram
   degeri OTOMATIK OLARAK cig agirlik demektir - bunu ayrica belirtmene GEREK YOK ve KESINLIKLE
   YASAK: item isimlerinde "(pişmiş)", "(pismis)", "(cooked)" gibi bir ibare ASLA kullanma, ve
@@ -6539,7 +6574,10 @@ DIGER KURALLAR:
 {knowledge_block}
 GÖREVİN: Kullanıcının {payload.target_calories:.0f} kcal / {payload.target_protein:.0f}g protein hedefine göre,
 yukarıdaki pattern ve izin verilen besinleri kullanarak 3 öğünlük (Kahvaltı, Öğle Yemeği, Akşam Yemeği)
-YENİ bir program oluştur. Toplam kalori/makroların hedefe ±%10 tolerans içinde olmasına dikkat et.
+YENİ bir program oluştur. TOPLAM KALORI HEDEFE ÇOK YAKIN OLMALI: hedefin altında kalma egiliminde
+olma, en fazla %5 SAPMA kabul edilir (ne asagi ne yukari) - hedefin belirgin altinda kalan (orn
+100+ kcal eksik) bir program KABUL EDILEMEZ, gerekirse porsiyonlari (ozellikle protein/karbonhidrat
+kaynagini) buyuterek hedefe ulas.
 
 ÇIKTI KURALLARI:
 1. YALNIZCA JSON formatında, YUKARIDAKI SEMADAKİ ALAN ADLARIYLA BİREBİR AYNI çıktı ver (meals,
@@ -6576,7 +6614,7 @@ YENİ bir program oluştur. Toplam kalori/makroların hedefe ±%10 tolerans içi
             raise ValueError(f"Model boş içerik döndürdü (model={active_model}, finish_reason={finish_reason}).")
         parsed = extract_json_object(raw)
         parsed = _sanitize_nutrition_json(parsed)
-        structure_error = _validate_nutrition_program_structure(parsed)
+        structure_error = _validate_nutrition_program_structure(parsed, payload.target_calories)
         if structure_error:
             raise ValueError(f"{structure_error} (model={active_model})")
         data = NutritionProgramResponse(**parsed)
