@@ -6109,6 +6109,11 @@ _COOKED_TO_RAW_DIVISORS = [
     (re.compile(r'makarna', re.IGNORECASE), 2.2),
     (re.compile(r'bulgur', re.IGNORECASE), 2.5),
     (re.compile(r'yulaf', re.IGNORECASE), 2.0),
+    # NOT: patates pirinc/makarna gibi su emip agirlik KAZANMAZ, tam tersine
+    # haslaninca biraz nem kaybedip agirlik KAYBEDER (cig agirligin ~%90-95'i
+    # kadar kalir). Bu yuzden divisor 1'den KUCUK - cig karsiligi pismisten
+    # biraz DAHA FAZLA (digerlerinin tam tersi yon).
+    (re.compile(r'patates', re.IGNORECASE), 0.92),
 ]
 
 
