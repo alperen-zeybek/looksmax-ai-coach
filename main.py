@@ -6117,13 +6117,19 @@ _COOKED_TO_RAW_DIVISORS = [
 ]
 
 
+_COOKING_OIL_PATTERN = re.compile(r'zeytinya[ğg]|hindistan cevizi ya[ğg]|badem ya[ğg]|f[ıi]nd[ıi]k ya[ğg]', re.IGNORECASE)
+MIN_COOKING_OIL_GRAMS = 5.0
+
+
 def _sanitize_nutrition_json(parsed_json: Dict[str, Any]) -> Dict[str, Any]:
     """Model kurala ragmen bazen item ismine '(pismis)' etiketi ekleyip GRAMAJI
     DA pismis porsiyon mantigiyla veriyor (orn 200g pismis pirinc) - bu ciddi
     bir hesap hatasi (gercek cig karsiligi cok daha az, orn ~70g). Once bu
     isaretli kalemleri tespit edip GRAMAJI dogru orana bolerek duzeltiyoruz,
     SONRA etiketi metinden temizliyoruz. Sadece etiketi silip sayiyi oldugu
-    gibi birakmak yetersizdi - asil hata sayidaydi, sadece yazidaki kelime degil."""
+    gibi birakmak yetersizdi - asil hata sayidaydi, sadece yazidaki kelime degil.
+    Ayrica: gercekci pisirme icin yag miktari 5g'in altinda yazilmissa (orn 2g -
+    yemek gercekte pisemez) minimuma cekilir."""
     for meal in parsed_json.get("meals", []):
         for item in meal.get("items", []):
             name = item.get("name")
@@ -6138,6 +6144,13 @@ def _sanitize_nutrition_json(parsed_json: Dict[str, Any]) -> Dict[str, Any]:
                             pass
                         break
                 item["name"] = _COOKED_LABEL_PATTERN.sub("", name).strip()
+
+            if _COOKING_OIL_PATTERN.search(name):
+                try:
+                    if float(item.get("grams", 0)) < MIN_COOKING_OIL_GRAMS:
+                        item["grams"] = MIN_COOKING_OIL_GRAMS
+                except (TypeError, ValueError):
+                    pass
     return parsed_json
 
 
@@ -6490,7 +6503,10 @@ IZIN VERILEN BESIN KAYNAKLARI (SADECE BUNLARI KULLAN, baska besin onerme):
 - PROTEIN: Tavuk, Hindi, Yagsiz Kirmizi Et (haftada en fazla 2 kez), Light Ton Baligi (haftada en fazla 2 kez)
 - KARBONHIDRAT: Basmati Pirinc, Siyah Pirinc, Kepekli Pirinc, Tam Bugdayli Makarna, Kepekli Makarna, Patates
   (esdegerlik CIG agirlikta: 100g pirinc turu = 125g makarna turu = 400g patates; 100g makarna turu = 300g patates)
-- YAG (pisirme): Zeytinyagi, Hindistan Cevizi Yagi, Badem Yagi, Findik Yagi (hepsi ayni deger)
+- YAG (pisirme): Zeytinyagi, Hindistan Cevizi Yagi, Badem Yagi, Findik Yagi (hepsi ayni deger).
+  PRATIK KURAL: Bir yemegi gercekten pisirmek icin en az 5g yag gerekir - 2-3g gibi gercek disi kucuk
+  miktarlar YAZMA (yemek pisemez). Ogun basina EN AZ 5g zeytinyagi/yag kullan, gunluk toplam yag
+  hedefinin geri kalanini KURUYEMISTEN (badem/ceviz/kaju miktarini ayarlayarak) dengele.
 - KURUYEMIS: Saf Fistik Ezmesi, Cig Kaju, Cig Badem, Cig Findik, Ceviz (hepsi ayni deger, KAVRULMAMIS)
 - ICECEKLER onerilmez (program sadece katı gida ogunlerini icerir), ama YASAK: sut, ayran
 - SALATA: Marul, Semizotu, Dereotu, Ceri domates, Salatalik, Havuc, Siyah/mor lahana, Kivircik,
