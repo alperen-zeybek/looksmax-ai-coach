@@ -2023,8 +2023,9 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
                             <select id="weekSelectorDropdown" onchange="changeActiveWeek(this.value)" style="background:#0a0c10; border:1px solid #2b354d; color:#00f2fe; padding:4px 8px; border-radius:6px; font-weight:700; font-size:0.75rem; outline:none;"></select>
                         </div>
                     </div>
+                    <div id="acwrRiskBox" style="display:none; font-size:0.78rem; background:#0a0c10; border:1px solid; border-radius:9px; padding:10px 12px; margin-bottom:2px;"></div>
                     <div class="input-form">
-                        <input type="text" id="exerciseName" placeholder="Hareket Adı (Örn: Incline Dumbbell Press)" list="defaultExercises" />
+                        <input type="text" id="exerciseName" placeholder="Hareket Adı (Örn: Incline Dumbbell Press)" list="defaultExercises" oninput="showOverloadSuggestion()" />
                         <datalist id="defaultExercises">
                             <option value="Bench Press">
                             <option value="Incline Dumbbell Press">
@@ -2039,10 +2040,21 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
                         <div class="form-grid-2x2">
                             <input type="number" id="exerciseSet" placeholder="🔢 Set No (1, 2...)" min="1" value="1" />
-                            <input type="number" id="exerciseWeight" placeholder="⚖️ Kilo (kg)" step="0.5" />
+                            <input type="number" id="exerciseWeight" placeholder="⚖️ Kilo (kg)" step="0.5" oninput="showOverloadSuggestion()" />
                             <input type="number" id="exerciseReps" placeholder="🔁 Tekrar Sayısı" min="1" />
                             <input type="text" id="exerciseDate" placeholder="📅 Tarih" />
                         </div>
+                        <div class="form-grid-2x2">
+                            <select id="exerciseRpe">
+                                <option value="">RPE (isteğe bağlı)</option>
+                                <option value="6">RPE 6 - Rahat, çok pay var</option>
+                                <option value="7">RPE 7 - Orta zorlukta, 3 tekrar payı</option>
+                                <option value="8">RPE 8 - Zorlayıcı, 2 tekrar payı</option>
+                                <option value="9">RPE 9 - Çok zor, 1 tekrar payı</option>
+                                <option value="10">RPE 10 - Tükeniş, hiç pay yok</option>
+                            </select>
+                        </div>
+                        <div id="overloadSuggestionBox" style="display:none; font-size:0.78rem; color:#00f2fe; background:rgba(0,242,254,0.06); border:1px solid rgba(0,242,254,0.25); border-radius:9px; padding:8px 10px;"></div>
 
                         <div style="background:#0a0c10; border:1px solid #1c2230; border-radius:9px; padding:10px 12px; display:flex; flex-direction:column; gap:8px;">
                             <label style="display:flex; align-items:center; gap:8px; font-size:0.8rem; color:#e5e7eb; cursor:pointer; font-weight:600;">
@@ -2511,7 +2523,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
 
                         <div style="border-top:1px solid #1c2230; margin-top:18px; padding-top:16px;">
                             <div class="panel-header" style="font-size:0.9rem;">
-                                <span>📚 Looksmax Hakkında Her Şey</span>
+                                <span>📚 Looksmaxxing Hakkında Daha Fazla Bilgi</span>
                             </div>
                             <div id="looksmaxGuideEmptyState" style="text-align:center; padding:20px; color:#6b7280;">
                                 <div style="font-size:0.8rem; margin-bottom:12px;">Yüklenen tüm PDF'lerdeki bilgiyi kapsamlı, tek bir rehbere dönüştür.</div>
@@ -4451,6 +4463,124 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             renderSelectedWorkoutDayLogs();
             updateChart();
             refreshProgramDaySelectOptions();
+            renderAcwrRiskBadge();
+        }
+
+        // ================= ADAPTIVE ENGINE: RPE TABANLI OTOREGULASYON + ACWR HACIM RISKI =================
+        // NOT: Bunlar "gercek ML" (egitilen model) degil - spor biliminde kanitlanmis,
+        // kural tabanli yontemler: RPE'ye gore agirlik ayari (otoregulasyon) ve
+        // Acute:Chronic Workload Ratio (ACWR, bu haftaki hacim / son 4 haftanin
+        // ortalamasi) ile ani hacim artislarinda sakatlik riski isaretleme.
+        // Deterministik matematik oldugu icin AI/LLM cagrisi gerektirmiyor.
+
+        function parseTrDate(dateStr) {
+            const parts = (dateStr || "").split(".");
+            if (parts.length !== 3) return null;
+            const [day, month, year] = parts.map(Number);
+            if (!day || !month || !year) return null;
+            return new Date(year, month - 1, day);
+        }
+
+        function getProgressiveOverloadSuggestion(exerciseName) {
+            if (!currentUser || !exerciseName) return null;
+            const allWeeks = getAllUserWeeks(currentUser.username);
+            let allSetsForExercise = [];
+            Object.values(allWeeks).forEach(weekLogs => {
+                (weekLogs || []).forEach(l => {
+                    if (l.exercise && l.exercise.toLowerCase() === exerciseName.toLowerCase() && l.weight && l.reps) {
+                        allSetsForExercise.push(l);
+                    }
+                });
+            });
+            if (allSetsForExercise.length === 0) return null;
+
+            allSetsForExercise.sort((a, b) => (parseTrDate(a.date) || 0) - (parseTrDate(b.date) || 0));
+            const lastDate = allSetsForExercise[allSetsForExercise.length - 1].date;
+            const lastDayLogs = allSetsForExercise.filter(l => l.date === lastDate);
+            const topSet = lastDayLogs.reduce((max, l) => (l.weight > max.weight ? l : max), lastDayLogs[0]);
+
+            const rpe = topSet.rpe;
+            let suggestedWeight = topSet.weight;
+            let note;
+
+            if (rpe === null || rpe === undefined) {
+                note = `Son (${lastDate}): ${topSet.weight}kg × ${topSet.reps}. RPE girilmemişti - aynı ağırlıkla devam edip bu sefer RPE de girin, öneri daha isabetli olsun.`;
+            } else if (rpe <= 7) {
+                suggestedWeight = Math.round(topSet.weight * 1.05 * 2) / 2;
+                note = `Son sette RPE ${rpe} (rahat tamamladınız) - ${suggestedWeight}kg deneyin.`;
+            } else if (rpe <= 9) {
+                suggestedWeight = Math.round(topSet.weight * 1.025 * 2) / 2;
+                note = `Son sette RPE ${rpe} - hafif artışla ${suggestedWeight}kg deneyin.`;
+            } else {
+                suggestedWeight = topSet.weight;
+                note = `Son sette tükenişe (RPE 10) girdiniz - aynı ${suggestedWeight}kg ile tekrar deneyin, form ve toparlanmaya odaklanın.`;
+            }
+
+            return { weight: suggestedWeight, reps: topSet.reps, note: note };
+        }
+
+        function showOverloadSuggestion() {
+            const name = document.getElementById("exerciseName").value.trim();
+            const box = document.getElementById("overloadSuggestionBox");
+            if (!box) return;
+            if (!name) { box.style.display = "none"; return; }
+
+            const suggestion = getProgressiveOverloadSuggestion(name);
+            if (!suggestion) { box.style.display = "none"; return; }
+
+            box.style.display = "block";
+            box.innerText = `💡 ${suggestion.note}`;
+        }
+
+        function calculateAcwrRisk() {
+            if (!currentUser) return null;
+            const allWeeks = getAllUserWeeks(currentUser.username);
+            const weekTonnages = {};
+            Object.entries(allWeeks).forEach(([weekKey, logs]) => {
+                let tonnage = 0;
+                (logs || []).forEach(l => { if (l.weight && l.reps) tonnage += l.weight * l.reps; });
+                if (tonnage > 0) weekTonnages[weekKey] = tonnage;
+            });
+
+            const sortedWeeks = Object.keys(weekTonnages).sort();
+            if (sortedWeeks.length < 2) return null;
+
+            const currentWeek = sortedWeeks[sortedWeeks.length - 1];
+            const acuteLoad = weekTonnages[currentWeek];
+
+            const priorWeeks = sortedWeeks.slice(Math.max(0, sortedWeeks.length - 5), sortedWeeks.length - 1);
+            if (priorWeeks.length === 0) return null;
+            const chronicLoad = priorWeeks.reduce((sum, w) => sum + weekTonnages[w], 0) / priorWeeks.length;
+            if (chronicLoad === 0) return null;
+
+            const acwr = acuteLoad / chronicLoad;
+            let riskLevel = "normal", riskNote = "Antrenman hacminiz son haftaların ortalamasına yakın, normal sınırlar içinde.";
+            if (acwr >= 1.5) {
+                riskLevel = "high";
+                riskNote = `Bu haftaki antrenman hacminiz (${Math.round(acuteLoad)} kg toplam) son ${priorWeeks.length} haftanın ortalamasının %${Math.round((acwr - 1) * 100)} üzerinde. Ani hacim artışları sakatlık riskini belirgin şekilde artırır — hacmi kademeli yükseltin.`;
+            } else if (acwr >= 1.3) {
+                riskLevel = "moderate";
+                riskNote = `Hacim artışınız dikkat çekici seviyede (%${Math.round((acwr - 1) * 100)} artış). Toparlanmanıza (uyku, beslenme) özen gösterin.`;
+            } else if (acwr < 0.7) {
+                riskLevel = "low_volume";
+                riskNote = `Bu hafta hacminiz son haftalara göre belirgin düşük (%${Math.round((1 - acwr) * 100)} azalma) - dinlenme haftası değilse antrenman sıklığınızı kontrol edin.`;
+            }
+
+            return { acuteLoad: Math.round(acuteLoad), chronicLoad: Math.round(chronicLoad), acwr: Math.round(acwr * 100) / 100, riskLevel, riskNote };
+        }
+
+        function renderAcwrRiskBadge() {
+            const box = document.getElementById("acwrRiskBox");
+            if (!box) return;
+            const risk = calculateAcwrRisk();
+            if (!risk) { box.style.display = "none"; return; }
+
+            box.style.display = "block";
+            const colors = { high: "#ef4444", moderate: "#f59e0b", low_volume: "#6b7280", normal: "#10b981" };
+            const icons = { high: "🔴", moderate: "🟡", low_volume: "⚪", normal: "🟢" };
+            box.style.borderColor = colors[risk.riskLevel];
+            box.style.color = colors[risk.riskLevel];
+            box.innerHTML = `${icons[risk.riskLevel]} <b>Hacim Risk Skoru (ACWR: ${risk.acwr})</b><br><span style="color:#d1d5db; font-weight:400;">${risk.riskNote}</span>`;
         }
 
         function renderWorkoutDayTabs() {
@@ -4517,6 +4647,7 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             const weightVal = document.getElementById("exerciseWeight").value.trim();
             const repsVal = document.getElementById("exerciseReps").value.trim();
             const dateVal = document.getElementById("exerciseDate").value.trim() || weekDaysData[selectedWorkoutDayIdx].fullDate;
+            const rpeVal = document.getElementById("exerciseRpe").value.trim();
 
             if (!name) return alert("Lütfen hareket adını girin.");
             if (!weightVal || isNaN(Number(weightVal))) return alert("Lütfen ağırlığı (kg) girin.");
@@ -4525,8 +4656,9 @@ HTML_INTERFACE = r"""<!DOCTYPE html>
             const setNum = parseInt(setVal, 10) || 1;
             const weight = parseFloat(weightVal);
             const reps = parseInt(repsVal, 10);
+            const rpe = rpeVal ? parseInt(rpeVal, 10) : null;
 
-            weeklyLogs.push({ id: Date.now(), exercise: name, set_num: setNum, weight: weight, reps: reps, date: dateVal });
+            weeklyLogs.push({ id: Date.now(), exercise: name, set_num: setNum, weight: weight, reps: reps, date: dateVal, rpe: rpe });
             saveUserWeeklyLogs(currentUser.username, weeklyLogs);
 
             const addToProgramChecked = document.getElementById("addToProgramCheck").checked;
@@ -6950,43 +7082,64 @@ def save_nutrition_program_backend(payload: NutritionProgramSyncInput, username:
 
 
 # ================= LOOKSMAX REHBERI (TUM PDF'LERDEN SENTEZLENEN, TEK/PAYLASILAN) =================
-# NOT: Bu konu gruplari halinde tutuluyor (10 konu yerine 5 grup x 2 konu) - hesabin
-# dakikalik token kotasi (8000 TPM) SERT bir tavan: tum konulari TEK istekte
-# birlestirmek ~12000+ token istiyordu ve Groq bunu aninda (bekleme faydasiz)
-# 413/429 ile reddediyordu. Kucuk gruplar + gruplar arasi bekleme ile ayni
-# kapsamliligi, limiti asmadan elde ediyoruz.
-LOOKSMAX_GUIDE_TOPIC_BATCHES = [
-    ["cilt bakımı rutini gözenek ton temizlik", "yüz simetrisi altın oran ölçüm estetik"],
-    ["çene hattı tanımlılık egzersiz mewing duruş", "saç bakımı dökülme sağlıklı büyüme"],
-    ["duruş postür omuz düzeltme", "beslenme makro görünüm vücut kompozisyonu etkisi"],
-    ["uyku kalitesi cilt toparlanma hormon", "su tüketimi şişkinlik cilt görünüm"],
-    ["kaş kıl bakım yüz bölgesi tıraş", "genel looksmax protokol öneri gelişim"],
+# NOT: Sorgular birbirine yakin konulari kapsadigi icin AYNI pasaj birden fazla
+# sorguyla eslesebiliyordu (orn "beslenme" ve "su tuketimi" sorgulari ayni
+# "sindirim" pasajini getiriyordu) - bu, her biri BAGIMSIZ calisan bolum
+# uretimlerinde ayni bilginin 3-4 kere yazilmasina yol aciyordu. Cozum: butun
+# sorgulardan ham parcalari TEK SEFERDE toplayip TEKILLESTIRIYORUZ, SONRA
+# gruplara bolup uretiyoruz - boylece her pasaj sadece BIR grupta islenir.
+LOOKSMAX_GUIDE_TOPIC_QUERIES = [
+    "cilt bakımı rutini gözenek ton temizlik",
+    "yüz simetrisi altın oran ölçüm estetik",
+    "çene hattı tanımlılık egzersiz mewing duruş",
+    "saç bakımı dökülme sağlıklı büyüme",
+    "duruş postür omuz düzeltme",
+    "beslenme makro görünüm vücut kompozisyonu etkisi",
+    "uyku kalitesi cilt toparlanma hormon",
+    "su tüketimi şişkinlik cilt görünüm",
+    "kaş kıl bakım yüz bölgesi tıraş",
+    "genel looksmax protokol öneri gelişim",
 ]
+LOOKSMAX_GUIDE_CHUNKS_PER_BATCH = 6  # hesabin 8000 TPM sert tavanini asmamak icin guvenli bir grup buyuklugu
 
 
-def _generate_looksmax_guide_section(topic_queries: list):
-    """Tek bir kucuk konu grubu icin rehber bolumu uretir (kucuk istek - hesabin
-    8000 TPM sert tavanini asmamak icin). (section_text, sources) doner, basarisiz
-    olursa (None, sources)."""
-    batch_snippets = []
-    batch_sources = set()
-    for query in topic_queries:
-        snippets, sources = retrieve_knowledge_context(query, k=5)
-        if snippets:
-            batch_snippets.append(snippets)
-        batch_sources.update(sources)
+def _retrieve_raw_chunks(query: str, k: int = 5):
+    """retrieve_knowledge_context'in ham hali - birlesmis tek bir metin yerine
+    (kaynak, pasaj) ciftlerinin listesini doner, boylece coklu sorgu sonuclari
+    ARASINDA tekillestirme yapilabilir."""
+    if not query or not query.strip():
+        return []
+    load_knowledge_base()
+    if vector_db is None:
+        return []
+    try:
+        results = vector_db.similarity_search(query, k=k)
+        out = []
+        for doc in results:
+            source = doc.metadata.get("source", "bilinmeyen kaynak")
+            source_name = os.path.basename(str(source))
+            out.append((source_name, doc.page_content.strip()))
+        return out
+    except Exception as e:
+        logger.error(f"Knowledge base arama hatasi (raw): {e}")
+        return []
 
-    combined = "\n\n---\n\n".join(batch_snippets)
+
+def _generate_looksmax_guide_section_from_chunks(chunk_batch: list):
+    """Onceden tekillestirilmis bir pasaj grubundan rehber bolumu uretir (kucuk
+    istek - hesabin 8000 TPM sert tavanini asmamak icin). section_text (basarisiz
+    olursa None) doner."""
+    combined = "\n\n---\n\n".join(f"[Kaynak: {src}]\n{txt}" for src, txt in chunk_batch)
     if not combined.strip():
-        return None, batch_sources  # bu grup icin bilgi bankasinda icerik yok
+        return None
 
     system_prompt = f"""Sen bir looksmax (gorunum gelisimi) uzmanisin. Asagida bilgi bankasindan
-(yuklenen PDF'lerden) belirli konularda toplanmis pasajlar var. Gorevin bu icerikteki HER SEYI
-ATLAMADAN, markdown basliklarla (## Konu Basligi) duzenlenmis, DETAYLI bir rehber bolumu yazmak -
-bu bir ozet DEGIL, PDF'lerdeki bilgiyi tam aktaran bir rehber parcasi.
+(yuklenen PDF'lerden) toplanmis pasajlar var. Gorevin bu icerikteki HER SEYI ATLAMADAN, markdown
+basliklarla (## Konu Basligi) duzenlenmis, DETAYLI bir rehber bolumu yazmak - bu bir ozet DEGIL,
+PDF'lerdeki bilgiyi tam aktaran bir rehber parcasi.
 
 KURALLAR:
-1. Verilen TUM icerigi kullan, kisaltip gecme. Ayni bilgi tekrar ediyorsa bir kere, en eksiksiz haliyle yaz.
+1. Verilen TUM icerigi kullan, kisaltip gecme.
 2. Her ana konu icin ayri bir ## baslik ac.
 3. Somut, uygulanabilir bilgi ver - PDF'lerdeki spesifik bilgiyi (sayilar/yontemler/adimlar varsa) aktar.
 4. SADECE TURKCE yaz. Tibbi tedavi/ilac/operasyon onerme.
@@ -7006,7 +7159,7 @@ BİLGİ BANKASI İÇERİĞİ:
     try:
         completion = client.chat.completions.create(**kwargs)
         content = completion.choices[0].message.content
-        return (content.strip() if content and content.strip() else None), batch_sources
+        return content.strip() if content and content.strip() else None
     except Exception as e:
         error_str = str(e)
         if is_rate_limit_error(error_str):
@@ -7016,39 +7169,58 @@ BİLGİ BANKASI İÇERİĞİ:
             try:
                 completion = client.chat.completions.create(**kwargs)
                 content = completion.choices[0].message.content
-                return (content.strip() if content and content.strip() else None), batch_sources
+                return content.strip() if content and content.strip() else None
             except Exception as e2:
                 logger.warning(f"Looksmax rehberi bölümü tekrar denemede de başarısız: {e2}")
-                return None, batch_sources
+                return None
         logger.warning(f"Looksmax rehberi bölümü başarısız (model={active_model}): {e}")
-        return None, batch_sources
+        return None
 
 
 def generate_looksmax_guide_with_llm():
-    """Bilgi bankasindaki TUM konulari KUCUK GRUPLAR HALINDE ayri ayri isteklerle
-    isler (hesabin 8000 TPM sert tavanini tek dev istekle asmamak icin) ve
-    sonuclari birlestirir. (content, kaynaklar, None) basarili; (None, [], hata)
-    basarisiz doner."""
+    """Bilgi bankasindaki TUM konulari once TEKILLESTIRILMIS pasajlar halinde
+    toplar, sonra KUCUK GRUPLAR HALINDE ayri ayri isteklerle isler (hesabin
+    8000 TPM sert tavanini tek dev istekle asmamak icin) ve sonuclari
+    birlestirir. (content, kaynaklar, None) basarili; (None, [], hata) basarisiz doner."""
     if not client:
         return None, [], "GROQ_API_KEY bulunamadı."
 
-    guide_sections = []
+    # ADIM 1: Tum sorgulardan ham parcalari topla, AYNI pasaj birden fazla
+    # sorguyla eslesirse SADECE BIR KERE al.
+    seen_snippet_keys = set()
+    unique_chunks = []  # [(source, snippet), ...] - sirali, tekil
     all_sources = set()
 
-    for batch_idx, topic_queries in enumerate(LOOKSMAX_GUIDE_TOPIC_BATCHES):
-        section_text, batch_sources = _generate_looksmax_guide_section(topic_queries)
-        all_sources.update(batch_sources)
+    for query in LOOKSMAX_GUIDE_TOPIC_QUERIES:
+        for source_name, snippet in _retrieve_raw_chunks(query, k=5):
+            key = snippet.strip().lower()[:200]  # basit ama etkili tekillik anahtari
+            if key in seen_snippet_keys:
+                continue
+            seen_snippet_keys.add(key)
+            unique_chunks.append((source_name, snippet))
+            all_sources.add(source_name)
+
+    if not unique_chunks:
+        return None, [], "Bilgi bankasında (yüklenen PDF'ler) hiç içerik bulunamadı. Önce knowledge_base klasörüne PDF ekleyip deploy etmen gerekiyor."
+
+    # ADIM 2: Tekillestirilmis pasajlari kucuk gruplara bol (hesabin 8000 TPM
+    # sert tavanini asmamak icin) ve gruplar arasi bekleyerek uret.
+    chunk_batches = [
+        unique_chunks[i:i + LOOKSMAX_GUIDE_CHUNKS_PER_BATCH]
+        for i in range(0, len(unique_chunks), LOOKSMAX_GUIDE_CHUNKS_PER_BATCH)
+    ]
+
+    guide_sections = []
+    for batch_idx, chunk_batch in enumerate(chunk_batches):
+        section_text = _generate_looksmax_guide_section_from_chunks(chunk_batch)
         if section_text:
             guide_sections.append(section_text)
 
-        # Hesabin dakikalik token kotasini (8000 TPM) asmamak icin gruplar
-        # arasinda bekle - bu olmadan art arda istekler kotayi hemen doldurup
-        # 413/429 hatasi veriyordu.
-        if batch_idx < len(LOOKSMAX_GUIDE_TOPIC_BATCHES) - 1:
+        if batch_idx < len(chunk_batches) - 1:
             time.sleep(18)
 
     if not guide_sections:
-        return None, [], "Hiçbir bölüm oluşturulamadı - bilgi bankasında ilgili içerik bulunamadı ya da tüm istekler başarısız oldu."
+        return None, [], "Hiçbir bölüm oluşturulamadı - tüm istekler başarısız oldu."
 
     full_guide = "\n\n".join(guide_sections)
     return full_guide, sorted(all_sources), None
